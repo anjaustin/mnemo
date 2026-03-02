@@ -197,6 +197,9 @@ Sessions represent conversation threads. They belong to a user and contain episo
   "episode_count": 0,
   "summary": null,
   "summary_tokens": 0,
+  "head_episode_id": null,
+  "head_updated_at": null,
+  "head_version": 0,
   "created_at": "2026-03-01T12:00:01Z",
   "updated_at": "2026-03-01T12:00:01Z",
   "last_activity_at": null

@@ -31,6 +31,8 @@ It verifies:
 - role persistence on remembered episodes
 - unknown user handling
 - immediate recall fallback (non-empty context right after remember)
+- head mode behavior (auto selection, explicit session override, empty-head safety)
+- temporal intent ranking shifts (`current` vs `historical`)
 
 ### Test infrastructure
 

@@ -51,10 +51,11 @@ Current dataset: `eval/temporal_cases.json`.
 Expected output format:
 
 ```text
-| Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
-|---|---:|---:|---:|---:|
-| temporal | ... | ... | ... | ... |
-| baseline | ... | ... | ... | ... |
+| System | Profile | Accuracy | Stale Fact Rate | Errors | p50 Latency (ms) | p95 Latency (ms) |
+|---|---|---:|---:|---:|---:|---:|
+| mnemo | temporal | ... | ... | ... | ... | ... |
+| mnemo | baseline | ... | ... | ... | ... | ... |
+| zep | baseline | ... | ... | ... | ... | ... |
 ```
 
 ## Latest local snapshot

@@ -38,7 +38,7 @@ Quick benchmark commands:
 ## Quick Start
 
 ```bash
-git clone https://github.com/mnemo-ai/mnemo.git
+git clone https://github.com/anjaustin/mnemo.git
 cd mnemo
 
 # Set your LLM API key (optional — works without it)
@@ -143,7 +143,7 @@ Old facts aren't deleted. This enables point-in-time queries and change tracking
 | [Phase 2 PRD](docs/PHASE_2_PRD.md) | Productization plan for temporal memory and proof gates |
 | [Evaluation Playbook](docs/EVALUATION.md) | Reproducible temporal quality and latency measurements |
 | [Competitive Plan](docs/COMPETITIVE.md) | Cross-system benchmark methodology and scorecard |
-| [Thread HEAD Proposal](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
+| [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
 | [Temporal Vectorization](docs/TEMPORAL_VECTORIZATION.md) | Time-aware retrieval scoring and rollout plan |
 | [Testing Guide](docs/TESTING.md) | Workspace, E2E, and falsification test commands |
 | [Configuration](config/default.toml) | All config options with inline comments |
@@ -166,21 +166,21 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 
 ## Project Status
 
-**Phase 1 — Core Engine** ✅
+**Phase 1.5 — Production Hardening** ✅ complete
 
-- [x] Domain models with unit tests
-- [x] Redis state storage
-- [x] Qdrant vector storage
-- [x] LLM provider abstraction (OpenAI-compatible)
-- [x] Background ingestion pipeline
-- [x] Hybrid retrieval + context assembly
-- [x] Graph traversal + community detection
-- [x] REST API (25 endpoints)
-- [x] Docker Compose
+- compilation + integration coverage
+- auth middleware
+- full-text + hybrid retrieval
+- memory API + falsification CI gate
 
-**Phase 2 — Intelligence** (planned): Full-text search, RRF reranking, progressive summarization, document ingestion
+**Phase 2 — Temporal Productization** 🚧 in progress
 
-**Phase 3 — Ecosystem** (planned): Python/TypeScript SDKs, framework integrations, MCP server, admin dashboard, Helm chart
+- M1 Thread HEAD completion ✅
+- M2 Temporal retrieval v2 diagnostics ✅
+- M3 Metadata index layer ⏳
+- M4 Competitive publication v1 🚧
+
+See `docs/PHASE_2_PRD.md` for current milestones.
 
 ## Contributing
 
