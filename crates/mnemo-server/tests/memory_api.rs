@@ -310,3 +310,241 @@ async fn test_memory_api_head_mode_returns_thread_head_diagnostics() {
         "expected head mode context to include latest session marker"
     );
 }
+
+#[tokio::test]
+async fn test_memory_api_head_mode_with_explicit_session_override() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "head-override-user",
+            "external_id": "head-override-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session_a) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "a" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_a_id = session_a["id"].as_str().unwrap().to_string();
+
+    let (status, session_b) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "b" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_b_id = session_b["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_a_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "override-marker-a",
+            "created_at": "2024-01-10T12:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_b_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "latest-marker-b",
+            "created_at": "2026-03-01T12:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/head-override-user/context",
+        serde_json::json!({
+            "query": "what should head use?",
+            "mode": "head",
+            "session": "a",
+            "max_tokens": 600
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(context["mode"], "head");
+    assert_eq!(context["head"]["session_id"], session_a_id);
+    assert!(context["context"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("override-marker-a"));
+}
+
+#[tokio::test]
+async fn test_memory_api_head_mode_without_sessions_returns_empty_head() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "head-empty-user",
+            "external_id": "head-empty-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/head-empty-user/context",
+        serde_json::json!({
+            "query": "what is current?",
+            "mode": "head",
+            "max_tokens": 300
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(context["mode"], "head");
+    assert!(context.get("head").is_none() || context["head"].is_null());
+}
+
+#[tokio::test]
+async fn test_memory_api_temporal_intent_changes_rank_order() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "temporal-intent-user",
+            "external_id": "temporal-intent-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "default" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "I prefer Adidas running shoes.",
+            "created_at": "2024-01-10T12:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "I switched and now prefer Nike running shoes.",
+            "created_at": "2026-03-01T12:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, current) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/temporal-intent-user/context",
+        serde_json::json!({
+            "query": "What shoes do I prefer now?",
+            "session": "default",
+            "time_intent": "current",
+            "temporal_weight": 0.9,
+            "max_tokens": 600
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, historical) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/temporal-intent-user/context",
+        serde_json::json!({
+            "query": "What shoes did I prefer as of 2024?",
+            "session": "default",
+            "time_intent": "historical",
+            "as_of": "2024-06-01T00:00:00Z",
+            "temporal_weight": 0.9,
+            "max_tokens": 600
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let current_context = current["context"].as_str().unwrap_or_default();
+    let historical_context = historical["context"].as_str().unwrap_or_default();
+    let current_top = current_context
+        .lines()
+        .find(|l| l.starts_with("- ["))
+        .unwrap_or_default();
+    let historical_top = historical_context
+        .lines()
+        .find(|l| l.starts_with("- ["))
+        .unwrap_or_default();
+
+    assert!(
+        current_top.contains("Nike"),
+        "expected current intent to rank Nike first, got: {current_top}"
+    );
+    assert!(
+        historical_top.contains("Adidas"),
+        "expected historical intent to rank Adidas first, got: {historical_top}"
+    );
+
+    assert_eq!(
+        current["temporal_diagnostics"]["resolved_intent"],
+        "current"
+    );
+    assert_eq!(
+        historical["temporal_diagnostics"]["resolved_intent"],
+        "historical"
+    );
+}

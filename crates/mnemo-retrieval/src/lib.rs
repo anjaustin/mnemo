@@ -315,15 +315,22 @@ fn resolve_temporal_intent(intent: TemporalIntent, query_text: &str) -> Temporal
     }
 
     let q = query_text.to_lowercase();
+    if contains_year_hint(&q) {
+        return TemporalIntent::Historical;
+    }
     if q.contains("as of")
         || q.contains("back in")
         || q.contains("histor")
+        || q.contains("before")
+        || q.contains("during")
         || q.contains("at that time")
     {
         return TemporalIntent::Historical;
     }
     if q.contains("recent")
         || q.contains("lately")
+        || q.contains("today")
+        || q.contains("yesterday")
         || q.contains("last week")
         || q.contains("this month")
     {
@@ -366,6 +373,15 @@ fn apply_temporal_scoring(
         entity.relevance = apply_temporal_blend(entity.relevance as f64, 0.6, weight * 0.4) as f32;
     }
 
+    block.temporal_diagnostics = Some(TemporalDiagnostics {
+        resolved_intent: temporal_intent,
+        temporal_weight: weight as f32,
+        as_of: temporal_filter,
+        entities_scored: block.entities.len() as u32,
+        facts_scored: block.facts.len() as u32,
+        episodes_scored: block.episodes.len() as u32,
+    });
+
     block.entities.sort_by(|a, b| {
         b.relevance
             .partial_cmp(&a.relevance)
@@ -381,6 +397,11 @@ fn apply_temporal_scoring(
             .partial_cmp(&a.relevance)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+}
+
+fn contains_year_hint(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|token| token.len() == 4 && token.starts_with("20") && token.parse::<u16>().is_ok())
 }
 
 fn default_temporal_weight(intent: TemporalIntent) -> f32 {
@@ -504,6 +525,10 @@ mod tests {
             resolve_temporal_intent(TemporalIntent::Auto, "As of 2024 what did I prefer?"),
             TemporalIntent::Historical
         );
+        assert_eq!(
+            resolve_temporal_intent(TemporalIntent::Auto, "What happened in 2023?"),
+            TemporalIntent::Historical
+        );
     }
 
     #[test]
@@ -534,5 +559,27 @@ mod tests {
             score_fact_temporal(&current_fact, TemporalIntent::Current, None, now)
                 > score_fact_temporal(&stale_fact, TemporalIntent::Current, None, now)
         );
+    }
+
+    #[test]
+    fn test_apply_temporal_scoring_emits_diagnostics() {
+        let mut block = ContextBlock::empty();
+        block.entities.push(EntitySummary {
+            id: Uuid::now_v7(),
+            name: "kendra".into(),
+            entity_type: "person".into(),
+            summary: None,
+            relevance: 0.4,
+        });
+
+        apply_temporal_scoring(&mut block, TemporalIntent::Current, None, Some(0.5));
+        let diag = block
+            .temporal_diagnostics
+            .expect("temporal diagnostics missing");
+        assert_eq!(diag.resolved_intent, TemporalIntent::Current);
+        assert_eq!(diag.temporal_weight, 0.5);
+        assert_eq!(diag.entities_scored, 1);
+        assert_eq!(diag.facts_scored, 0);
+        assert_eq!(diag.episodes_scored, 0);
     }
 }

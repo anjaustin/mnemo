@@ -89,6 +89,14 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
   "episodes": [],
   "latency_ms": 47,
   "sources": ["semantic_search", "full_text_search"],
+  "temporal_diagnostics": {
+    "resolved_intent": "current",
+    "temporal_weight": 0.5,
+    "as_of": "2025-01-01T00:00:00Z",
+    "entities_scored": 3,
+    "facts_scored": 5,
+    "episodes_scored": 2
+  },
   "mode": "hybrid",
   "head": {
     "session_id": "019513a4-8c1f-7000-8000-000000000002",
@@ -333,6 +341,7 @@ This is the endpoint your agent calls on every turn. It retrieves relevant knowl
 | `mode` | enum | `hybrid` | `head`, `hybrid`, `historical` |
 | `time_intent` | enum | `auto` | `auto`, `current`, `recent`, `historical` |
 | `temporal_weight` | float | null | Override temporal influence (0.0–1.0) |
+| `temporal_diagnostics` | object | null | Resolved temporal intent and scored result counts |
 
 ```json
 // Response 200

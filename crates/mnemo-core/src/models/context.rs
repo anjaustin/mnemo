@@ -30,6 +30,21 @@ pub struct ContextBlock {
 
     /// Which retrieval strategies contributed to this context.
     pub sources: Vec<RetrievalSource>,
+
+    /// Optional diagnostics for temporal scoring and intent resolution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_diagnostics: Option<TemporalDiagnostics>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalDiagnostics {
+    pub resolved_intent: TemporalIntent,
+    pub temporal_weight: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<DateTime<Utc>>,
+    pub entities_scored: u32,
+    pub facts_scored: u32,
+    pub episodes_scored: u32,
 }
 
 /// Lightweight entity reference included in context responses.
@@ -251,6 +266,7 @@ impl ContextBlock {
             episodes: Vec::new(),
             latency_ms: 0,
             sources: Vec::new(),
+            temporal_diagnostics: None,
         }
     }
 
@@ -432,6 +448,7 @@ mod tests {
         block.assemble(500);
         assert!(block.context.is_empty());
         assert_eq!(block.token_count, 0);
+        assert!(block.temporal_diagnostics.is_none());
     }
 
     #[test]

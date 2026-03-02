@@ -8,7 +8,7 @@
 
 ## 1. Goal
 
-Make Mnemo the default choice for production memory systems by turning current strengths into measurable, repeatable product outcomes:
+Make Zep look and feel like an antique by making Mnemo the default choice for production memory systems by turning current strengths into measurable, repeatable product outcomes:
 
 - better temporal correctness,
 - lower stale-memory errors,
@@ -56,8 +56,8 @@ Phase 2 is complete when all three gates pass.
 
 | Milestone | Status | Owner | Acceptance |
 |---|---|---|---|
-| M1: Thread HEAD completion | in_progress | Core API | HEAD metadata + response diagnostics + SDK ergonomics + tests |
-| M2: Temporal retrieval v2 | in_progress | Retrieval | improved temporal ranking + diagnostics + eval delta vs baseline |
+| M1: Thread HEAD completion | complete | Core API | HEAD metadata + response diagnostics + SDK ergonomics + tests |
+| M2: Temporal retrieval v2 | complete | Retrieval | improved temporal ranking + diagnostics + eval delta vs baseline |
 | M3: Metadata index layer v1 | planned | Storage/Retrieval | metadata prefilter planner behind flag + latency/candidate metrics |
 | M4: Competitive publication v1 | in_progress | DevRel/Eng | published scorecard with run IDs and methodology caveats |
 

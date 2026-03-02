@@ -1,7 +1,7 @@
 # Temporal Vectorization Sketch
 
 Date: 2026-03-02
-Status: design draft
+Status: implemented-v2
 
 ## Goal
 
@@ -11,6 +11,14 @@ Improve memory retrieval by modeling both:
 - temporal relevance (when the memory is true/useful)
 
 This should make recall more accurate for "current" vs "historical" questions and reduce stale-memory errors.
+
+## Delivered in v2
+
+- Temporal controls are live on context APIs (`time_intent`, `as_of`, `temporal_weight`).
+- Query-time intent auto-resolution includes recency/historical/date hints.
+- Temporal reranking is applied to facts, episodes, and entities before context assembly.
+- Response payload now includes `temporal_diagnostics` with resolved intent, applied weight, and scored counts.
+- Integration falsification covers ranking shifts between `current` and `historical` intents.
 
 ## Core idea
 
