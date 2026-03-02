@@ -132,6 +132,11 @@ When the ingestion pipeline processes a new episode, it:
 
 This happens automatically. You don't need to tell Mnemo that facts have changed.
 
+Related design notes:
+
+- `docs/THREAD_HEAD.md` (explicit Git-like session HEAD model)
+- `docs/TEMPORAL_VECTORIZATION.md` (time-aware retrieval scoring)
+
 ---
 
 ## Ingestion Pipeline

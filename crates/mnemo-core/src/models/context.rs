@@ -78,6 +78,7 @@ pub enum RetrievalSource {
     SemanticSearch,
     FullTextSearch,
     GraphTraversal,
+    TemporalScoring,
     EpisodeRecall,
     SessionSummary,
 }
@@ -90,6 +91,20 @@ pub enum SearchType {
     FullText,
     Graph,
     Hybrid,
+}
+
+/// Temporal intent guides how recency and validity are weighted during retrieval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemporalIntent {
+    /// Let Mnemo infer intent from the query text.
+    Auto,
+    /// Prefer currently valid state.
+    Current,
+    /// Prefer recently changed/mentioned information.
+    Recent,
+    /// Prefer historical validity alignment (often with `as_of`).
+    Historical,
 }
 
 /// Request for context retrieval.
@@ -116,6 +131,18 @@ pub struct ContextRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal_filter: Option<DateTime<Utc>>,
 
+    /// Optional explicit point-in-time target for historical recall.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<DateTime<Utc>>,
+
+    /// How temporal relevance should influence ranking.
+    #[serde(default = "default_temporal_intent")]
+    pub time_intent: TemporalIntent,
+
+    /// Optional override for temporal weighting (0.0–1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_weight: Option<f32>,
+
     /// Minimum relevance threshold (0.0–1.0). Results below this are dropped.
     #[serde(default = "default_min_relevance")]
     pub min_relevance: f32,
@@ -138,6 +165,10 @@ fn default_search_types() -> Vec<SearchType> {
 
 fn default_min_relevance() -> f32 {
     0.3
+}
+
+fn default_temporal_intent() -> TemporalIntent {
+    TemporalIntent::Auto
 }
 
 /// Generic search request for the search API.
@@ -305,7 +336,12 @@ impl ContextBlock {
 
                 for ep in &self.episodes {
                     let role = ep.role.as_deref().unwrap_or("unknown");
-                    let line = format!("- [{}] {}: {}\n", ep.created_at.format("%Y-%m-%d"), role, ep.preview);
+                    let line = format!(
+                        "- [{}] {}: {}\n",
+                        ep.created_at.format("%Y-%m-%d"),
+                        role,
+                        ep.preview
+                    );
                     let tokens = estimate_tokens(&line);
                     if running_tokens + tokens > max_tokens {
                         break;
@@ -317,8 +353,6 @@ impl ContextBlock {
 
                 if items_added > 0 {
                     parts.push(episode_section);
-                } else {
-                    running_tokens -= header_tokens;
                 }
             }
         }
@@ -402,13 +436,19 @@ mod tests {
 
     #[test]
     fn test_context_request_defaults() {
-        let req: ContextRequest = serde_json::from_str(r#"{
+        let req: ContextRequest = serde_json::from_str(
+            r#"{
             "messages": [{"role": "user", "content": "What shoes does Kendra like?"}]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         assert_eq!(req.max_tokens, 500);
         assert_eq!(req.search_types, vec![SearchType::Hybrid]);
         assert_eq!(req.min_relevance, 0.3);
+        assert_eq!(req.time_intent, TemporalIntent::Auto);
+        assert_eq!(req.as_of, None);
+        assert_eq!(req.temporal_weight, None);
     }
 
     #[test]

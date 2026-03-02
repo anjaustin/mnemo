@@ -30,7 +30,8 @@ impl FullTextStore for RedisStateStore {
             query,
             &user_id.to_string(),
             limit,
-        ).await
+        )
+        .await
     }
 
     async fn search_edges_ft(
@@ -44,7 +45,8 @@ impl FullTextStore for RedisStateStore {
             query,
             &user_id.to_string(),
             limit,
-        ).await
+        )
+        .await
     }
 
     async fn search_episodes_ft(
@@ -58,7 +60,8 @@ impl FullTextStore for RedisStateStore {
             query,
             &user_id.to_string(),
             limit,
-        ).await
+        )
+        .await
     }
 
     async fn ensure_indexes(&self) -> StorageResult<()> {
@@ -72,7 +75,8 @@ impl FullTextStore for RedisStateStore {
                 ("$.user_id", "user_id", "TAG", None),
                 ("$.entity_type", "entity_type", "TAG", None),
             ],
-        ).await?;
+        )
+        .await?;
 
         // Edge index
         self.create_ft_index(
@@ -83,7 +87,8 @@ impl FullTextStore for RedisStateStore {
                 ("$.label", "label", "TAG", None),
                 ("$.user_id", "user_id", "TAG", None),
             ],
-        ).await?;
+        )
+        .await?;
 
         // Episode index
         self.create_ft_index(
@@ -94,7 +99,8 @@ impl FullTextStore for RedisStateStore {
                 ("$.user_id", "user_id", "TAG", None),
                 ("$.session_id", "session_id", "TAG", None),
             ],
-        ).await?;
+        )
+        .await?;
 
         tracing::info!("RediSearch indexes ensured");
         Ok(())
@@ -130,8 +136,11 @@ impl RedisStateStore {
         // Build FT.CREATE command
         let mut cmd = redis::cmd("FT.CREATE");
         cmd.arg(index_name)
-            .arg("ON").arg("JSON")
-            .arg("PREFIX").arg("1").arg(prefix)
+            .arg("ON")
+            .arg("JSON")
+            .arg("PREFIX")
+            .arg("1")
+            .arg(prefix)
             .arg("SCHEMA");
 
         for (json_path, alias, field_type, weight) in fields {
@@ -141,9 +150,9 @@ impl RedisStateStore {
             }
         }
 
-        cmd.exec_async(&mut conn)
-            .await
-            .map_err(|e| MnemoError::Redis(format!("FT.CREATE failed for {}: {}", index_name, e)))?;
+        cmd.exec_async(&mut conn).await.map_err(|e| {
+            MnemoError::Redis(format!("FT.CREATE failed for {}: {}", index_name, e))
+        })?;
 
         tracing::debug!(index = index_name, "Created RediSearch index");
         Ok(())
@@ -168,9 +177,12 @@ impl RedisStateStore {
         let result: redis::Value = redis::cmd("FT.SEARCH")
             .arg(index_name)
             .arg(&search_query)
-            .arg("LIMIT").arg("0").arg(limit.to_string())
+            .arg("LIMIT")
+            .arg("0")
+            .arg(limit.to_string())
             .arg("WITHSCORES")
-            .arg("RETURN").arg("0") // Don't return fields, just keys + scores
+            .arg("RETURN")
+            .arg("0") // Don't return fields, just keys + scores
             .query_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(format!("FT.SEARCH failed: {}", e)))?;
@@ -182,7 +194,9 @@ impl RedisStateStore {
 /// Escape special characters for RediSearch queries.
 fn escape_redisearch_query(query: &str) -> String {
     // RediSearch special chars that need escaping
-    let special = ['@', '!', '{', '}', '(', ')', '|', '-', '=', '>', '[', ']', ':', ';', '~'];
+    let special = [
+        '@', '!', '{', '}', '(', ')', '|', '-', '=', '>', '[', ']', ':', ';', '~',
+    ];
     let mut escaped = String::with_capacity(query.len() * 2);
     for ch in query.chars() {
         if special.contains(&ch) {
@@ -197,10 +211,7 @@ fn escape_redisearch_query(query: &str) -> String {
 ///
 /// FT.SEARCH with WITHSCORES returns:
 /// [total_count, key1, score1, key2, score2, ...]
-fn parse_ft_search_results(
-    prefix: &str,
-    result: redis::Value,
-) -> StorageResult<Vec<(Uuid, f32)>> {
+fn parse_ft_search_results(_prefix: &str, result: redis::Value) -> StorageResult<Vec<(Uuid, f32)>> {
     let items = match result {
         redis::Value::Array(items) => items,
         _ => return Ok(Vec::new()),
@@ -219,7 +230,10 @@ fn parse_ft_search_results(
         let key_str = match &items[i] {
             redis::Value::BulkString(bytes) => String::from_utf8_lossy(bytes).to_string(),
             redis::Value::SimpleString(s) => s.clone(),
-            _ => { i += 2; continue; }
+            _ => {
+                i += 2;
+                continue;
+            }
         };
 
         // Score
@@ -253,8 +267,14 @@ mod tests {
     #[test]
     fn test_escape_redisearch_query() {
         assert_eq!(escape_redisearch_query("hello world"), "hello world");
-        assert_eq!(escape_redisearch_query("user@email.com"), "user\\@email.com");
-        assert_eq!(escape_redisearch_query("INV-2024-0847"), "INV\\-2024\\-0847");
+        assert_eq!(
+            escape_redisearch_query("user@email.com"),
+            "user\\@email.com"
+        );
+        assert_eq!(
+            escape_redisearch_query("INV-2024-0847"),
+            "INV\\-2024\\-0847"
+        );
         assert_eq!(escape_redisearch_query("tag:{value}"), "tag\\:\\{value\\}");
     }
 

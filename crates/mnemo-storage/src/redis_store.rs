@@ -88,9 +88,7 @@ impl RedisStateStore {
         key: &str,
         not_found_err: MnemoError,
     ) -> StorageResult<T> {
-        self.get_json(key)
-            .await?
-            .ok_or(not_found_err)
+        self.get_json(key).await?.ok_or(not_found_err)
     }
 
     async fn del(&self, key: &str) -> StorageResult<()> {
@@ -114,7 +112,6 @@ impl RedisStateStore {
         // Get member IDs from sorted set (newest first)
         let ids: Vec<String> = if let Some(cursor_id) = after {
             // Get the score of the cursor, then fetch items with lower scores
-            let cursor_key = format!("{}{}", item_prefix, cursor_id);
             let score: Option<f64> = redis::cmd("ZSCORE")
                 .arg(zset_key)
                 .arg(cursor_id.to_string())
@@ -167,7 +164,10 @@ impl UserStore for RedisStateStore {
 
         // Check for duplicate
         if self.get_json::<User>(&key).await?.is_some() {
-            return Err(MnemoError::Duplicate(format!("User {} already exists", user.id)));
+            return Err(MnemoError::Duplicate(format!(
+                "User {} already exists",
+                user.id
+            )));
         }
 
         // Store user
@@ -199,7 +199,8 @@ impl UserStore for RedisStateStore {
 
     async fn get_user(&self, id: Uuid) -> StorageResult<User> {
         let key = self.key(&["user", &id.to_string()]);
-        self.get_json_required(&key, MnemoError::UserNotFound(id)).await
+        self.get_json_required(&key, MnemoError::UserNotFound(id))
+            .await
     }
 
     async fn get_user_by_external_id(&self, external_id: &str) -> StorageResult<User> {
@@ -284,7 +285,8 @@ impl SessionStore for RedisStateStore {
 
     async fn get_session(&self, id: Uuid) -> StorageResult<Session> {
         let key = self.key(&["session", &id.to_string()]);
-        self.get_json_required(&key, MnemoError::SessionNotFound(id)).await
+        self.get_json_required(&key, MnemoError::SessionNotFound(id))
+            .await
     }
 
     async fn update_session(&self, id: Uuid, req: UpdateSessionRequest) -> StorageResult<Session> {
@@ -315,7 +317,8 @@ impl SessionStore for RedisStateStore {
     ) -> StorageResult<Vec<Session>> {
         let zset_key = self.key(&["user_sessions", &user_id.to_string()]);
         let prefix = self.key(&["session:"]);
-        self.list_from_zset(&zset_key, &prefix, params.limit, params.after).await
+        self.list_from_zset(&zset_key, &prefix, params.limit, params.after)
+            .await
     }
 }
 
@@ -382,7 +385,8 @@ impl EpisodeStore for RedisStateStore {
 
     async fn get_episode(&self, id: Uuid) -> StorageResult<Episode> {
         let key = self.key(&["episode", &id.to_string()]);
-        self.get_json_required(&key, MnemoError::EpisodeNotFound(id)).await
+        self.get_json_required(&key, MnemoError::EpisodeNotFound(id))
+            .await
     }
 
     async fn update_episode(&self, episode: &Episode) -> StorageResult<()> {
@@ -397,7 +401,8 @@ impl EpisodeStore for RedisStateStore {
     ) -> StorageResult<Vec<Episode>> {
         let zset_key = self.key(&["session_episodes", &session_id.to_string()]);
         let prefix = self.key(&["episode:"]);
-        self.list_from_zset(&zset_key, &prefix, params.limit, params.after).await
+        self.list_from_zset(&zset_key, &prefix, params.limit, params.after)
+            .await
     }
 
     async fn get_pending_episodes(&self, limit: u32) -> StorageResult<Vec<Episode>> {
@@ -489,7 +494,8 @@ impl EntityStore for RedisStateStore {
 
     async fn get_entity(&self, id: Uuid) -> StorageResult<Entity> {
         let key = self.key(&["entity", &id.to_string()]);
-        self.get_json_required(&key, MnemoError::EntityNotFound(id)).await
+        self.get_json_required(&key, MnemoError::EntityNotFound(id))
+            .await
     }
 
     async fn update_entity(&self, entity: &Entity) -> StorageResult<()> {
@@ -522,11 +528,7 @@ impl EntityStore for RedisStateStore {
         user_id: Uuid,
         name: &str,
     ) -> StorageResult<Option<Entity>> {
-        let name_key = self.key(&[
-            "entity_name",
-            &user_id.to_string(),
-            &name.to_lowercase(),
-        ]);
+        let name_key = self.key(&["entity_name", &user_id.to_string(), &name.to_lowercase()]);
         let mut conn = self.conn.clone();
         let id_str: Option<String> = conn
             .get(&name_key)
@@ -588,7 +590,8 @@ impl EdgeStore for RedisStateStore {
 
     async fn get_edge(&self, id: Uuid) -> StorageResult<Edge> {
         let key = self.key(&["edge", &id.to_string()]);
-        self.get_json_required(&key, MnemoError::EdgeNotFound(id)).await
+        self.get_json_required(&key, MnemoError::EdgeNotFound(id))
+            .await
     }
 
     async fn update_edge(&self, edge: &Edge) -> StorageResult<()> {

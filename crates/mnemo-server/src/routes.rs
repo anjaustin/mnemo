@@ -10,7 +10,7 @@ use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
     context::{
         estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary,
-        RetrievalSource,
+        RetrievalSource, TemporalIntent,
     },
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -399,6 +399,12 @@ struct MemoryContextRequest {
     max_tokens: Option<u32>,
     #[serde(default)]
     min_relevance: Option<f32>,
+    #[serde(default)]
+    time_intent: Option<TemporalIntent>,
+    #[serde(default)]
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    temporal_weight: Option<f32>,
 }
 
 async fn remember_memory(
@@ -489,6 +495,7 @@ async fn get_memory_context(
     };
 
     let max_tokens = req.max_tokens.unwrap_or(500);
+    let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
     let context_req = ContextRequest {
         session_id,
         messages: vec![ContextMessage {
@@ -497,13 +504,24 @@ async fn get_memory_context(
         }],
         max_tokens,
         search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
-        temporal_filter: None,
+        temporal_filter: req.as_of,
+        as_of: req.as_of,
+        time_intent: temporal_intent,
+        temporal_weight: req.temporal_weight,
         min_relevance: req.min_relevance.unwrap_or(0.3),
     };
 
     let mut context = state.retrieval.get_context(user.id, &context_req).await?;
-    maybe_attach_recent_episode_fallback(&state, user.id, session_id, max_tokens, &mut context)
-        .await?;
+    maybe_attach_recent_episode_fallback(
+        &state,
+        user.id,
+        session_id,
+        max_tokens,
+        temporal_intent,
+        req.as_of,
+        &mut context,
+    )
+    .await?;
     Ok(Json(context))
 }
 
@@ -512,6 +530,8 @@ async fn maybe_attach_recent_episode_fallback(
     user_id: Uuid,
     session_id: Option<Uuid>,
     max_tokens: u32,
+    temporal_intent: TemporalIntent,
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
     context: &mut ContextBlock,
 ) -> Result<(), MnemoError> {
     if !context.context.trim().is_empty() {
@@ -567,7 +587,14 @@ async fn maybe_attach_recent_episode_fallback(
         return Ok(());
     }
 
-    episodes.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    let now = chrono::Utc::now();
+    episodes.sort_by(|a, b| {
+        let a_score = fallback_temporal_score(a.created_at, temporal_intent, as_of, now);
+        let b_score = fallback_temporal_score(b.created_at, temporal_intent, as_of, now);
+        b_score
+            .partial_cmp(&a_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut lines = Vec::new();
     lines.push("Recent conversation snippets (extraction may still be processing):".to_string());
@@ -601,6 +628,9 @@ async fn maybe_attach_recent_episode_fallback(
     if !context.sources.contains(&RetrievalSource::EpisodeRecall) {
         context.sources.push(RetrievalSource::EpisodeRecall);
     }
+    if !context.sources.contains(&RetrievalSource::TemporalScoring) {
+        context.sources.push(RetrievalSource::TemporalScoring);
+    }
 
     if context.episodes.is_empty() {
         for episode in episodes {
@@ -621,6 +651,28 @@ async fn maybe_attach_recent_episode_fallback(
     }
 
     Ok(())
+}
+
+fn fallback_temporal_score(
+    created_at: chrono::DateTime<chrono::Utc>,
+    temporal_intent: TemporalIntent,
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> f64 {
+    match temporal_intent {
+        TemporalIntent::Historical => {
+            if let Some(as_of) = as_of {
+                let delta = (created_at - as_of).num_days().unsigned_abs() as f64;
+                (-delta / 14.0).exp().clamp(0.0, 1.0)
+            } else {
+                0.5
+            }
+        }
+        TemporalIntent::Recent | TemporalIntent::Current | TemporalIntent::Auto => {
+            let age_days = (now - created_at).num_days().max(0) as f64;
+            (-age_days / 21.0).exp().clamp(0.0, 1.0)
+        }
+    }
 }
 
 async fn find_user_by_identifier(state: &AppState, identifier: &str) -> Result<User, MnemoError> {

@@ -128,6 +128,8 @@ Old facts aren't deleted. This enables point-in-time queries and change tracking
 |----------|-------------|
 | [API Reference](docs/API.md) | Every endpoint with request/response examples |
 | [Architecture](docs/ARCHITECTURE.md) | Data model, temporal reasoning, pipeline internals |
+| [Thread HEAD Proposal](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
+| [Temporal Vectorization](docs/TEMPORAL_VECTORIZATION.md) | Time-aware retrieval scoring and rollout plan |
 | [Testing Guide](docs/TESTING.md) | Workspace, E2E, and falsification test commands |
 | [Configuration](config/default.toml) | All config options with inline comments |
 | [Contributing](CONTRIBUTING.md) | Dev setup, code style, PR process |

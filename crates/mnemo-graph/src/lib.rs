@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use mnemo_core::error::MnemoError;
 use mnemo_core::models::edge::Edge;
 use mnemo_core::models::entity::Entity;
 use mnemo_core::traits::storage::{EdgeStore, EntityStore, StorageResult};
@@ -73,8 +72,16 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
                 Err(_) => continue,
             };
 
-            let outgoing = self.store.get_outgoing_edges(entity_id).await.unwrap_or_default();
-            let incoming = self.store.get_incoming_edges(entity_id).await.unwrap_or_default();
+            let outgoing = self
+                .store
+                .get_outgoing_edges(entity_id)
+                .await
+                .unwrap_or_default();
+            let incoming = self
+                .store
+                .get_incoming_edges(entity_id)
+                .await
+                .unwrap_or_default();
 
             let filtered_out: Vec<Edge> = if valid_only {
                 outgoing.into_iter().filter(|e| e.is_valid()).collect()
@@ -139,19 +146,28 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
         }
 
         // Initialize: each entity is its own community
-        let mut labels: HashMap<Uuid, Uuid> = entities
-            .iter()
-            .map(|e| (e.id, e.id))
-            .collect();
+        let mut labels: HashMap<Uuid, Uuid> = entities.iter().map(|e| (e.id, e.id)).collect();
 
         // Build adjacency from edges
         let mut adjacency: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
         for entity in &entities {
-            let outgoing = self.store.get_outgoing_edges(entity.id).await.unwrap_or_default();
+            let outgoing = self
+                .store
+                .get_outgoing_edges(entity.id)
+                .await
+                .unwrap_or_default();
             for edge in &outgoing {
-                if !edge.is_valid() { continue; }
-                adjacency.entry(entity.id).or_default().push(edge.target_entity_id);
-                adjacency.entry(edge.target_entity_id).or_default().push(entity.id);
+                if !edge.is_valid() {
+                    continue;
+                }
+                adjacency
+                    .entry(entity.id)
+                    .or_default()
+                    .push(edge.target_entity_id);
+                adjacency
+                    .entry(edge.target_entity_id)
+                    .or_default()
+                    .push(entity.id);
             }
         }
 
@@ -173,7 +189,8 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
                 }
 
                 // Pick most frequent label
-                if let Some((&best_label, _)) = label_counts.iter().max_by_key(|(_, &count)| count) {
+                if let Some((&best_label, _)) = label_counts.iter().max_by_key(|(_, &count)| count)
+                {
                     let current = labels[&entity.id];
                     if best_label != current {
                         labels.insert(entity.id, best_label);
@@ -181,7 +198,9 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
                     }
                 }
             }
-            if !changed { break; }
+            if !changed {
+                break;
+            }
         }
 
         Ok(labels)

@@ -3,12 +3,12 @@
 //! Hybrid retrieval engine: semantic search + full-text search + graph traversal.
 //! Results are merged using Reciprocal Rank Fusion (RRF).
 
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
-use mnemo_core::error::MnemoError;
 use mnemo_core::models::context::*;
 use mnemo_core::traits::fulltext::FullTextStore;
 use mnemo_core::traits::llm::EmbeddingProvider;
@@ -31,8 +31,6 @@ where
 /// A scored result from a single retrieval source.
 struct ScoredHit {
     id: Uuid,
-    score: f32,
-    source: RetrievalSource,
 }
 
 impl<S, V, E> RetrievalEngine<S, V, E>
@@ -69,6 +67,9 @@ where
             block.latency_ms = start.elapsed().as_millis() as u64;
             return Ok(block);
         }
+
+        let temporal_intent = resolve_temporal_intent(request.time_intent, &query_text);
+        let temporal_filter = request.as_of.or(request.temporal_filter);
 
         // Generate query embedding for semantic search.
         // If embeddings are unavailable, gracefully degrade to full-text retrieval.
@@ -148,7 +149,7 @@ where
 
         for (edge_id, rrf_score) in edge_ids.iter().take(15) {
             if let Ok(edge) = self.state_store.get_edge(*edge_id).await {
-                if let Some(tf) = request.temporal_filter {
+                if let Some(tf) = temporal_filter {
                     if !edge.is_valid_at(tf) {
                         continue;
                     }
@@ -251,6 +252,17 @@ where
             block.sources.push(RetrievalSource::GraphTraversal);
         }
 
+        // ── Temporal reranking (semantic + time) ──────────────
+        apply_temporal_scoring(
+            &mut block,
+            temporal_intent,
+            temporal_filter,
+            request.temporal_weight,
+        );
+        if !block.sources.contains(&RetrievalSource::TemporalScoring) {
+            block.sources.push(RetrievalSource::TemporalScoring);
+        }
+
         // ── Assemble context string ────────────────────────────
         block.assemble(request.max_tokens);
         block.latency_ms = start.elapsed().as_millis() as u64;
@@ -271,12 +283,9 @@ where
 
 /// Convert (Uuid, f32) hits into ranked ScoredHit lists.
 fn ranked_hits(hits: &[(Uuid, f32)], source: RetrievalSource) -> Vec<ScoredHit> {
+    let _ = source;
     hits.iter()
-        .map(|(id, score)| ScoredHit {
-            id: *id,
-            score: *score,
-            source,
-        })
+        .map(|(id, _score)| ScoredHit { id: *id })
         .collect()
 }
 
@@ -300,26 +309,161 @@ fn rrf_merge(sources: Vec<Vec<ScoredHit>>) -> Vec<(Uuid, f64)> {
     sorted
 }
 
+fn resolve_temporal_intent(intent: TemporalIntent, query_text: &str) -> TemporalIntent {
+    if intent != TemporalIntent::Auto {
+        return intent;
+    }
+
+    let q = query_text.to_lowercase();
+    if q.contains("as of")
+        || q.contains("back in")
+        || q.contains("histor")
+        || q.contains("at that time")
+    {
+        return TemporalIntent::Historical;
+    }
+    if q.contains("recent")
+        || q.contains("lately")
+        || q.contains("last week")
+        || q.contains("this month")
+    {
+        return TemporalIntent::Recent;
+    }
+    if q.contains("currently")
+        || q.contains("right now")
+        || q.contains("now")
+        || q.contains("latest")
+    {
+        return TemporalIntent::Current;
+    }
+
+    TemporalIntent::Current
+}
+
+fn apply_temporal_scoring(
+    block: &mut ContextBlock,
+    temporal_intent: TemporalIntent,
+    temporal_filter: Option<DateTime<Utc>>,
+    temporal_weight: Option<f32>,
+) {
+    let now = Utc::now();
+    let weight = temporal_weight
+        .unwrap_or_else(|| default_temporal_weight(temporal_intent))
+        .clamp(0.0, 1.0) as f64;
+
+    for fact in &mut block.facts {
+        let temporal_score = score_fact_temporal(fact, temporal_intent, temporal_filter, now);
+        fact.relevance = apply_temporal_blend(fact.relevance as f64, temporal_score, weight) as f32;
+    }
+
+    for episode in &mut block.episodes {
+        let temporal_score = score_episode_temporal(episode, temporal_intent, temporal_filter, now);
+        episode.relevance =
+            apply_temporal_blend(episode.relevance as f64, temporal_score, weight) as f32;
+    }
+
+    for entity in &mut block.entities {
+        entity.relevance = apply_temporal_blend(entity.relevance as f64, 0.6, weight * 0.4) as f32;
+    }
+
+    block.entities.sort_by(|a, b| {
+        b.relevance
+            .partial_cmp(&a.relevance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    block.facts.sort_by(|a, b| {
+        b.relevance
+            .partial_cmp(&a.relevance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    block.episodes.sort_by(|a, b| {
+        b.relevance
+            .partial_cmp(&a.relevance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+fn default_temporal_weight(intent: TemporalIntent) -> f32 {
+    match intent {
+        TemporalIntent::Auto => 0.35,
+        TemporalIntent::Current => 0.35,
+        TemporalIntent::Recent => 0.45,
+        TemporalIntent::Historical => 0.55,
+    }
+}
+
+fn apply_temporal_blend(base_score: f64, temporal_score: f64, temporal_weight: f64) -> f64 {
+    let multiplier = (1.0 + temporal_weight * (temporal_score - 0.5) * 1.6).clamp(0.2, 2.0);
+    (base_score * multiplier).max(0.0)
+}
+
+fn score_fact_temporal(
+    fact: &FactSummary,
+    temporal_intent: TemporalIntent,
+    temporal_filter: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> f64 {
+    match temporal_intent {
+        TemporalIntent::Historical => {
+            if let Some(as_of) = temporal_filter {
+                let valid_at_as_of =
+                    fact.valid_at <= as_of && fact.invalid_at.map(|x| x > as_of).unwrap_or(true);
+                if valid_at_as_of {
+                    0.95
+                } else {
+                    0.2
+                }
+            } else {
+                0.6
+            }
+        }
+        TemporalIntent::Recent => {
+            let age_days = (now - fact.valid_at).num_days().max(0) as f64;
+            ((-age_days / 30.0).exp()).clamp(0.0, 1.0)
+        }
+        TemporalIntent::Current | TemporalIntent::Auto => {
+            if fact.invalid_at.is_none() {
+                let age_days = (now - fact.valid_at).num_days().max(0) as f64;
+                (0.6 + 0.4 * (-age_days / 120.0).exp()).clamp(0.0, 1.0)
+            } else {
+                0.2
+            }
+        }
+    }
+}
+
+fn score_episode_temporal(
+    episode: &EpisodeSummary,
+    temporal_intent: TemporalIntent,
+    temporal_filter: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> f64 {
+    match temporal_intent {
+        TemporalIntent::Historical => {
+            if let Some(as_of) = temporal_filter {
+                let delta = (episode.created_at - as_of).num_days().unsigned_abs() as f64;
+                (-delta / 14.0).exp().clamp(0.0, 1.0)
+            } else {
+                0.5
+            }
+        }
+        TemporalIntent::Recent | TemporalIntent::Current | TemporalIntent::Auto => {
+            let age_days = (now - episode.created_at).num_days().max(0) as f64;
+            (-age_days / 21.0).exp().clamp(0.0, 1.0)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     #[test]
     fn test_rrf_merge_single_source() {
         let id1 = Uuid::now_v7();
         let id2 = Uuid::now_v7();
-        let source = vec![
-            ScoredHit {
-                id: id1,
-                score: 0.95,
-                source: RetrievalSource::SemanticSearch,
-            },
-            ScoredHit {
-                id: id2,
-                score: 0.80,
-                source: RetrievalSource::SemanticSearch,
-            },
-        ];
+        let source = vec![ScoredHit { id: id1 }, ScoredHit { id: id2 }];
         let result = rrf_merge(vec![source]);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].0, id1); // Higher ranked item first
@@ -331,30 +475,8 @@ mod tests {
         let only_semantic = Uuid::now_v7();
         let only_ft = Uuid::now_v7();
 
-        let semantic = vec![
-            ScoredHit {
-                id: shared_id,
-                score: 0.9,
-                source: RetrievalSource::SemanticSearch,
-            },
-            ScoredHit {
-                id: only_semantic,
-                score: 0.8,
-                source: RetrievalSource::SemanticSearch,
-            },
-        ];
-        let ft = vec![
-            ScoredHit {
-                id: shared_id,
-                score: 0.85,
-                source: RetrievalSource::FullTextSearch,
-            },
-            ScoredHit {
-                id: only_ft,
-                score: 0.7,
-                source: RetrievalSource::FullTextSearch,
-            },
-        ];
+        let semantic = vec![ScoredHit { id: shared_id }, ScoredHit { id: only_semantic }];
+        let ft = vec![ScoredHit { id: shared_id }, ScoredHit { id: only_ft }];
 
         let result = rrf_merge(vec![semantic, ft]);
         // shared_id should be ranked #1 because it appears in both sources
@@ -366,5 +488,51 @@ mod tests {
     fn test_rrf_empty_sources() {
         let result = rrf_merge(vec![vec![], vec![]]);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_temporal_intent_from_query() {
+        assert_eq!(
+            resolve_temporal_intent(TemporalIntent::Auto, "What do I currently prefer?"),
+            TemporalIntent::Current
+        );
+        assert_eq!(
+            resolve_temporal_intent(TemporalIntent::Auto, "What changed recently?"),
+            TemporalIntent::Recent
+        );
+        assert_eq!(
+            resolve_temporal_intent(TemporalIntent::Auto, "As of 2024 what did I prefer?"),
+            TemporalIntent::Historical
+        );
+    }
+
+    #[test]
+    fn test_temporal_scoring_prefers_current_fact_for_current_intent() {
+        let now = Utc::now();
+        let current_fact = FactSummary {
+            id: Uuid::now_v7(),
+            source_entity: "u".into(),
+            target_entity: "x".into(),
+            label: "prefers".into(),
+            fact: "u prefers x".into(),
+            valid_at: now - Duration::days(2),
+            invalid_at: None,
+            relevance: 0.01,
+        };
+        let stale_fact = FactSummary {
+            id: Uuid::now_v7(),
+            source_entity: "u".into(),
+            target_entity: "y".into(),
+            label: "prefers".into(),
+            fact: "u preferred y".into(),
+            valid_at: now - Duration::days(200),
+            invalid_at: Some(now - Duration::days(20)),
+            relevance: 0.01,
+        };
+
+        assert!(
+            score_fact_temporal(&current_fact, TemporalIntent::Current, None, now)
+                > score_fact_temporal(&stale_fact, TemporalIntent::Current, None, now)
+        );
     }
 }

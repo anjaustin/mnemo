@@ -62,11 +62,18 @@ Retrieve context for a user by identifier (`:user` can be UUID, external_id, or 
   "query": "What are my hobbies?",
   "session": "default",
   "max_tokens": 500,
-  "min_relevance": 0.3
+  "min_relevance": 0.3,
+  "time_intent": "current",
+  "as_of": "2025-01-01T00:00:00Z",
+  "temporal_weight": 0.5
 }
 ```
 
-`session`, `max_tokens`, and `min_relevance` are optional.
+`session`, `max_tokens`, `min_relevance`, `time_intent`, `as_of`, and `temporal_weight` are optional.
+
+- `time_intent`: `auto | current | recent | historical`
+- `as_of`: point-in-time target for historical recall
+- `temporal_weight`: override temporal influence (0.0–1.0)
 
 If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to recent episode recall so the returned context is still usable immediately after `remember`.
 
@@ -313,6 +320,9 @@ This is the endpoint your agent calls on every turn. It retrieves relevant knowl
 | `min_relevance` | float | `0.3` | Minimum similarity threshold (0.0–1.0) |
 | `search_types` | array | `["hybrid"]` | `semantic`, `full_text`, `graph`, `hybrid` |
 | `temporal_filter` | ISO 8601 | null | Only return facts valid at this time |
+| `as_of` | ISO 8601 | null | Point-in-time target (historical recall) |
+| `time_intent` | enum | `auto` | `auto`, `current`, `recent`, `historical` |
+| `temporal_weight` | float | null | Override temporal influence (0.0–1.0) |
 
 ```json
 // Response 200

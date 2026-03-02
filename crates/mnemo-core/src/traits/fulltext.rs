@@ -1,6 +1,5 @@
 use uuid::Uuid;
 
-use crate::error::MnemoError;
 use crate::traits::storage::StorageResult;
 
 /// Trait for full-text search operations (RediSearch / BM25).
