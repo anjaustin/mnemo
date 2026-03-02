@@ -1,0 +1,31 @@
+# docker-compose.test.yml — Lightweight stack for integration tests
+# Usage: docker compose -f docker-compose.test.yml up -d
+#        cargo test --test integration
+#        docker compose -f docker-compose.test.yml down
+
+services:
+  redis-test:
+    image: redis/redis-stack:latest
+    ports:
+      - "6399:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 10
+    tmpfs:
+      - /data
+
+  qdrant-test:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6364:6334"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6334/readyz"]
+      interval: 1s
+      timeout: 3s
+      retries: 10
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: "6335"
+    tmpfs:
+      - /qdrant/storage

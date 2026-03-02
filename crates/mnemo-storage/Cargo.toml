@@ -1,0 +1,18 @@
+[package]
+name = "mnemo-storage"
+description = "Redis + Qdrant storage backends for Mnemo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mnemo-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+redis = { workspace = true }
+qdrant-client = { workspace = true }

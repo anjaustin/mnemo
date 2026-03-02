@@ -1,0 +1,108 @@
+# ============================================================================
+# Mnemo Configuration
+# Memory that evolves. Context that matters.
+# ============================================================================
+
+[server]
+host = "0.0.0.0"
+port = 8080
+grpc_port = 50051
+# Number of worker threads. 0 = number of CPU cores.
+workers = 0
+
+[auth]
+enabled = false
+# API keys for authentication. Set via MNEMO_AUTH_API_KEYS env var in production.
+api_keys = []
+# Optional JWT secret for token-based auth.
+jwt_secret = ""
+
+[redis]
+url = "redis://localhost:6379"
+# Key prefix for multi-service Redis instances.
+prefix = "mnemo:"
+max_connections = 50
+
+[qdrant]
+url = "http://localhost:6334"
+# Collection name prefix.
+collection_prefix = "mnemo_"
+
+[llm]
+# Provider for entity/relationship extraction.
+# Options: "anthropic" (recommended online), "openai", "liquid" (recommended offline), "ollama", "none"
+provider = "anthropic"
+# Set via MNEMO_LLM_API_KEY env var in production.
+api_key = ""
+# Model for extraction tasks.
+# Anthropic: "claude-sonnet-4-20250514" (recommended)
+# OpenAI: "gpt-4o-mini"
+# Liquid: "lfm-3b" or "lfm-7b" (for offline/local)
+# Ollama: any model name available on your Ollama instance
+model = "claude-sonnet-4-20250514"
+# Base URL override (required for Ollama, Liquid local, or custom endpoints).
+# Ollama default: "http://localhost:11434/v1"
+# Liquid local: "http://localhost:8000/v1"
+base_url = ""
+temperature = 0.0
+max_tokens = 2048
+
+[embedding]
+# Provider for vector embeddings.
+# Options: "openai", "voyage", "cohere", "ollama", "fastembed"
+provider = "openai"
+api_key = ""
+model = "text-embedding-3-small"
+base_url = ""
+# Must match the model's output dimensionality.
+dimensions = 1536
+
+[extraction]
+# Extraction mode:
+# "llm"    - Use LLM for entity/relationship extraction (highest quality)
+# "rules"  - Rule-based extraction (no LLM dependency, lower quality)
+# "hybrid" - Rules first, LLM for refinement (balanced)
+mode = "llm"
+# Number of episodes to process in parallel.
+batch_size = 10
+# Retry failed extractions this many times.
+max_retries = 3
+# Concurrent LLM calls for extraction.
+concurrency = 4
+# How often to check for pending episodes (milliseconds).
+poll_interval_ms = 500
+
+[graph]
+# Enable community detection (groups related entities into clusters).
+community_detection = true
+# Minimum entities in a community before a summary is generated.
+community_min_size = 3
+# Auto-generate entity and community summaries.
+summarization = true
+# Maximum tokens for generated summaries.
+max_summary_tokens = 200
+
+[retrieval]
+# Default context assembly strategy.
+# Combines results from multiple search types, sorted by relevance.
+default_max_tokens = 500
+default_min_relevance = 0.3
+# Reranking strategy: "rrf" (Reciprocal Rank Fusion), "mmr" (Maximal Marginal Relevance)
+reranker = "rrf"
+
+[retention]
+# Default TTL in seconds. 0 = no expiration.
+default_ttl = 0
+episode_ttl = 0
+session_ttl = 0
+
+[observability]
+# Log level: "trace", "debug", "info", "warn", "error"
+log_level = "info"
+# Log format: "json" (production) or "pretty" (development)
+log_format = "pretty"
+# Enable Prometheus metrics endpoint at /metrics.
+metrics_enabled = true
+# Enable OpenTelemetry tracing.
+otel_enabled = false
+otel_endpoint = ""
