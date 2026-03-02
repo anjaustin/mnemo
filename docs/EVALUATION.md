@@ -33,6 +33,11 @@ For Zep runs in GitHub Actions, configure repository secret:
 
 - `ZEP_API_KEY`
 
+Latest CI evidence:
+
+- Mnemo benchmark success: run `22591312119`
+- Manual `both` attempt: run `22591413221` (failed on missing `ZEP_API_KEY` secret)
+
 For Mnemo it executes two profiles over the same temporal dataset:
 
 - `temporal`: uses `mode`, `time_intent`, `as_of`, and temporal weighting
