@@ -5,8 +5,7 @@ use mnemo_core::error::MnemoError;
 use mnemo_core::models::edge::ExtractedRelationship;
 use mnemo_core::models::entity::{EntityType, ExtractedEntity};
 use mnemo_core::traits::llm::{
-    EmbeddingProvider, ExtractionResult, LlmConfig, LlmProvider, LlmResult,
-    EmbeddingConfig,
+    EmbeddingConfig, EmbeddingProvider, ExtractionResult, LlmConfig, LlmProvider, LlmResult,
 };
 
 /// OpenAI-compatible LLM provider.
@@ -141,21 +140,32 @@ impl OpenAiCompatibleProvider {
             });
 
         let client = Client::new();
-        Self { client, config, base_url }
+        Self {
+            client,
+            config,
+            base_url,
+        }
     }
 
     async fn chat_completion(&self, system: &str, user_msg: &str) -> LlmResult<String> {
         let request = ChatRequest {
             model: self.config.model.clone(),
             messages: vec![
-                ChatMessage { role: "system".into(), content: system.into() },
-                ChatMessage { role: "user".into(), content: user_msg.into() },
+                ChatMessage {
+                    role: "system".into(),
+                    content: system.into(),
+                },
+                ChatMessage {
+                    role: "user".into(),
+                    content: user_msg.into(),
+                },
             ],
             temperature: self.config.temperature,
             max_tokens: self.config.max_tokens,
         };
 
-        let mut req_builder = self.client
+        let mut req_builder = self
+            .client
             .post(format!("{}/chat/completions", self.base_url))
             .json(&request);
 
@@ -193,10 +203,8 @@ impl OpenAiCompatibleProvider {
             });
         }
 
-        let chat_response: ChatResponse = response
-            .json()
-            .await
-            .map_err(|e| MnemoError::LlmProvider {
+        let chat_response: ChatResponse =
+            response.json().await.map_err(|e| MnemoError::LlmProvider {
                 provider: self.config.provider.clone(),
                 message: format!("Failed to parse response: {}", e),
             })?;
@@ -224,7 +232,11 @@ impl OpenAiCompatibleProvider {
         };
 
         serde_json::from_str(cleaned).map_err(|e| {
-            MnemoError::ExtractionFailed(format!("Failed to parse extraction JSON: {}. Raw: {}", e, &raw[..raw.len().min(200)]))
+            MnemoError::ExtractionFailed(format!(
+                "Failed to parse extraction JSON: {}. Raw: {}",
+                e,
+                &raw[..raw.len().min(200)]
+            ))
         })
     }
 }
@@ -235,7 +247,10 @@ impl LlmProvider for OpenAiCompatibleProvider {
         content: &str,
         existing_entities: &[ExtractedEntity],
     ) -> LlmResult<ExtractionResult> {
-        let mut user_msg = format!("Extract entities and relationships from this text:\n\n{}", content);
+        let mut user_msg = format!(
+            "Extract entities and relationships from this text:\n\n{}",
+            content
+        );
 
         if !existing_entities.is_empty() {
             let names: Vec<&str> = existing_entities.iter().map(|e| e.name.as_str()).collect();
@@ -245,29 +260,38 @@ impl LlmProvider for OpenAiCompatibleProvider {
             ));
         }
 
-        let raw = self.chat_completion(EXTRACTION_SYSTEM_PROMPT, &user_msg).await?;
+        let raw = self
+            .chat_completion(EXTRACTION_SYSTEM_PROMPT, &user_msg)
+            .await?;
         let parsed = Self::parse_extraction(&raw)?;
 
-        let entities = parsed.entities.into_iter().map(|e| {
-            ExtractedEntity {
+        let entities = parsed
+            .entities
+            .into_iter()
+            .map(|e| ExtractedEntity {
                 name: e.name,
                 entity_type: EntityType::from_str_flexible(&e.entity_type),
                 summary: e.summary,
-            }
-        }).collect();
+            })
+            .collect();
 
-        let relationships = parsed.relationships.into_iter().map(|r| {
-            ExtractedRelationship {
+        let relationships = parsed
+            .relationships
+            .into_iter()
+            .map(|r| ExtractedRelationship {
                 source_name: r.source,
                 target_name: r.target,
                 label: r.label,
                 fact: r.fact,
                 confidence: r.confidence,
                 valid_at: None,
-            }
-        }).collect();
+            })
+            .collect();
 
-        Ok(ExtractionResult { entities, relationships })
+        Ok(ExtractionResult {
+            entities,
+            relationships,
+        })
     }
 
     async fn summarize(&self, content: &str, max_tokens: u32) -> LlmResult<String> {
@@ -288,13 +312,15 @@ impl LlmProvider for OpenAiCompatibleProvider {
             return Ok(Vec::new());
         }
 
-        let existing = existing_facts.iter()
+        let existing = existing_facts
+            .iter()
             .enumerate()
             .map(|(i, f)| format!("{}. {}", i + 1, f))
             .collect::<Vec<_>>()
             .join("\n");
 
-        let system = "You detect contradictions between facts. Respond with a JSON array of strings \
+        let system =
+            "You detect contradictions between facts. Respond with a JSON array of strings \
                        describing each contradiction found. If no contradictions, respond with [].";
         let user_msg = format!(
             "New fact: {}\n\nExisting facts:\n{}\n\nList contradictions as a JSON array of strings.",
@@ -332,19 +358,24 @@ impl OpenAiCompatibleEmbedder {
             .clone()
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
         let client = Client::new();
-        Self { client, config, base_url }
+        Self {
+            client,
+            config,
+            base_url,
+        }
     }
 }
 
 impl EmbeddingProvider for OpenAiCompatibleEmbedder {
     async fn embed(&self, text: &str) -> LlmResult<Vec<f32>> {
         let batch = self.embed_batch(&[text.to_string()]).await?;
-        batch.into_iter().next().ok_or_else(|| {
-            MnemoError::EmbeddingProvider {
+        batch
+            .into_iter()
+            .next()
+            .ok_or_else(|| MnemoError::EmbeddingProvider {
                 provider: self.config.provider.clone(),
                 message: "Empty embedding response".into(),
-            }
-        })
+            })
     }
 
     async fn embed_batch(&self, texts: &[String]) -> LlmResult<Vec<Vec<f32>>> {
@@ -353,7 +384,8 @@ impl EmbeddingProvider for OpenAiCompatibleEmbedder {
             input: texts.to_vec(),
         };
 
-        let mut req_builder = self.client
+        let mut req_builder = self
+            .client
             .post(format!("{}/embeddings", self.base_url))
             .json(&request);
 
@@ -378,15 +410,20 @@ impl EmbeddingProvider for OpenAiCompatibleEmbedder {
             });
         }
 
-        let embed_response: EmbedResponse = response
-            .json()
-            .await
-            .map_err(|e| MnemoError::EmbeddingProvider {
-                provider: self.config.provider.clone(),
-                message: format!("Failed to parse response: {}", e),
-            })?;
+        let embed_response: EmbedResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| MnemoError::EmbeddingProvider {
+                    provider: self.config.provider.clone(),
+                    message: format!("Failed to parse response: {}", e),
+                })?;
 
-        Ok(embed_response.data.into_iter().map(|d| d.embedding).collect())
+        Ok(embed_response
+            .data
+            .into_iter()
+            .map(|d| d.embedding)
+            .collect())
     }
 
     fn dimensions(&self) -> u32 {

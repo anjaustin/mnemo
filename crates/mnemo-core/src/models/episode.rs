@@ -151,11 +151,7 @@ fn default_limit() -> u32 {
 }
 
 impl Episode {
-    pub fn from_request(
-        req: CreateEpisodeRequest,
-        session_id: Uuid,
-        user_id: Uuid,
-    ) -> Self {
+    pub fn from_request(req: CreateEpisodeRequest, session_id: Uuid, user_id: Uuid) -> Self {
         let now = Utc::now();
         Self {
             id: req.id.unwrap_or_else(Uuid::now_v7),
@@ -259,11 +255,8 @@ mod tests {
 
     #[test]
     fn test_episode_processing_lifecycle() {
-        let mut episode = Episode::from_request(
-            sample_message_request(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-        );
+        let mut episode =
+            Episode::from_request(sample_message_request(), Uuid::now_v7(), Uuid::now_v7());
 
         assert_eq!(episode.processing_status, ProcessingStatus::Pending);
         assert!(episode.should_process());
@@ -282,11 +275,8 @@ mod tests {
 
     #[test]
     fn test_episode_failure_lifecycle() {
-        let mut episode = Episode::from_request(
-            sample_message_request(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-        );
+        let mut episode =
+            Episode::from_request(sample_message_request(), Uuid::now_v7(), Uuid::now_v7());
 
         episode.mark_processing();
         episode.mark_failed("LLM provider timeout".to_string());
@@ -333,11 +323,8 @@ mod tests {
 
     #[test]
     fn test_episode_serialization_roundtrip() {
-        let episode = Episode::from_request(
-            sample_message_request(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-        );
+        let episode =
+            Episode::from_request(sample_message_request(), Uuid::now_v7(), Uuid::now_v7());
         let json = serde_json::to_string(&episode).unwrap();
         let de: Episode = serde_json::from_str(&json).unwrap();
         assert_eq!(de.id, episode.id);

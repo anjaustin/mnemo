@@ -6,8 +6,8 @@
 //! - `AnthropicProvider` — native Anthropic Messages API
 //! - `OpenAiCompatibleEmbedder` — embedding generation via OpenAI-compatible API
 
-pub mod openai_compat;
 pub mod anthropic;
+pub mod openai_compat;
 
-pub use openai_compat::{OpenAiCompatibleProvider, OpenAiCompatibleEmbedder};
 pub use anthropic::AnthropicProvider;
+pub use openai_compat::{OpenAiCompatibleEmbedder, OpenAiCompatibleProvider};

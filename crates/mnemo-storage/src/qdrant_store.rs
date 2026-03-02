@@ -1,11 +1,10 @@
+use qdrant_client::qdrant::r#match::MatchValue;
 use qdrant_client::qdrant::{
-    CreateCollectionBuilder, Distance, PointStruct, SearchPointsBuilder,
-    UpsertPointsBuilder, VectorParamsBuilder, DeletePointsBuilder,
-    Filter, FieldCondition, Match, PointId,
-    value::Kind, Value as QdrantValue,
+    value::Kind, CreateCollectionBuilder, DeletePointsBuilder, Distance, FieldCondition, Filter,
+    Match, PointId, PointStruct, SearchPointsBuilder, UpsertPointsBuilder, Value as QdrantValue,
+    VectorParamsBuilder,
 };
 use qdrant_client::Qdrant;
-use qdrant_client::qdrant::r#match::MatchValue;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -52,19 +51,17 @@ impl QdrantVectorStore {
 
     async fn ensure_collection(&self, name: &str) -> StorageResult<()> {
         let coll_name = self.collection_name(name);
-        let exists = self.client
+        let exists = self
+            .client
             .collection_exists(&coll_name)
             .await
             .map_err(|e| MnemoError::Qdrant(e.to_string()))?;
 
         if !exists {
             self.client
-                .create_collection(
-                    CreateCollectionBuilder::new(&coll_name)
-                        .vectors_config(
-                            VectorParamsBuilder::new(self.dimensions as u64, Distance::Cosine)
-                        ),
-                )
+                .create_collection(CreateCollectionBuilder::new(&coll_name).vectors_config(
+                    VectorParamsBuilder::new(self.dimensions as u64, Distance::Cosine),
+                ))
                 .await
                 .map_err(|e| MnemoError::Qdrant(format!("Failed to create collection: {}", e)))?;
 
@@ -78,26 +75,39 @@ impl QdrantVectorStore {
         PointId::from(id.to_string())
     }
 
-    fn payload_from_json(user_id: Uuid, extra: Value) -> std::collections::HashMap<String, QdrantValue> {
+    fn payload_from_json(
+        user_id: Uuid,
+        extra: Value,
+    ) -> std::collections::HashMap<String, QdrantValue> {
         let mut payload = std::collections::HashMap::new();
         payload.insert(
             "user_id".to_string(),
-            QdrantValue { kind: Some(Kind::StringValue(user_id.to_string())) },
+            QdrantValue {
+                kind: Some(Kind::StringValue(user_id.to_string())),
+            },
         );
 
         if let Value::Object(map) = extra {
             for (k, v) in map {
                 let qv = match v {
-                    Value::String(s) => QdrantValue { kind: Some(Kind::StringValue(s)) },
+                    Value::String(s) => QdrantValue {
+                        kind: Some(Kind::StringValue(s)),
+                    },
                     Value::Number(n) => {
                         if let Some(f) = n.as_f64() {
-                            QdrantValue { kind: Some(Kind::DoubleValue(f)) }
+                            QdrantValue {
+                                kind: Some(Kind::DoubleValue(f)),
+                            }
                         } else {
                             continue;
                         }
                     }
-                    Value::Bool(b) => QdrantValue { kind: Some(Kind::BoolValue(b)) },
-                    _ => QdrantValue { kind: Some(Kind::StringValue(v.to_string())) },
+                    Value::Bool(b) => QdrantValue {
+                        kind: Some(Kind::BoolValue(b)),
+                    },
+                    _ => QdrantValue {
+                        kind: Some(Kind::StringValue(v.to_string())),
+                    },
                 };
                 payload.insert(k, qv);
             }
@@ -150,11 +160,12 @@ impl QdrantVectorStore {
     ) -> StorageResult<Vec<(Uuid, f32)>> {
         let coll_name = self.collection_name(collection);
 
-        let results = self.client
+        let results = self
+            .client
             .search_points(
                 SearchPointsBuilder::new(&coll_name, query_embedding, limit as u64)
                     .filter(Self::user_filter(user_id))
-                    .score_threshold(min_score)
+                    .score_threshold(min_score),
             )
             .await
             .map_err(|e| MnemoError::Qdrant(format!("Search failed: {}", e)))?;
@@ -175,9 +186,7 @@ impl QdrantVectorStore {
 fn extract_point_uuid(point_id: &Option<PointId>) -> Option<Uuid> {
     let pid = point_id.as_ref()?;
     match &pid.point_id_options {
-        Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) => {
-            Uuid::parse_str(s).ok()
-        }
+        Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) => Uuid::parse_str(s).ok(),
         Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(_)) => {
             None // We only use UUID-based IDs
         }
@@ -193,7 +202,8 @@ impl VectorStore for QdrantVectorStore {
         embedding: Vec<f32>,
         payload: Value,
     ) -> StorageResult<()> {
-        self.upsert_point("entities", entity_id, user_id, embedding, payload).await
+        self.upsert_point("entities", entity_id, user_id, embedding, payload)
+            .await
     }
 
     async fn upsert_edge_embedding(
@@ -203,7 +213,8 @@ impl VectorStore for QdrantVectorStore {
         embedding: Vec<f32>,
         payload: Value,
     ) -> StorageResult<()> {
-        self.upsert_point("edges", edge_id, user_id, embedding, payload).await
+        self.upsert_point("edges", edge_id, user_id, embedding, payload)
+            .await
     }
 
     async fn upsert_episode_embedding(
@@ -213,7 +224,8 @@ impl VectorStore for QdrantVectorStore {
         embedding: Vec<f32>,
         payload: Value,
     ) -> StorageResult<()> {
-        self.upsert_point("episodes", episode_id, user_id, embedding, payload).await
+        self.upsert_point("episodes", episode_id, user_id, embedding, payload)
+            .await
     }
 
     async fn search_entities(
@@ -223,7 +235,8 @@ impl VectorStore for QdrantVectorStore {
         limit: u32,
         min_score: f32,
     ) -> StorageResult<Vec<(Uuid, f32)>> {
-        self.search_collection("entities", user_id, query_embedding, limit, min_score).await
+        self.search_collection("entities", user_id, query_embedding, limit, min_score)
+            .await
     }
 
     async fn search_edges(
@@ -233,7 +246,8 @@ impl VectorStore for QdrantVectorStore {
         limit: u32,
         min_score: f32,
     ) -> StorageResult<Vec<(Uuid, f32)>> {
-        self.search_collection("edges", user_id, query_embedding, limit, min_score).await
+        self.search_collection("edges", user_id, query_embedding, limit, min_score)
+            .await
     }
 
     async fn search_episodes(
@@ -243,7 +257,8 @@ impl VectorStore for QdrantVectorStore {
         limit: u32,
         min_score: f32,
     ) -> StorageResult<Vec<(Uuid, f32)>> {
-        self.search_collection("episodes", user_id, query_embedding, limit, min_score).await
+        self.search_collection("episodes", user_id, query_embedding, limit, min_score)
+            .await
     }
 
     async fn delete_user_vectors(&self, user_id: Uuid) -> StorageResult<()> {
@@ -251,10 +266,7 @@ impl VectorStore for QdrantVectorStore {
         for collection in &["entities", "edges", "episodes"] {
             let coll_name = self.collection_name(collection);
             self.client
-                .delete_points(
-                    DeletePointsBuilder::new(&coll_name)
-                        .points(filter.clone())
-                )
+                .delete_points(DeletePointsBuilder::new(&coll_name).points(filter.clone()))
                 .await
                 .map_err(|e| MnemoError::Qdrant(format!("Delete failed: {}", e)))?;
         }

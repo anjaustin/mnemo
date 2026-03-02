@@ -120,11 +120,7 @@ pub struct ExtractedEntity {
 
 impl Entity {
     /// Create a new entity from an extraction result.
-    pub fn from_extraction(
-        extracted: &ExtractedEntity,
-        user_id: Uuid,
-        _episode_id: Uuid,
-    ) -> Self {
+    pub fn from_extraction(extracted: &ExtractedEntity, user_id: Uuid, _episode_id: Uuid) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::now_v7(),
@@ -151,11 +147,7 @@ impl Entity {
     /// Add an alias for this entity (for deduplication).
     pub fn add_alias(&mut self, alias: String) {
         let normalized = alias.trim().to_lowercase();
-        let existing: Vec<String> = self
-            .aliases
-            .iter()
-            .map(|a| a.to_lowercase())
-            .collect();
+        let existing: Vec<String> = self.aliases.iter().map(|a| a.to_lowercase()).collect();
         if !existing.contains(&normalized) && normalized != self.name.to_lowercase() {
             self.aliases.push(alias);
             self.updated_at = Utc::now();
@@ -168,9 +160,7 @@ impl Entity {
         if self.name.to_lowercase() == normalized {
             return true;
         }
-        self.aliases
-            .iter()
-            .any(|a| a.to_lowercase() == normalized)
+        self.aliases.iter().any(|a| a.to_lowercase() == normalized)
     }
 
     /// Update the summary with new information.
@@ -217,11 +207,8 @@ mod tests {
 
     #[test]
     fn test_entity_alias_matching() {
-        let mut entity = Entity::from_extraction(
-            &sample_extraction(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-        );
+        let mut entity =
+            Entity::from_extraction(&sample_extraction(), Uuid::now_v7(), Uuid::now_v7());
         entity.add_alias("Ken".to_string());
         entity.add_alias("Kenny".to_string());
 
@@ -234,11 +221,8 @@ mod tests {
 
     #[test]
     fn test_entity_alias_no_duplicates() {
-        let mut entity = Entity::from_extraction(
-            &sample_extraction(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-        );
+        let mut entity =
+            Entity::from_extraction(&sample_extraction(), Uuid::now_v7(), Uuid::now_v7());
         entity.add_alias("Ken".to_string());
         entity.add_alias("ken".to_string()); // same, different case
         entity.add_alias("Kendra".to_string()); // same as name
@@ -257,10 +241,7 @@ mod tests {
             EntityType::from_str_flexible("org"),
             EntityType::Organization
         );
-        assert_eq!(
-            EntityType::from_str_flexible("place"),
-            EntityType::Location
-        );
+        assert_eq!(EntityType::from_str_flexible("place"), EntityType::Location);
         assert_eq!(
             EntityType::from_str_flexible("medication"),
             EntityType::Custom("medication".to_string())
@@ -269,11 +250,7 @@ mod tests {
 
     #[test]
     fn test_entity_serialization_roundtrip() {
-        let entity = Entity::from_extraction(
-            &sample_extraction(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-        );
+        let entity = Entity::from_extraction(&sample_extraction(), Uuid::now_v7(), Uuid::now_v7());
         let json = serde_json::to_string(&entity).unwrap();
         let de: Entity = serde_json::from_str(&json).unwrap();
         assert_eq!(de.id, entity.id);

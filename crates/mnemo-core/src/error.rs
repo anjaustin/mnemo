@@ -24,10 +24,7 @@ pub enum MnemoError {
     EdgeNotFound(Uuid),
 
     #[error("Resource not found: {resource_type} {id}")]
-    NotFound {
-        resource_type: String,
-        id: String,
-    },
+    NotFound { resource_type: String, id: String },
 
     // ─── Validation errors ─────────────────────────────────────
     #[error("Validation error: {0}")]
@@ -51,24 +48,16 @@ pub enum MnemoError {
 
     // ─── LLM errors ────────────────────────────────────────────
     #[error("LLM provider error: {provider} - {message}")]
-    LlmProvider {
-        provider: String,
-        message: String,
-    },
+    LlmProvider { provider: String, message: String },
 
     #[error("Embedding provider error: {provider} - {message}")]
-    EmbeddingProvider {
-        provider: String,
-        message: String,
-    },
+    EmbeddingProvider { provider: String, message: String },
 
     #[error("LLM extraction failed: {0}")]
     ExtractionFailed(String),
 
     #[error("LLM rate limited: retry after {retry_after_ms}ms")]
-    RateLimited {
-        retry_after_ms: u64,
-    },
+    RateLimited { retry_after_ms: u64 },
 
     // ─── Processing errors ─────────────────────────────────────
     #[error("Episode already claimed for processing: {0}")]
@@ -193,7 +182,10 @@ mod tests {
         assert_eq!(MnemoError::Forbidden.status_code(), 403);
         assert_eq!(MnemoError::Duplicate("x".into()).status_code(), 409);
         assert_eq!(
-            MnemoError::RateLimited { retry_after_ms: 1000 }.status_code(),
+            MnemoError::RateLimited {
+                retry_after_ms: 1000
+            }
+            .status_code(),
             429
         );
         assert_eq!(MnemoError::Internal("oops".into()).status_code(), 500);
