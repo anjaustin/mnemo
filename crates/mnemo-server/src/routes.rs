@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
+    agent::{
+        AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent, UpdateAgentIdentityRequest,
+    },
     context::{
         estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary,
         RetrievalSource, TemporalIntent,
@@ -22,7 +25,7 @@ use mnemo_core::models::{
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::storage::{
-    EdgeStore, EntityStore, EpisodeStore, SessionStore, UserStore, VectorStore,
+    AgentStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, UserStore, VectorStore,
 };
 
 use crate::state::AppState;
@@ -125,6 +128,17 @@ pub fn build_router(state: AppState) -> Router {
         // Memory API (high-level DX)
         .route("/api/v1/memory", post(remember_memory))
         .route("/api/v1/memory/:user/context", post(get_memory_context))
+        // Agent identity substrate (P0)
+        .route("/api/v1/agents/:agent_id/identity", get(get_agent_identity))
+        .route(
+            "/api/v1/agents/:agent_id/identity",
+            put(update_agent_identity),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/experience",
+            post(add_agent_experience),
+        )
+        .route("/api/v1/agents/:agent_id/context", post(get_agent_context))
         // Graph
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
         .with_state(state)
@@ -456,6 +470,38 @@ struct MemoryContextResponse {
     metadata_filter_diagnostics: Option<MetadataFilterDiagnostics>,
 }
 
+#[derive(Deserialize)]
+struct AgentContextRequest {
+    user: String,
+    query: String,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    min_relevance: Option<f32>,
+    #[serde(default)]
+    mode: Option<MemoryContextMode>,
+    #[serde(default)]
+    time_intent: Option<TemporalIntent>,
+    #[serde(default)]
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    temporal_weight: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct AgentContextResponse {
+    #[serde(flatten)]
+    context: ContextBlock,
+    identity: AgentIdentityProfile,
+    identity_version: u64,
+    experience_events_used: u32,
+    experience_weight_sum: f32,
+    user_memory_items_used: u32,
+    attribution_guards: serde_json::Value,
+}
+
 #[derive(Serialize)]
 struct MetadataFilterDiagnostics {
     candidate_count_before_filters: u32,
@@ -629,6 +675,169 @@ async fn get_memory_context(
         head,
         metadata_filter_diagnostics,
     }))
+}
+
+async fn get_agent_identity(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<AgentIdentityProfile>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let identity = state.state_store.get_agent_identity(&agent_id).await?;
+    Ok(Json(identity))
+}
+
+async fn update_agent_identity(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<UpdateAgentIdentityRequest>,
+) -> Result<Json<AgentIdentityProfile>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let identity = state
+        .state_store
+        .update_agent_identity(&agent_id, req)
+        .await?;
+    Ok(Json(identity))
+}
+
+async fn add_agent_experience(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<CreateExperienceRequest>,
+) -> Result<(StatusCode, Json<ExperienceEvent>), AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    if req.signal.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "signal is required".into(),
+        )));
+    }
+    if req.category.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "category is required".into(),
+        )));
+    }
+
+    let event = state
+        .state_store
+        .add_experience_event(&agent_id, req)
+        .await?;
+    Ok((StatusCode::CREATED, Json(event)))
+}
+
+async fn get_agent_context(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<AgentContextRequest>,
+) -> Result<Json<AgentContextResponse>, AppError> {
+    if req.query.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("query is required".into())));
+    }
+    if req.user.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("user is required".into())));
+    }
+
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let identity = state.state_store.get_agent_identity(&agent_id).await?;
+    let experiences = state
+        .state_store
+        .list_experience_events(&agent_id, 50)
+        .await?;
+
+    let user = find_user_by_identifier(&state, req.user.trim()).await?;
+    let requested_session_name = req.session.and_then(|s| {
+        let trimmed = s.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
+    let scoped_session =
+        resolve_session_scope(&state, user.id, mode, requested_session_name).await?;
+    let session_id = scoped_session.as_ref().map(|s| s.id);
+
+    let max_tokens = req.max_tokens.unwrap_or(500);
+    let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
+    let context_req = ContextRequest {
+        session_id,
+        messages: vec![ContextMessage {
+            role: "user".to_string(),
+            content: req.query,
+        }],
+        max_tokens,
+        search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
+        temporal_filter: req.as_of,
+        as_of: req.as_of,
+        time_intent: temporal_intent,
+        temporal_weight: req.temporal_weight,
+        min_relevance: req.min_relevance.unwrap_or(0.3),
+    };
+
+    let mut context = state.retrieval.get_context(user.id, &context_req).await?;
+    maybe_attach_recent_episode_fallback(
+        &state,
+        user.id,
+        session_id,
+        max_tokens,
+        temporal_intent,
+        req.as_of,
+        &mut context,
+    )
+    .await?;
+
+    let experience_signals: Vec<String> = experiences
+        .iter()
+        .take(8)
+        .map(|e| format!("- [{}] {}", e.category, e.signal))
+        .collect();
+    let identity_block = format!(
+        "## Agent Identity Core\n{}\n\n## Agent Experience Signals\n{}",
+        serde_json::to_string_pretty(&identity.core).unwrap_or_else(|_| "{}".to_string()),
+        if experience_signals.is_empty() {
+            "- none".to_string()
+        } else {
+            experience_signals.join("\n")
+        }
+    );
+    context.context = if context.context.is_empty() {
+        identity_block
+    } else {
+        format!("{}\n\n{}", identity_block, context.context)
+    };
+    context.token_count = estimate_tokens(&context.context);
+
+    let experience_weight_sum: f32 = experiences
+        .iter()
+        .map(|e| effective_experience_weight(e))
+        .sum();
+
+    Ok(Json(AgentContextResponse {
+        identity_version: identity.version,
+        experience_events_used: experiences.len() as u32,
+        experience_weight_sum,
+        user_memory_items_used: (context.entities.len()
+            + context.facts.len()
+            + context.episodes.len()) as u32,
+        attribution_guards: serde_json::json!({
+            "self_user_separation_enforced": true,
+            "identity_plane_isolated": true
+        }),
+        context,
+        identity,
+    }))
+}
+
+fn normalize_agent_id(agent_id: &str) -> Result<String, AppError> {
+    let trimmed = agent_id.trim();
+    if trimmed.is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "agent_id is required".into(),
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn effective_experience_weight(event: &ExperienceEvent) -> f32 {
+    let age_days = (chrono::Utc::now() - event.created_at).num_days().max(0) as f32;
+    let half_life = event.decay_half_life_days.max(1) as f32;
+    let decay_factor = 2f32.powf(-age_days / half_life);
+    (event.weight * event.confidence * decay_factor).max(0.0)
 }
 
 struct MetadataCandidates {

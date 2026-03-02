@@ -123,6 +123,51 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
 
 ---
 
+## Agent Identity Substrate (P0 Prototype)
+
+These endpoints provide a separated agent identity/experience layer.
+
+### `GET /api/v1/agents/:agent_id/identity`
+
+Returns current identity profile. Creates a default profile on first access.
+
+### `PUT /api/v1/agents/:agent_id/identity`
+
+Update the identity core.
+
+```json
+{
+  "core": {
+    "mission": "Resolve user issues accurately and safely.",
+    "boundaries": {
+      "never_claim_human_experience": true
+    }
+  }
+}
+```
+
+### `POST /api/v1/agents/:agent_id/experience`
+
+Add an adaptive experience event.
+
+```json
+{
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "session_id": "019513a4-8c1f-7000-8000-000000000002",
+  "category": "interaction_pattern",
+  "signal": "user_prefers_bulleted_action_plans",
+  "confidence": 0.8,
+  "weight": 0.7,
+  "decay_half_life_days": 30
+}
+```
+
+### `POST /api/v1/agents/:agent_id/context`
+
+Identity-aware context assembly (prototype). Combines identity core, recent experience signals, and user memory context.
+
+---
+
 ## Users
 
 Users represent end-users of your AI agent application. Each user has an isolated knowledge graph.

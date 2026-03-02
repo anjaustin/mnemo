@@ -641,3 +641,112 @@ async fn test_memory_api_metadata_filters_and_diagnostics() {
         assert!(top_preview.contains("Priority outage"));
     }
 }
+
+#[tokio::test]
+async fn test_agent_identity_substrate_endpoints_prototype() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "identity-user",
+            "external_id": "identity-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "default" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, identity) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/support-agent/identity",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity["agent_id"], "support-agent");
+
+    let (status, identity) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/agents/support-agent/identity",
+        serde_json::json!({
+            "core": {
+                "mission": "Resolve user issues accurately.",
+                "boundaries": {"never_claim_human_experience": true}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity["version"], 2);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/support-agent/experience",
+        serde_json::json!({
+            "user_id": user_id,
+            "session_id": session_id,
+            "category": "interaction_pattern",
+            "signal": "user_prefers_bulleted_action_plans",
+            "confidence": 0.8,
+            "weight": 0.7,
+            "decay_half_life_days": 30
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "I prefer concise checklists.",
+            "created_at": "2026-03-02T12:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/support-agent/context",
+        serde_json::json!({
+            "user": "identity-user",
+            "query": "How should I respond to this user?",
+            "session": "default",
+            "mode": "head"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(context["identity_version"], 2);
+    assert_eq!(context["experience_events_used"], 1);
+    assert_eq!(
+        context["attribution_guards"]["self_user_separation_enforced"],
+        true
+    );
+    assert!(context["context"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Agent Identity Core"));
+}

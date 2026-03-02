@@ -6,6 +6,9 @@ use uuid::Uuid;
 
 use mnemo_core::error::MnemoError;
 use mnemo_core::models::{
+    agent::{
+        AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent, UpdateAgentIdentityRequest,
+    },
     edge::{Edge, EdgeFilter},
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams, ProcessingStatus},
@@ -660,5 +663,78 @@ impl EdgeStore for RedisStateStore {
                     && e.is_valid()
             })
             .collect())
+    }
+}
+
+impl AgentStore for RedisStateStore {
+    async fn get_agent_identity(&self, agent_id: &str) -> StorageResult<AgentIdentityProfile> {
+        let key = self.key(&["agent_identity", agent_id]);
+        match self.get_json::<AgentIdentityProfile>(&key).await? {
+            Some(identity) => Ok(identity),
+            None => {
+                let identity = AgentIdentityProfile::new(agent_id.to_string());
+                self.set_json(&key, &identity).await?;
+                Ok(identity)
+            }
+        }
+    }
+
+    async fn update_agent_identity(
+        &self,
+        agent_id: &str,
+        req: UpdateAgentIdentityRequest,
+    ) -> StorageResult<AgentIdentityProfile> {
+        let mut identity = self.get_agent_identity(agent_id).await?;
+        identity.apply_update(req);
+        let key = self.key(&["agent_identity", agent_id]);
+        self.set_json(&key, &identity).await?;
+        Ok(identity)
+    }
+
+    async fn add_experience_event(
+        &self,
+        agent_id: &str,
+        req: CreateExperienceRequest,
+    ) -> StorageResult<ExperienceEvent> {
+        let event = ExperienceEvent::from_request(agent_id, req);
+        let event_key = self.key(&["experience", &event.id.to_string()]);
+        self.set_json(&event_key, &event).await?;
+
+        let zset_key = self.key(&["agent_experience", agent_id]);
+        let mut conn = self.conn.clone();
+        conn.zadd::<_, _, _, ()>(
+            &zset_key,
+            event.id.to_string(),
+            event.created_at.timestamp_millis() as f64,
+        )
+        .await
+        .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(event)
+    }
+
+    async fn list_experience_events(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<ExperienceEvent>> {
+        let zset_key = self.key(&["agent_experience", agent_id]);
+        let mut conn = self.conn.clone();
+        let ids: Vec<String> = redis::cmd("ZREVRANGE")
+            .arg(&zset_key)
+            .arg(0)
+            .arg(limit as isize - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut events = Vec::with_capacity(ids.len());
+        for id in ids {
+            let key = self.key(&["experience", &id]);
+            if let Some(event) = self.get_json::<ExperienceEvent>(&key).await? {
+                events.push(event);
+            }
+        }
+        Ok(events)
     }
 }

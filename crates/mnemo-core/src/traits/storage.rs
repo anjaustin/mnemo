@@ -2,12 +2,37 @@ use uuid::Uuid;
 
 use crate::error::MnemoError;
 use crate::models::{
+    agent::{
+        AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent, UpdateAgentIdentityRequest,
+    },
     edge::{Edge, EdgeFilter},
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams},
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
+
+// ─── Agent Identity Storage ────────────────────────────────────────
+
+#[allow(async_fn_in_trait)]
+pub trait AgentStore: Send + Sync {
+    async fn get_agent_identity(&self, agent_id: &str) -> StorageResult<AgentIdentityProfile>;
+    async fn update_agent_identity(
+        &self,
+        agent_id: &str,
+        req: UpdateAgentIdentityRequest,
+    ) -> StorageResult<AgentIdentityProfile>;
+    async fn add_experience_event(
+        &self,
+        agent_id: &str,
+        req: CreateExperienceRequest,
+    ) -> StorageResult<ExperienceEvent>;
+    async fn list_experience_events(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<ExperienceEvent>>;
+}
 
 /// Result type for all storage operations.
 pub type StorageResult<T> = Result<T, MnemoError>;
@@ -31,11 +56,7 @@ pub trait UserStore: Send + Sync {
 pub trait SessionStore: Send + Sync {
     async fn create_session(&self, req: CreateSessionRequest) -> StorageResult<Session>;
     async fn get_session(&self, id: Uuid) -> StorageResult<Session>;
-    async fn update_session(
-        &self,
-        id: Uuid,
-        req: UpdateSessionRequest,
-    ) -> StorageResult<Session>;
+    async fn update_session(&self, id: Uuid, req: UpdateSessionRequest) -> StorageResult<Session>;
     async fn delete_session(&self, id: Uuid) -> StorageResult<()>;
     async fn list_sessions(
         &self,
@@ -94,11 +115,8 @@ pub trait EntityStore: Send + Sync {
 
     /// Find an existing entity by name or alias within a user's graph.
     /// Used during deduplication in the ingestion pipeline.
-    async fn find_entity_by_name(
-        &self,
-        user_id: Uuid,
-        name: &str,
-    ) -> StorageResult<Option<Entity>>;
+    async fn find_entity_by_name(&self, user_id: Uuid, name: &str)
+        -> StorageResult<Option<Entity>>;
 
     /// List all entities for a user.
     async fn list_entities(
@@ -119,11 +137,7 @@ pub trait EdgeStore: Send + Sync {
     async fn delete_edge(&self, id: Uuid) -> StorageResult<()>;
 
     /// Query edges with filtering.
-    async fn query_edges(
-        &self,
-        user_id: Uuid,
-        filter: EdgeFilter,
-    ) -> StorageResult<Vec<Edge>>;
+    async fn query_edges(&self, user_id: Uuid, filter: EdgeFilter) -> StorageResult<Vec<Edge>>;
 
     /// Get all outgoing edges from an entity.
     async fn get_outgoing_edges(&self, entity_id: Uuid) -> StorageResult<Vec<Edge>>;
@@ -210,13 +224,13 @@ pub trait VectorStore: Send + Sync {
 /// Combines all state-based storage (Redis side).
 /// Users, sessions, episodes, entities, edges — anything that's JSON/structured data.
 pub trait StateStore:
-    UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore
+    UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + AgentStore
 {
 }
 
 /// Blanket implementation for StateStore.
 impl<T> StateStore for T where
-    T: UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore
+    T: UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + AgentStore
 {
 }
 
