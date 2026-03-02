@@ -140,6 +140,7 @@ Old facts aren't deleted. This enables point-in-time queries and change tracking
 |----------|-------------|
 | [API Reference](docs/API.md) | Every endpoint with request/response examples |
 | [Architecture](docs/ARCHITECTURE.md) | Data model, temporal reasoning, pipeline internals |
+| [Phase 2 PRD](docs/PHASE_2_PRD.md) | Productization plan for temporal memory and proof gates |
 | [Evaluation Playbook](docs/EVALUATION.md) | Reproducible temporal quality and latency measurements |
 | [Competitive Plan](docs/COMPETITIVE.md) | Cross-system benchmark methodology and scorecard |
 | [Thread HEAD Proposal](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
