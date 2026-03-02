@@ -22,6 +22,69 @@ Returns server status and version.
 
 ---
 
+## Memory API (High-Level)
+
+These endpoints are the fastest way to integrate Mnemo without manually managing user/session/episode IDs.
+
+### `POST /api/v1/memory`
+
+Remember a piece of text for a user. Mnemo resolves or creates the user, resolves or creates the session, and stores the episode.
+
+```json
+// Request
+{
+  "user": "kendra",
+  "text": "I love hiking in Colorado and my dog is named Bear",
+  "session": "default",
+  "role": "user"
+}
+```
+
+`session` and `role` are optional. Defaults are `"default"` and `"user"`.
+
+```json
+// Response 201
+{
+  "ok": true,
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "session_id": "019513a4-8c1f-7000-8000-000000000002",
+  "episode_id": "019513a4-9d3a-7000-8000-000000000003"
+}
+```
+
+### `POST /api/v1/memory/:user/context`
+
+Retrieve context for a user by identifier (`:user` can be UUID, external_id, or name).
+
+```json
+// Request
+{
+  "query": "What are my hobbies?",
+  "session": "default",
+  "max_tokens": 500,
+  "min_relevance": 0.3
+}
+```
+
+`session`, `max_tokens`, and `min_relevance` are optional.
+
+If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to recent episode recall so the returned context is still usable immediately after `remember`.
+
+```json
+// Response 200
+{
+  "context": "### Relevant Entities...",
+  "token_count": 183,
+  "entities": [],
+  "facts": [],
+  "episodes": [],
+  "latency_ms": 47,
+  "sources": ["semantic_search", "full_text_search"]
+}
+```
+
+---
+
 ## Users
 
 Users represent end-users of your AI agent application. Each user has an isolated knowledge graph.

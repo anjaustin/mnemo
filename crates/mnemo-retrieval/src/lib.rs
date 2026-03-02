@@ -42,7 +42,11 @@ where
     E: EmbeddingProvider + Send + Sync + 'static,
 {
     pub fn new(state_store: Arc<S>, vector_store: Arc<V>, embedder: Arc<E>) -> Self {
-        Self { state_store, vector_store, embedder }
+        Self {
+            state_store,
+            vector_store,
+            embedder,
+        }
     }
 
     /// Main entry point: hybrid retrieval + RRF fusion + context assembly.
@@ -54,7 +58,9 @@ where
         let start = Instant::now();
         let mut block = ContextBlock::empty();
 
-        let query_text = request.messages.iter()
+        let query_text = request
+            .messages
+            .iter()
             .map(|m| m.content.as_str())
             .collect::<Vec<_>>()
             .join(" ");
@@ -64,25 +70,57 @@ where
             return Ok(block);
         }
 
-        // Generate query embedding for semantic search
-        let query_embedding = self.embedder.embed(&query_text).await?;
+        // Generate query embedding for semantic search.
+        // If embeddings are unavailable, gracefully degrade to full-text retrieval.
+        let query_embedding = match self.embedder.embed(&query_text).await {
+            Ok(embedding) => Some(embedding),
+            Err(err) => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    error = %err,
+                    "Embedding unavailable, falling back to full-text retrieval"
+                );
+                None
+            }
+        };
 
         // ── Parallel search: semantic + full-text ──────────────
         // Semantic search
-        let semantic_entity_hits = self.vector_store
-            .search_entities(user_id, query_embedding.clone(), 10, request.min_relevance).await?;
-        let semantic_edge_hits = self.vector_store
-            .search_edges(user_id, query_embedding.clone(), 15, request.min_relevance).await?;
-        let semantic_episode_hits = self.vector_store
-            .search_episodes(user_id, query_embedding, 5, request.min_relevance).await?;
+        let (semantic_entity_hits, semantic_edge_hits, semantic_episode_hits) =
+            if let Some(query_embedding) = query_embedding {
+                let entity_hits = self
+                    .vector_store
+                    .search_entities(user_id, query_embedding.clone(), 10, request.min_relevance)
+                    .await?;
+                let edge_hits = self
+                    .vector_store
+                    .search_edges(user_id, query_embedding.clone(), 15, request.min_relevance)
+                    .await?;
+                let episode_hits = self
+                    .vector_store
+                    .search_episodes(user_id, query_embedding, 5, request.min_relevance)
+                    .await?;
+                (entity_hits, edge_hits, episode_hits)
+            } else {
+                (Vec::new(), Vec::new(), Vec::new())
+            };
 
         // Full-text search
-        let ft_entity_hits = self.state_store
-            .search_entities_ft(user_id, &query_text, 10).await.unwrap_or_default();
-        let ft_edge_hits = self.state_store
-            .search_edges_ft(user_id, &query_text, 15).await.unwrap_or_default();
-        let ft_episode_hits = self.state_store
-            .search_episodes_ft(user_id, &query_text, 5).await.unwrap_or_default();
+        let ft_entity_hits = self
+            .state_store
+            .search_entities_ft(user_id, &query_text, 10)
+            .await
+            .unwrap_or_default();
+        let ft_edge_hits = self
+            .state_store
+            .search_edges_ft(user_id, &query_text, 15)
+            .await
+            .unwrap_or_default();
+        let ft_episode_hits = self
+            .state_store
+            .search_episodes_ft(user_id, &query_text, 5)
+            .await
+            .unwrap_or_default();
 
         // ── RRF fusion for entities ────────────────────────────
         let entity_ids = rrf_merge(vec![
@@ -111,20 +149,34 @@ where
         for (edge_id, rrf_score) in edge_ids.iter().take(15) {
             if let Ok(edge) = self.state_store.get_edge(*edge_id).await {
                 if let Some(tf) = request.temporal_filter {
-                    if !edge.is_valid_at(tf) { continue; }
+                    if !edge.is_valid_at(tf) {
+                        continue;
+                    }
                 } else if !edge.is_valid() {
                     continue;
                 }
 
-                let src_name = self.state_store.get_entity(edge.source_entity_id).await
-                    .map(|e| e.name).unwrap_or_else(|_| "Unknown".to_string());
-                let tgt_name = self.state_store.get_entity(edge.target_entity_id).await
-                    .map(|e| e.name).unwrap_or_else(|_| "Unknown".to_string());
+                let src_name = self
+                    .state_store
+                    .get_entity(edge.source_entity_id)
+                    .await
+                    .map(|e| e.name)
+                    .unwrap_or_else(|_| "Unknown".to_string());
+                let tgt_name = self
+                    .state_store
+                    .get_entity(edge.target_entity_id)
+                    .await
+                    .map(|e| e.name)
+                    .unwrap_or_else(|_| "Unknown".to_string());
 
                 block.facts.push(FactSummary {
-                    id: edge.id, source_entity: src_name, target_entity: tgt_name,
-                    label: edge.label, fact: edge.fact,
-                    valid_at: edge.valid_at, invalid_at: edge.invalid_at,
+                    id: edge.id,
+                    source_entity: src_name,
+                    target_entity: tgt_name,
+                    label: edge.label,
+                    fact: edge.fact,
+                    valid_at: edge.valid_at,
+                    invalid_at: edge.invalid_at,
                     relevance: *rrf_score as f32,
                 });
             }
@@ -132,19 +184,33 @@ where
 
         // ── Graph traversal for top entities ───────────────────
         for entity_summary in block.entities.iter().take(3) {
-            let outgoing = self.state_store.get_outgoing_edges(entity_summary.id).await?;
+            let outgoing = self
+                .state_store
+                .get_outgoing_edges(entity_summary.id)
+                .await?;
             for edge in outgoing {
-                if !edge.is_valid() { continue; }
-                if block.facts.iter().any(|f| f.id == edge.id) { continue; }
+                if !edge.is_valid() {
+                    continue;
+                }
+                if block.facts.iter().any(|f| f.id == edge.id) {
+                    continue;
+                }
 
-                let tgt_name = self.state_store.get_entity(edge.target_entity_id).await
-                    .map(|e| e.name).unwrap_or_else(|_| "Unknown".to_string());
+                let tgt_name = self
+                    .state_store
+                    .get_entity(edge.target_entity_id)
+                    .await
+                    .map(|e| e.name)
+                    .unwrap_or_else(|_| "Unknown".to_string());
 
                 block.facts.push(FactSummary {
-                    id: edge.id, source_entity: entity_summary.name.clone(),
+                    id: edge.id,
+                    source_entity: entity_summary.name.clone(),
                     target_entity: tgt_name,
-                    label: edge.label, fact: edge.fact,
-                    valid_at: edge.valid_at, invalid_at: edge.invalid_at,
+                    label: edge.label,
+                    fact: edge.fact,
+                    valid_at: edge.valid_at,
+                    invalid_at: edge.invalid_at,
                     relevance: entity_summary.relevance * 0.8,
                 });
             }
@@ -164,9 +230,11 @@ where
                     ep.content.clone()
                 };
                 block.episodes.push(EpisodeSummary {
-                    id: ep.id, session_id: ep.session_id,
+                    id: ep.id,
+                    session_id: ep.session_id,
                     role: ep.role.map(|r| format!("{:?}", r).to_lowercase()),
-                    preview, created_at: ep.created_at,
+                    preview,
+                    created_at: ep.created_at,
                     relevance: *rrf_score as f32,
                 });
             }
@@ -203,9 +271,13 @@ where
 
 /// Convert (Uuid, f32) hits into ranked ScoredHit lists.
 fn ranked_hits(hits: &[(Uuid, f32)], source: RetrievalSource) -> Vec<ScoredHit> {
-    hits.iter().map(|(id, score)| ScoredHit {
-        id: *id, score: *score, source,
-    }).collect()
+    hits.iter()
+        .map(|(id, score)| ScoredHit {
+            id: *id,
+            score: *score,
+            source,
+        })
+        .collect()
 }
 
 /// Reciprocal Rank Fusion: merge multiple ranked lists into a single ranking.
@@ -237,8 +309,16 @@ mod tests {
         let id1 = Uuid::now_v7();
         let id2 = Uuid::now_v7();
         let source = vec![
-            ScoredHit { id: id1, score: 0.95, source: RetrievalSource::SemanticSearch },
-            ScoredHit { id: id2, score: 0.80, source: RetrievalSource::SemanticSearch },
+            ScoredHit {
+                id: id1,
+                score: 0.95,
+                source: RetrievalSource::SemanticSearch,
+            },
+            ScoredHit {
+                id: id2,
+                score: 0.80,
+                source: RetrievalSource::SemanticSearch,
+            },
         ];
         let result = rrf_merge(vec![source]);
         assert_eq!(result.len(), 2);
@@ -252,12 +332,28 @@ mod tests {
         let only_ft = Uuid::now_v7();
 
         let semantic = vec![
-            ScoredHit { id: shared_id, score: 0.9, source: RetrievalSource::SemanticSearch },
-            ScoredHit { id: only_semantic, score: 0.8, source: RetrievalSource::SemanticSearch },
+            ScoredHit {
+                id: shared_id,
+                score: 0.9,
+                source: RetrievalSource::SemanticSearch,
+            },
+            ScoredHit {
+                id: only_semantic,
+                score: 0.8,
+                source: RetrievalSource::SemanticSearch,
+            },
         ];
         let ft = vec![
-            ScoredHit { id: shared_id, score: 0.85, source: RetrievalSource::FullTextSearch },
-            ScoredHit { id: only_ft, score: 0.7, source: RetrievalSource::FullTextSearch },
+            ScoredHit {
+                id: shared_id,
+                score: 0.85,
+                source: RetrievalSource::FullTextSearch,
+            },
+            ScoredHit {
+                id: only_ft,
+                score: 0.7,
+                source: RetrievalSource::FullTextSearch,
+            },
         ];
 
         let result = rrf_merge(vec![semantic, ft]);

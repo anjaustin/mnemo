@@ -112,6 +112,23 @@ For bug fixes, documentation improvements, and small features:
 4. Run `cargo fmt && cargo clippy --workspace && cargo test --workspace`
 5. Open a pull request
 
+For API or retrieval changes, also run the memory falsification suite:
+
+```bash
+cargo test -p mnemo-server --test memory_api -- --test-threads=1
+```
+
+This test hits the high-level memory endpoints and checks validation, identifier resolution, and immediate-recall fallback behavior.
+CI runs the same suite in `.github/workflows/memory-falsification.yml`.
+
+If you want an isolated local dependency stack for integration tests:
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+cargo test -p mnemo-server --test memory_api -- --test-threads=1
+docker compose -f docker-compose.test.yml down
+```
+
 ### Larger Changes
 
 For new features or architectural changes, please open an issue first to discuss the approach. This helps avoid wasted effort and ensures alignment with the project's direction.

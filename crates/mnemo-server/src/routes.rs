@@ -8,17 +8,21 @@ use uuid::Uuid;
 
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
-    context::{ContextBlock, ContextRequest},
+    context::{
+        estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary,
+        RetrievalSource,
+    },
     edge::{Edge, EdgeFilter},
     entity::Entity,
     episode::{
-        BatchCreateEpisodesRequest, CreateEpisodeRequest, Episode, ListEpisodesParams,
+        BatchCreateEpisodesRequest, CreateEpisodeRequest, Episode, EpisodeType, ListEpisodesParams,
+        MessageRole,
     },
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::storage::{
-    UserStore, SessionStore, EpisodeStore, EntityStore, EdgeStore, VectorStore,
+    EdgeStore, EntityStore, EpisodeStore, SessionStore, UserStore, VectorStore,
 };
 
 use crate::state::AppState;
@@ -29,8 +33,8 @@ struct AppError(MnemoError);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.0.status_code())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(self.0.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let body = ApiErrorResponse::from(self.0);
         (status, Json(body)).into_response()
     }
@@ -73,7 +77,9 @@ pub struct PaginationParams {
     after: Option<Uuid>,
 }
 
-fn default_limit() -> u32 { 20 }
+fn default_limit() -> u32 {
+    20
+}
 
 // ─── Router builder ────────────────────────────────────────────────
 
@@ -88,7 +94,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:id", get(get_user))
         .route("/api/v1/users/:id", put(update_user))
         .route("/api/v1/users/:id", delete(delete_user))
-        .route("/api/v1/users/external/:external_id", get(get_user_by_external_id))
+        .route(
+            "/api/v1/users/external/:external_id",
+            get(get_user_by_external_id),
+        )
         // Sessions
         .route("/api/v1/sessions", post(create_session))
         .route("/api/v1/sessions/:id", get(get_session))
@@ -97,7 +106,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:user_id/sessions", get(list_user_sessions))
         // Episodes
         .route("/api/v1/sessions/:session_id/episodes", post(add_episode))
-        .route("/api/v1/sessions/:session_id/episodes/batch", post(add_episodes_batch))
+        .route(
+            "/api/v1/sessions/:session_id/episodes/batch",
+            post(add_episodes_batch),
+        )
         .route("/api/v1/sessions/:session_id/episodes", get(list_episodes))
         .route("/api/v1/episodes/:id", get(get_episode))
         // Entities
@@ -110,6 +122,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/edges/:id", delete(delete_edge))
         // Context & Search
         .route("/api/v1/users/:user_id/context", post(get_context))
+        // Memory API (high-level DX)
+        .route("/api/v1/memory", post(remember_memory))
+        .route("/api/v1/memory/:user/context", post(get_memory_context))
         // Graph
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
         .with_state(state)
@@ -152,7 +167,10 @@ async fn get_user_by_external_id(
     State(state): State<AppState>,
     Path(external_id): Path<String>,
 ) -> Result<Json<User>, AppError> {
-    let user = state.state_store.get_user_by_external_id(&external_id).await?;
+    let user = state
+        .state_store
+        .get_user_by_external_id(&external_id)
+        .await?;
     Ok(Json(user))
 }
 
@@ -179,7 +197,10 @@ async fn list_users(
     State(state): State<AppState>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListResponse<User>>, AppError> {
-    let users = state.state_store.list_users(params.limit, params.after).await?;
+    let users = state
+        .state_store
+        .list_users(params.limit, params.after)
+        .await?;
     Ok(Json(ListResponse::new(users)))
 }
 
@@ -226,7 +247,10 @@ async fn list_user_sessions(
         after: params.after,
         since: None,
     };
-    let sessions = state.state_store.list_sessions(user_id, list_params).await?;
+    let sessions = state
+        .state_store
+        .list_sessions(user_id, list_params)
+        .await?;
     Ok(Json(ListResponse::new(sessions)))
 }
 
@@ -238,7 +262,10 @@ async fn add_episode(
     Json(req): Json<CreateEpisodeRequest>,
 ) -> Result<(StatusCode, Json<Episode>), AppError> {
     let session = state.state_store.get_session(session_id).await?;
-    let episode = state.state_store.create_episode(req, session_id, session.user_id).await?;
+    let episode = state
+        .state_store
+        .create_episode(req, session_id, session.user_id)
+        .await?;
     Ok((StatusCode::CREATED, Json(episode)))
 }
 
@@ -248,7 +275,8 @@ async fn add_episodes_batch(
     Json(req): Json<BatchCreateEpisodesRequest>,
 ) -> Result<(StatusCode, Json<ListResponse<Episode>>), AppError> {
     let session = state.state_store.get_session(session_id).await?;
-    let episodes = state.state_store
+    let episodes = state
+        .state_store
         .create_episodes_batch(req.episodes, session_id, session.user_id)
         .await?;
     Ok((StatusCode::CREATED, Json(ListResponse::new(episodes))))
@@ -271,7 +299,10 @@ async fn list_episodes(
         after: params.after,
         status: None,
     };
-    let episodes = state.state_store.list_episodes(session_id, list_params).await?;
+    let episodes = state
+        .state_store
+        .list_episodes(session_id, list_params)
+        .await?;
     Ok(Json(ListResponse::new(episodes)))
 }
 
@@ -282,7 +313,10 @@ async fn list_entities(
     Path(user_id): Path<Uuid>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListResponse<Entity>>, AppError> {
-    let entities = state.state_store.list_entities(user_id, params.limit, params.after).await?;
+    let entities = state
+        .state_store
+        .list_entities(user_id, params.limit, params.after)
+        .await?;
     Ok(Json(ListResponse::new(entities)))
 }
 
@@ -338,6 +372,374 @@ async fn get_context(
     Ok(Json(context))
 }
 
+#[derive(Deserialize)]
+struct RememberMemoryRequest {
+    user: String,
+    text: String,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    role: Option<MessageRole>,
+}
+
+#[derive(Serialize)]
+struct RememberMemoryResponse {
+    ok: bool,
+    user_id: Uuid,
+    session_id: Uuid,
+    episode_id: Uuid,
+}
+
+#[derive(Deserialize)]
+struct MemoryContextRequest {
+    query: String,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    min_relevance: Option<f32>,
+}
+
+async fn remember_memory(
+    State(state): State<AppState>,
+    Json(req): Json<RememberMemoryRequest>,
+) -> Result<(StatusCode, Json<RememberMemoryResponse>), AppError> {
+    if req.user.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("user is required".into())));
+    }
+    if req.text.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("text is required".into())));
+    }
+
+    let user_identifier = req.user.trim();
+    let user = match find_user_by_identifier(&state, user_identifier).await {
+        Ok(user) => user,
+        Err(err) if is_user_not_found(&err) => {
+            let create = CreateUserRequest {
+                id: None,
+                external_id: Some(user_identifier.to_string()),
+                name: user_identifier.to_string(),
+                email: None,
+                metadata: serde_json::json!({}),
+            };
+            match state.state_store.create_user(create).await {
+                Ok(user) => user,
+                Err(create_err) if matches!(create_err, MnemoError::Duplicate(_)) => {
+                    find_user_by_identifier(&state, user_identifier).await?
+                }
+                Err(create_err) => return Err(create_err.into()),
+            }
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let session_name = req
+        .session
+        .and_then(|s| {
+            let trimmed = s.trim().to_string();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+        .unwrap_or_else(|| "default".to_string());
+    let session = find_or_create_session(&state, user.id, &session_name).await?;
+
+    let episode_req = CreateEpisodeRequest {
+        id: None,
+        episode_type: EpisodeType::Message,
+        content: req.text,
+        role: Some(req.role.unwrap_or(MessageRole::User)),
+        name: Some(user.name.clone()),
+        metadata: serde_json::json!({}),
+        created_at: None,
+    };
+
+    let episode = state
+        .state_store
+        .create_episode(episode_req, session.id, user.id)
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RememberMemoryResponse {
+            ok: true,
+            user_id: user.id,
+            session_id: session.id,
+            episode_id: episode.id,
+        }),
+    ))
+}
+
+async fn get_memory_context(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+    Json(req): Json<MemoryContextRequest>,
+) -> Result<Json<ContextBlock>, AppError> {
+    if req.query.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("query is required".into())));
+    }
+
+    let user = find_user_by_identifier(&state, user.trim()).await?;
+
+    let session_id = match req.session.and_then(|s| {
+        let trimmed = s.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    }) {
+        Some(name) => Some(find_session_by_name(&state, user.id, &name).await?.id),
+        None => None,
+    };
+
+    let max_tokens = req.max_tokens.unwrap_or(500);
+    let context_req = ContextRequest {
+        session_id,
+        messages: vec![ContextMessage {
+            role: "user".to_string(),
+            content: req.query,
+        }],
+        max_tokens,
+        search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
+        temporal_filter: None,
+        min_relevance: req.min_relevance.unwrap_or(0.3),
+    };
+
+    let mut context = state.retrieval.get_context(user.id, &context_req).await?;
+    maybe_attach_recent_episode_fallback(&state, user.id, session_id, max_tokens, &mut context)
+        .await?;
+    Ok(Json(context))
+}
+
+async fn maybe_attach_recent_episode_fallback(
+    state: &AppState,
+    user_id: Uuid,
+    session_id: Option<Uuid>,
+    max_tokens: u32,
+    context: &mut ContextBlock,
+) -> Result<(), MnemoError> {
+    if !context.context.trim().is_empty() {
+        return Ok(());
+    }
+
+    let mut episodes = Vec::new();
+    if let Some(session_id) = session_id {
+        episodes = state
+            .state_store
+            .list_episodes(
+                session_id,
+                ListEpisodesParams {
+                    limit: 8,
+                    after: None,
+                    status: None,
+                },
+            )
+            .await?;
+    } else {
+        let sessions = state
+            .state_store
+            .list_sessions(
+                user_id,
+                ListSessionsParams {
+                    limit: 5,
+                    after: None,
+                    since: None,
+                },
+            )
+            .await?;
+
+        for session in sessions {
+            let mut session_episodes = state
+                .state_store
+                .list_episodes(
+                    session.id,
+                    ListEpisodesParams {
+                        limit: 4,
+                        after: None,
+                        status: None,
+                    },
+                )
+                .await?;
+            episodes.append(&mut session_episodes);
+        }
+
+        episodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        episodes.truncate(8);
+    }
+
+    if episodes.is_empty() {
+        return Ok(());
+    }
+
+    episodes.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    let mut lines = Vec::new();
+    lines.push("Recent conversation snippets (extraction may still be processing):".to_string());
+    let mut running_tokens = estimate_tokens(&lines[0]);
+
+    for episode in &episodes {
+        let role = episode
+            .role
+            .map(|r| format!("{:?}", r).to_lowercase())
+            .unwrap_or_else(|| "event".to_string());
+        let content = if episode.content.len() > 180 {
+            format!("{}...", &episode.content[..180])
+        } else {
+            episode.content.clone()
+        };
+        let line = format!("- [{}] {}", role, content.replace('\n', " "));
+        let line_tokens = estimate_tokens(&line);
+        if running_tokens + line_tokens > max_tokens {
+            break;
+        }
+        lines.push(line);
+        running_tokens += line_tokens;
+    }
+
+    if lines.len() == 1 {
+        return Ok(());
+    }
+
+    context.context = lines.join("\n");
+    context.token_count = estimate_tokens(&context.context);
+    if !context.sources.contains(&RetrievalSource::EpisodeRecall) {
+        context.sources.push(RetrievalSource::EpisodeRecall);
+    }
+
+    if context.episodes.is_empty() {
+        for episode in episodes {
+            let preview = if episode.content.len() > 200 {
+                format!("{}...", &episode.content[..200])
+            } else {
+                episode.content
+            };
+            context.episodes.push(EpisodeSummary {
+                id: episode.id,
+                session_id: episode.session_id,
+                role: episode.role.map(|r| format!("{:?}", r).to_lowercase()),
+                preview,
+                created_at: episode.created_at,
+                relevance: 0.1,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+async fn find_user_by_identifier(state: &AppState, identifier: &str) -> Result<User, MnemoError> {
+    if let Ok(id) = Uuid::parse_str(identifier) {
+        match state.state_store.get_user(id).await {
+            Ok(user) => return Ok(user),
+            Err(err) if is_user_not_found(&err) => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    match state.state_store.get_user_by_external_id(identifier).await {
+        Ok(user) => return Ok(user),
+        Err(err) if is_user_not_found(&err) => {}
+        Err(err) => return Err(err),
+    }
+
+    let mut after = None;
+    loop {
+        let users = state.state_store.list_users(200, after).await?;
+        if users.is_empty() {
+            break;
+        }
+
+        for user in &users {
+            if user.name.eq_ignore_ascii_case(identifier) {
+                return Ok(user.clone());
+            }
+        }
+
+        after = users.last().map(|u| u.id);
+        if after.is_none() || users.len() < 200 {
+            break;
+        }
+    }
+
+    Err(MnemoError::NotFound {
+        resource_type: "User".into(),
+        id: identifier.to_string(),
+    })
+}
+
+async fn find_or_create_session(
+    state: &AppState,
+    user_id: Uuid,
+    session_name: &str,
+) -> Result<Session, MnemoError> {
+    match find_session_by_name(state, user_id, session_name).await {
+        Ok(session) => return Ok(session),
+        Err(err) if is_session_not_found(&err) => {}
+        Err(err) => return Err(err),
+    }
+
+    state
+        .state_store
+        .create_session(CreateSessionRequest {
+            id: None,
+            user_id,
+            name: Some(session_name.to_string()),
+            metadata: serde_json::json!({}),
+        })
+        .await
+}
+
+async fn find_session_by_name(
+    state: &AppState,
+    user_id: Uuid,
+    session_name: &str,
+) -> Result<Session, MnemoError> {
+    let mut after = None;
+    loop {
+        let sessions = state
+            .state_store
+            .list_sessions(
+                user_id,
+                ListSessionsParams {
+                    limit: 200,
+                    after,
+                    since: None,
+                },
+            )
+            .await?;
+
+        if sessions.is_empty() {
+            break;
+        }
+
+        for session in &sessions {
+            if session
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(session_name))
+            {
+                return Ok(session.clone());
+            }
+        }
+
+        after = sessions.last().map(|s| s.id);
+        if after.is_none() || sessions.len() < 200 {
+            break;
+        }
+    }
+
+    Err(MnemoError::NotFound {
+        resource_type: "Session".into(),
+        id: format!("{}:{}", user_id, session_name),
+    })
+}
+
+fn is_user_not_found(err: &MnemoError) -> bool {
+    matches!(err, MnemoError::UserNotFound(_))
+        || matches!(err, MnemoError::NotFound { resource_type, .. } if resource_type.eq_ignore_ascii_case("user"))
+}
+
+fn is_session_not_found(err: &MnemoError) -> bool {
+    matches!(err, MnemoError::SessionNotFound(_))
+        || matches!(err, MnemoError::NotFound { resource_type, .. } if resource_type.eq_ignore_ascii_case("session"))
+}
+
 // ─── Graph route ───────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -348,42 +750,57 @@ pub struct SubgraphParams {
     max_nodes: usize,
 }
 
-fn default_depth() -> u32 { 2 }
-fn default_max_nodes() -> usize { 50 }
+fn default_depth() -> u32 {
+    2
+}
+fn default_max_nodes() -> usize {
+    50
+}
 
 async fn get_subgraph(
     State(state): State<AppState>,
     Path(entity_id): Path<Uuid>,
     Query(params): Query<SubgraphParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let subgraph = state.graph.traverse_bfs(entity_id, params.depth, params.max_nodes, true).await?;
+    let subgraph = state
+        .graph
+        .traverse_bfs(entity_id, params.depth, params.max_nodes, true)
+        .await?;
 
     // Serialize subgraph to JSON
-    let nodes: Vec<serde_json::Value> = subgraph.nodes.iter().map(|n| {
-        serde_json::json!({
-            "entity": {
-                "id": n.entity.id,
-                "name": n.entity.name,
-                "entity_type": n.entity.entity_type.as_str(),
-                "summary": n.entity.summary,
-            },
-            "depth": n.depth,
-            "outgoing_edges": n.outgoing.len(),
-            "incoming_edges": n.incoming.len(),
+    let nodes: Vec<serde_json::Value> = subgraph
+        .nodes
+        .iter()
+        .map(|n| {
+            serde_json::json!({
+                "entity": {
+                    "id": n.entity.id,
+                    "name": n.entity.name,
+                    "entity_type": n.entity.entity_type.as_str(),
+                    "summary": n.entity.summary,
+                },
+                "depth": n.depth,
+                "outgoing_edges": n.outgoing.len(),
+                "incoming_edges": n.incoming.len(),
+            })
         })
-    }).collect();
+        .collect();
 
-    let edges: Vec<serde_json::Value> = subgraph.edges.iter().map(|e| {
-        serde_json::json!({
-            "id": e.id,
-            "source_entity_id": e.source_entity_id,
-            "target_entity_id": e.target_entity_id,
-            "label": e.label,
-            "fact": e.fact,
-            "valid_at": e.valid_at,
-            "invalid_at": e.invalid_at,
+    let edges: Vec<serde_json::Value> = subgraph
+        .edges
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "source_entity_id": e.source_entity_id,
+                "target_entity_id": e.target_entity_id,
+                "label": e.label,
+                "fact": e.fact,
+                "valid_at": e.valid_at,
+                "invalid_at": e.invalid_at,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(serde_json::json!({
         "nodes": nodes,

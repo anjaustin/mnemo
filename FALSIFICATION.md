@@ -1,5 +1,44 @@
 # Mnemo Core — Falsification Report
 
+## Addendum (2026-03-02): Memory API Adversarial Pass
+
+We ran a live falsification sweep against the new high-level memory surface (`/api/v1/memory`, `/api/v1/memory/:user/context`) with Redis + Qdrant running locally.
+
+### Checks executed
+
+- Reject empty `user` and empty `text` with 400 validation errors.
+- Auto-create user/session and reuse default session across repeated calls.
+- Accept explicit role override and persist mixed roles in created episodes.
+- Return 404 for unknown user context lookups.
+- Resolve `:user` by UUID, external_id, and name.
+- Ensure context endpoint no longer hard-fails (502) when embeddings are unavailable.
+- Ensure immediate recall returns non-empty context by falling back to recent raw episodes when retrieval yields empty context.
+
+### Result
+
+All checks passed after implementing:
+
+- Embedding failure degradation in retrieval (`full-text` path remains active).
+- Route-level fallback to recent conversation snippets when retrieval returns an empty context block.
+
+This does not prove extraction quality; it does prove the memory API degrades safely and remains usable under local/no-key conditions.
+
+### Automation
+
+The falsification checks are now codified in:
+
+- `crates/mnemo-server/tests/memory_api.rs`
+
+Run with:
+
+```bash
+cargo test -p mnemo-server --test memory_api -- --test-threads=1
+```
+
+CI gate:
+
+- `.github/workflows/memory-falsification.yml`
+
 **Reviewed:** All files in `crates/mnemo-core/`, `Cargo.toml`, `Dockerfile`, `docker-compose.yml`, `config/default.toml`
 **Date:** 2026-03-01
 

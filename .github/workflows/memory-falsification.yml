@@ -1,0 +1,50 @@
+name: memory-falsification
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  memory-falsification:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis/redis-stack:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6334:6334
+        options: >-
+          --health-cmd "curl -f http://localhost:6334/readyz || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run memory API falsification tests
+        env:
+          MNEMO_TEST_REDIS_URL: redis://localhost:6379
+          MNEMO_TEST_QDRANT_URL: http://localhost:6334
+          MNEMO_TEST_QDRANT_PREFIX: mnemo_
+        run: cargo test -p mnemo-server --test memory_api -- --test-threads=1

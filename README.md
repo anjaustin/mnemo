@@ -1,5 +1,7 @@
 # 🧠 Mnemo
 
+[![memory-falsification](https://github.com/mnemo-ai/mnemo/actions/workflows/memory-falsification.yml/badge.svg)](https://github.com/mnemo-ai/mnemo/actions/workflows/memory-falsification.yml)
+
 **Memory that evolves. Context that matters.**
 
 Mnemo is a free, open-source, self-hosted memory and context engine for AI agents. Built in Rust for raw performance, backed by Redis and Qdrant for sub-50ms retrieval latency.
@@ -14,6 +16,12 @@ Mnemo is a free, open-source, self-hosted memory and context engine for AI agent
 - **Multi-tenant** — Complete data isolation per user
 - **LLM Agnostic** — Anthropic, OpenAI, Ollama, Liquid AI, or no LLM at all
 - **Self-hosted First** — Docker Compose for dev, your data stays yours
+
+## Quality Gates
+
+- `cargo test --workspace`
+- `./tests/e2e.sh` (server running)
+- `cargo test -p mnemo-server --test memory_api -- --test-threads=1` (memory falsification)
 
 ## Quick Start
 
@@ -34,6 +42,8 @@ cargo run --bin mnemo-server
 # Verify
 curl http://localhost:8080/health
 ```
+
+For a Python-first flow, see [QUICKSTART.md](QUICKSTART.md).
 
 ## Usage
 
@@ -62,6 +72,22 @@ curl -X POST http://localhost:8080/api/v1/users/USER_ID/context \
 ```
 
 Inject the returned `context` string into your agent's system prompt. That's it.
+
+### High-Level Memory API
+
+You can also use the streamlined memory endpoints:
+
+```bash
+# Remember
+curl -X POST http://localhost:8080/api/v1/memory \
+  -H "Content-Type: application/json" \
+  -d '{"user":"kendra","text":"I love hiking in Colorado and my dog is named Bear"}'
+
+# Recall
+curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What are my hobbies?"}'
+```
 
 ## Architecture
 
@@ -102,6 +128,7 @@ Old facts aren't deleted. This enables point-in-time queries and change tracking
 |----------|-------------|
 | [API Reference](docs/API.md) | Every endpoint with request/response examples |
 | [Architecture](docs/ARCHITECTURE.md) | Data model, temporal reasoning, pipeline internals |
+| [Testing Guide](docs/TESTING.md) | Workspace, E2E, and falsification test commands |
 | [Configuration](config/default.toml) | All config options with inline comments |
 | [Contributing](CONTRIBUTING.md) | Dev setup, code style, PR process |
 | [Changelog](CHANGELOG.md) | Release notes |
