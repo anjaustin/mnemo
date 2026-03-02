@@ -8,8 +8,8 @@
 //! - `{prefix}idx:edges`    — ON JSON, fields: fact (TEXT), label (TAG), user_id (TAG)
 //! - `{prefix}idx:episodes` — ON JSON, fields: content (TEXT), user_id (TAG), session_id (TAG)
 
-use redis::aio::ConnectionManager;
-use redis::AsyncCommands;
+//!use redis::aio::ConnectionManager;
+//!use redis::AsyncCommands;
 use uuid::Uuid;
 
 use mnemo_core::error::MnemoError;

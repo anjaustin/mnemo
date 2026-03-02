@@ -216,6 +216,8 @@ impl MnemoConfig {
         if let Ok(v) = std::env::var("MNEMO_LLM_BASE_URL") { config.llm.base_url = v; }
         if let Ok(v) = std::env::var("MNEMO_EMBEDDING_API_KEY") { config.embedding.api_key = v; }
         if let Ok(v) = std::env::var("MNEMO_EMBEDDING_MODEL") { config.embedding.model = v; }
+        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_BASE_URL") { config.embedding.base_url = v; }
+        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_DIMENSIONS") { if let Ok(d) = v.parse() { config.embedding.dimensions = d; } }
 
         // Auth overrides
         if let Ok(v) = std::env::var("MNEMO_AUTH_ENABLED") {

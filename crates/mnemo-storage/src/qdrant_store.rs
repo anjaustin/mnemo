@@ -1,10 +1,11 @@
 use qdrant_client::qdrant::{
     CreateCollectionBuilder, Distance, PointStruct, SearchPointsBuilder,
     UpsertPointsBuilder, VectorParamsBuilder, DeletePointsBuilder,
-    Filter, FieldCondition, Match, MatchValue, PointId,
+    Filter, FieldCondition, Match, PointId,
     value::Kind, Value as QdrantValue,
 };
 use qdrant_client::Qdrant;
+use qdrant_client::qdrant::r#match::MatchValue;
 use serde_json::Value;
 use uuid::Uuid;
 

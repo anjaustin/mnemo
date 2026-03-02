@@ -55,7 +55,7 @@ impl RedisStateStore {
         })
     }
 
-    fn key(&self, parts: &[&str]) -> String {
+    pub(crate) fn key(&self, parts: &[&str]) -> String {
         format!("{}{}", self.prefix, parts.join(":"))
     }
 

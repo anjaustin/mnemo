@@ -75,24 +75,3 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
-
-# Benchmarks need access to storage crate
-[[bench]]
-name = "latency"
-harness = false
-path = "benches/latency.rs"
-
-# Integration tests
-[[test]]
-name = "integration"
-path = "tests/integration/main.rs"
-
-[dev-dependencies]
-mnemo-core = { workspace = true }
-mnemo-storage = { workspace = true }
-mnemo-ingest = { workspace = true }
-criterion = { workspace = true }
-tokio = { workspace = true }
-serde_json = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }

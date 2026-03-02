@@ -229,7 +229,7 @@ impl LlmProvider for AnthropicProvider {
             let e = cleaned.rfind("```").unwrap_or(cleaned.len());
             &cleaned[s..e]
         } else { cleaned };
-        serde_json::from_str(cleaned).unwrap_or_else(|_| Vec::new())
+        Ok(serde_json::from_str(cleaned).unwrap_or_else(|_| Vec::new()))
     }
 
     fn provider_name(&self) -> &str { "anthropic" }

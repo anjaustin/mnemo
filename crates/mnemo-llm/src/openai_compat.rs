@@ -311,7 +311,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             cleaned
         };
 
-        serde_json::from_str(cleaned).unwrap_or_else(|_| Vec::new())
+        Ok(serde_json::from_str(cleaned).unwrap_or_else(|_| Vec::new()))
     }
 
     fn provider_name(&self) -> &str {

@@ -25,12 +25,22 @@ use crate::state::AppState;
 
 // ─── Error handling ────────────────────────────────────────────────
 
-impl IntoResponse for MnemoError {
-    fn into_response(self) -> axum::response::Response {
-        let status = StatusCode::from_u16(self.status_code())
+struct AppError(MnemoError);
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.0.status_code())
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let body = ApiErrorResponse::from(self);
+        let body = ApiErrorResponse::from(self.0);
         (status, Json(body)).into_response()
+    }
+}
+
+use axum::response::Response;
+
+impl From<MnemoError> for AppError {
+    fn from(err: MnemoError) -> Self {
+        AppError(err)
     }
 }
 
@@ -125,7 +135,7 @@ async fn health() -> Json<HealthResponse> {
 async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
-) -> Result<(StatusCode, Json<User>), MnemoError> {
+) -> Result<(StatusCode, Json<User>), AppError> {
     let user = state.state_store.create_user(req).await?;
     Ok((StatusCode::CREATED, Json(user)))
 }
@@ -133,7 +143,7 @@ async fn create_user(
 async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<User>, MnemoError> {
+) -> Result<Json<User>, AppError> {
     let user = state.state_store.get_user(id).await?;
     Ok(Json(user))
 }
@@ -141,7 +151,7 @@ async fn get_user(
 async fn get_user_by_external_id(
     State(state): State<AppState>,
     Path(external_id): Path<String>,
-) -> Result<Json<User>, MnemoError> {
+) -> Result<Json<User>, AppError> {
     let user = state.state_store.get_user_by_external_id(&external_id).await?;
     Ok(Json(user))
 }
@@ -150,7 +160,7 @@ async fn update_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateUserRequest>,
-) -> Result<Json<User>, MnemoError> {
+) -> Result<Json<User>, AppError> {
     let user = state.state_store.update_user(id, req).await?;
     Ok(Json(user))
 }
@@ -158,7 +168,7 @@ async fn update_user(
 async fn delete_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<DeleteResponse>, MnemoError> {
+) -> Result<Json<DeleteResponse>, AppError> {
     state.state_store.delete_user(id).await?;
     // Also delete vectors for GDPR compliance
     let _ = state.vector_store.delete_user_vectors(id).await;
@@ -168,7 +178,7 @@ async fn delete_user(
 async fn list_users(
     State(state): State<AppState>,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<ListResponse<User>>, MnemoError> {
+) -> Result<Json<ListResponse<User>>, AppError> {
     let users = state.state_store.list_users(params.limit, params.after).await?;
     Ok(Json(ListResponse::new(users)))
 }
@@ -178,7 +188,7 @@ async fn list_users(
 async fn create_session(
     State(state): State<AppState>,
     Json(req): Json<CreateSessionRequest>,
-) -> Result<(StatusCode, Json<Session>), MnemoError> {
+) -> Result<(StatusCode, Json<Session>), AppError> {
     let session = state.state_store.create_session(req).await?;
     Ok((StatusCode::CREATED, Json(session)))
 }
@@ -186,7 +196,7 @@ async fn create_session(
 async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Session>, MnemoError> {
+) -> Result<Json<Session>, AppError> {
     Ok(Json(state.state_store.get_session(id).await?))
 }
 
@@ -194,14 +204,14 @@ async fn update_session(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateSessionRequest>,
-) -> Result<Json<Session>, MnemoError> {
+) -> Result<Json<Session>, AppError> {
     Ok(Json(state.state_store.update_session(id, req).await?))
 }
 
 async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<DeleteResponse>, MnemoError> {
+) -> Result<Json<DeleteResponse>, AppError> {
     state.state_store.delete_session(id).await?;
     Ok(Json(DeleteResponse { deleted: true }))
 }
@@ -210,7 +220,7 @@ async fn list_user_sessions(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<ListResponse<Session>>, MnemoError> {
+) -> Result<Json<ListResponse<Session>>, AppError> {
     let list_params = ListSessionsParams {
         limit: params.limit,
         after: params.after,
@@ -226,7 +236,7 @@ async fn add_episode(
     State(state): State<AppState>,
     Path(session_id): Path<Uuid>,
     Json(req): Json<CreateEpisodeRequest>,
-) -> Result<(StatusCode, Json<Episode>), MnemoError> {
+) -> Result<(StatusCode, Json<Episode>), AppError> {
     let session = state.state_store.get_session(session_id).await?;
     let episode = state.state_store.create_episode(req, session_id, session.user_id).await?;
     Ok((StatusCode::CREATED, Json(episode)))
@@ -236,7 +246,7 @@ async fn add_episodes_batch(
     State(state): State<AppState>,
     Path(session_id): Path<Uuid>,
     Json(req): Json<BatchCreateEpisodesRequest>,
-) -> Result<(StatusCode, Json<ListResponse<Episode>>), MnemoError> {
+) -> Result<(StatusCode, Json<ListResponse<Episode>>), AppError> {
     let session = state.state_store.get_session(session_id).await?;
     let episodes = state.state_store
         .create_episodes_batch(req.episodes, session_id, session.user_id)
@@ -247,7 +257,7 @@ async fn add_episodes_batch(
 async fn get_episode(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Episode>, MnemoError> {
+) -> Result<Json<Episode>, AppError> {
     Ok(Json(state.state_store.get_episode(id).await?))
 }
 
@@ -255,7 +265,7 @@ async fn list_episodes(
     State(state): State<AppState>,
     Path(session_id): Path<Uuid>,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<ListResponse<Episode>>, MnemoError> {
+) -> Result<Json<ListResponse<Episode>>, AppError> {
     let list_params = ListEpisodesParams {
         limit: params.limit,
         after: params.after,
@@ -271,7 +281,7 @@ async fn list_entities(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<ListResponse<Entity>>, MnemoError> {
+) -> Result<Json<ListResponse<Entity>>, AppError> {
     let entities = state.state_store.list_entities(user_id, params.limit, params.after).await?;
     Ok(Json(ListResponse::new(entities)))
 }
@@ -279,14 +289,14 @@ async fn list_entities(
 async fn get_entity(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Entity>, MnemoError> {
+) -> Result<Json<Entity>, AppError> {
     Ok(Json(state.state_store.get_entity(id).await?))
 }
 
 async fn delete_entity(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<DeleteResponse>, MnemoError> {
+) -> Result<Json<DeleteResponse>, AppError> {
     state.state_store.delete_entity(id).await?;
     Ok(Json(DeleteResponse { deleted: true }))
 }
@@ -297,7 +307,7 @@ async fn query_edges(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
     Query(filter): Query<EdgeFilter>,
-) -> Result<Json<ListResponse<Edge>>, MnemoError> {
+) -> Result<Json<ListResponse<Edge>>, AppError> {
     let edges = state.state_store.query_edges(user_id, filter).await?;
     Ok(Json(ListResponse::new(edges)))
 }
@@ -305,14 +315,14 @@ async fn query_edges(
 async fn get_edge(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Edge>, MnemoError> {
+) -> Result<Json<Edge>, AppError> {
     Ok(Json(state.state_store.get_edge(id).await?))
 }
 
 async fn delete_edge(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<DeleteResponse>, MnemoError> {
+) -> Result<Json<DeleteResponse>, AppError> {
     state.state_store.delete_edge(id).await?;
     Ok(Json(DeleteResponse { deleted: true }))
 }
@@ -323,7 +333,7 @@ async fn get_context(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
     Json(req): Json<ContextRequest>,
-) -> Result<Json<ContextBlock>, MnemoError> {
+) -> Result<Json<ContextBlock>, AppError> {
     let context = state.retrieval.get_context(user_id, &req).await?;
     Ok(Json(context))
 }
@@ -345,7 +355,7 @@ async fn get_subgraph(
     State(state): State<AppState>,
     Path(entity_id): Path<Uuid>,
     Query(params): Query<SubgraphParams>,
-) -> Result<Json<serde_json::Value>, MnemoError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let subgraph = state.graph.traverse_bfs(entity_id, params.depth, params.max_nodes, true).await?;
 
     // Serialize subgraph to JSON
