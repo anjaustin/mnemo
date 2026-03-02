@@ -27,6 +27,8 @@ class ContextResult:
     episodes: list[dict[str, Any]]
     latency_ms: int
     sources: list[str]
+    mode: str
+    head: dict[str, Any] | None
 
 
 class Mnemo:
@@ -64,6 +66,10 @@ class Mnemo:
         session: str | None = None,
         max_tokens: int | None = None,
         min_relevance: float | None = None,
+        mode: str | None = None,
+        time_intent: str | None = None,
+        as_of: str | None = None,
+        temporal_weight: float | None = None,
     ) -> ContextResult:
         payload: dict[str, Any] = {"query": query}
         if session is not None:
@@ -72,6 +78,14 @@ class Mnemo:
             payload["max_tokens"] = max_tokens
         if min_relevance is not None:
             payload["min_relevance"] = min_relevance
+        if mode is not None:
+            payload["mode"] = mode
+        if time_intent is not None:
+            payload["time_intent"] = time_intent
+        if as_of is not None:
+            payload["as_of"] = as_of
+        if temporal_weight is not None:
+            payload["temporal_weight"] = temporal_weight
 
         body = self._request_json("POST", f"/api/v1/memory/{user}/context", payload)
         return ContextResult(
@@ -82,6 +96,8 @@ class Mnemo:
             episodes=list(body.get("episodes", [])),
             latency_ms=int(body.get("latency_ms", 0)),
             sources=list(body.get("sources", [])),
+            mode=str(body.get("mode", "hybrid")),
+            head=(body.get("head") if isinstance(body.get("head"), dict) else None),
         )
 
     def _request_json(
