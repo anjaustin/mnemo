@@ -22,6 +22,17 @@ Run Mnemo + Zep comparison (requires `zep_api.key`):
 python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key
 ```
 
+## CI automation
+
+Workflow: `.github/workflows/benchmark-eval.yml`
+
+- PR / push to `main`: runs Mnemo benchmark (`--target mnemo`).
+- Manual dispatch: supports `mnemo`, `zep`, or `both`.
+
+For Zep runs in GitHub Actions, configure repository secret:
+
+- `ZEP_API_KEY`
+
 For Mnemo it executes two profiles over the same temporal dataset:
 
 - `temporal`: uses `mode`, `time_intent`, `as_of`, and temporal weighting

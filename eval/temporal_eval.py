@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import time
 import urllib.error
@@ -360,6 +361,7 @@ def main() -> None:
     parser.add_argument("--target", choices=["mnemo", "zep", "both"], default="mnemo")
     parser.add_argument("--mnemo-base-url", default="http://localhost:8080")
     parser.add_argument("--zep-base-url", default="https://api.getzep.com/api/v2")
+    parser.add_argument("--zep-api-key", default=None)
     parser.add_argument("--zep-api-key-file", default="zep_api.key")
     args = parser.parse_args()
 
@@ -374,7 +376,9 @@ def main() -> None:
         results.append(run_profile(mnemo, cases, "baseline"))
 
     if args.target in ("zep", "both"):
-        key = load_key(args.zep_api_key_file)
+        key = args.zep_api_key or os.environ.get("ZEP_API_KEY")
+        if not key:
+            key = load_key(args.zep_api_key_file)
         zep = ZepBackend(args.zep_base_url, key)
         # Zep Memory API does not expose direct equivalents for Mnemo temporal controls.
         # We run baseline-style retrieval for comparison.

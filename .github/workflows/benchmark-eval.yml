@@ -1,0 +1,128 @@
+name: benchmark-eval
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      benchmark_target:
+        description: "Eval target"
+        type: choice
+        required: true
+        default: mnemo
+        options:
+          - mnemo
+          - zep
+          - both
+      zep_base_url:
+        description: "Optional Zep API base URL"
+        required: false
+        default: "https://api.getzep.com/api/v2"
+
+jobs:
+  mnemo-eval:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis/redis-stack:latest
+        ports:
+          - 6379:6379
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+          - 6334:6334
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Wait for Redis and Qdrant
+        run: |
+          python3 - <<'PY'
+          import socket
+          import time
+
+          targets = [
+              ("127.0.0.1", 6379, "redis"),
+              ("127.0.0.1", 6334, "qdrant-grpc"),
+          ]
+
+          deadline = time.time() + 90
+          for host, port, name in targets:
+              while True:
+                  try:
+                      with socket.create_connection((host, port), timeout=2):
+                          print(f"{name} is up on {host}:{port}")
+                          break
+                  except OSError:
+                      if time.time() > deadline:
+                          raise SystemExit(f"Timed out waiting for {name} on {host}:{port}")
+                      time.sleep(1)
+          PY
+
+      - name: Build Mnemo server
+        run: cargo build --bin mnemo-server
+
+      - name: Run Mnemo benchmark (default)
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.benchmark_target == 'mnemo' || github.event.inputs.benchmark_target == 'both'
+        run: |
+          target/debug/mnemo-server >/tmp/mnemo_eval.log 2>&1 &
+          SERVER_PID=$!
+          sleep 3
+          python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080 | tee /tmp/mnemo_eval_table.txt
+          STATUS=$?
+          kill $SERVER_PID || true
+          wait $SERVER_PID 2>/dev/null || true
+          exit $STATUS
+
+      - name: Run Zep benchmark (manual)
+        if: github.event_name == 'workflow_dispatch' && (github.event.inputs.benchmark_target == 'zep' || github.event.inputs.benchmark_target == 'both')
+        env:
+          ZEP_API_KEY: ${{ secrets.ZEP_API_KEY }}
+        run: |
+          if [ -z "$ZEP_API_KEY" ]; then
+            echo "Missing required secret: ZEP_API_KEY"
+            exit 1
+          fi
+
+          if [ "${{ github.event.inputs.benchmark_target }}" = "both" ]; then
+            target/debug/mnemo-server >/tmp/mnemo_eval.log 2>&1 &
+            SERVER_PID=$!
+            sleep 3
+            python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-base-url "${{ github.event.inputs.zep_base_url }}" --zep-api-key "$ZEP_API_KEY" | tee /tmp/zep_eval_table.txt
+            STATUS=$?
+            kill $SERVER_PID || true
+            wait $SERVER_PID 2>/dev/null || true
+            exit $STATUS
+          else
+            python3 eval/temporal_eval.py --target zep --zep-base-url "${{ github.event.inputs.zep_base_url }}" --zep-api-key "$ZEP_API_KEY" | tee /tmp/zep_eval_table.txt
+          fi
+
+      - name: Publish benchmark summary
+        if: always()
+        run: |
+          echo "## Benchmark Eval" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f /tmp/mnemo_eval_table.txt ]; then
+            echo "### Mnemo" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/mnemo_eval_table.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f /tmp/zep_eval_table.txt ]; then
+            echo "### Zep" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/zep_eval_table.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
