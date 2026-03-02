@@ -4,6 +4,27 @@
 **Date:** 2026-03-01
 **Predecessor:** Phase 1 (v0.1.0) — Core Engine (complete)
 
+## Status Snapshot (2026-03-02)
+
+Phase 1.5 is functionally complete, with follow-on scope added beyond the original PRD.
+
+| Item | Status | Notes |
+|---|---|---|
+| 3.1 Compilation fixes | Complete | Workspace compiles and runs in CI.
+| 3.2 Anthropic provider | Complete | Native provider implemented.
+| 3.3 Auth middleware | Complete | API key middleware in place and tested.
+| 3.4 Retry/backoff | Complete | Retry behavior implemented in ingestion path.
+| 3.5 Full-text search | Complete | RediSearch path integrated in retrieval.
+| 3.6 Integration/e2e tests | Complete | Integration suite plus memory falsification tests in CI.
+| 3.7 Benchmarks | Partially complete | Repro harness + CI benchmark workflow shipped; benchmark docs are now in `docs/EVALUATION.md` and `docs/COMPETITIVE.md` with run evidence.
+
+Additional scope shipped after this PRD:
+
+- High-level memory API (`/api/v1/memory`, `/api/v1/memory/:user/context`)
+- Temporal scoring controls (`time_intent`, `as_of`, `temporal_weight`)
+- Thread HEAD mode and diagnostics (`mode=head|hybrid|historical`, `head` metadata)
+- Python SDK and quickstart workflow
+
 ---
 
 ## 1. Motivation

@@ -2,7 +2,23 @@
 
 ## Status
 
-**This document will be populated with real numbers once Phase 1.5 compilation is verified and the test infrastructure is running.** The benchmark harness exists in `benches/` and can be run against any Mnemo deployment.
+Benchmark automation is active and publishing results through:
+
+- `eval/temporal_eval.py`
+- `.github/workflows/benchmark-eval.yml`
+
+Current measured snapshot (GitHub Actions run `22591534300`):
+
+| System | Profile | Accuracy | Stale Fact Rate | Errors | p50 Latency (ms) | p95 Latency (ms) |
+|---|---|---:|---:|---:|---:|---:|
+| mnemo | temporal | 100.0% | 0.0% | 0 | 74 | 74 |
+| mnemo | baseline | 66.7% | 33.3% | 0 | 60 | 60 |
+| zep | baseline | 0.0% | 0.0% | 3 | 0 | 0 |
+
+Interpretation:
+
+- Mnemo temporal mode consistently outperforms Mnemo baseline on this dataset.
+- Zep adapter path executed, but this run produced request errors and is not yet a valid performance comparison.
 
 ---
 
@@ -21,7 +37,15 @@ All benchmarks are run with:
 # Start infrastructure
 docker compose up -d redis qdrant
 
-# Run microbenchmarks
+# Run eval harness against local Mnemo
+cargo run --bin mnemo-server &
+sleep 3
+python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080
+
+# Optional: side-by-side with Zep (requires API key)
+python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key
+
+# Legacy microbenchmarks
 cargo bench
 
 # Run HTTP benchmarks (requires server running)
@@ -45,7 +69,7 @@ hey -n 5000 -c 100 -m POST \
 
 ## Targets
 
-These are the performance targets from the PRD. Actual measurements will replace the "TBD" values.
+These are the performance targets from the PRD. Use `docs/EVALUATION.md` and `docs/COMPETITIVE.md` for the latest run evidence and methodology notes.
 
 ### Latency
 
