@@ -1,0 +1,95 @@
+name: quality-gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  rust-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Workspace compile check
+        run: cargo check --workspace
+
+      - name: Workspace unit tests
+        run: cargo test --workspace --lib --bins
+
+  integration-regression:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis/redis-stack:latest
+        ports:
+          - 6379:6379
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+          - 6334:6334
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Wait for Redis and Qdrant
+        run: |
+          python3 - <<'PY'
+          import socket
+          import time
+
+          targets = [
+              ("127.0.0.1", 6379, "redis"),
+              ("127.0.0.1", 6334, "qdrant-grpc"),
+          ]
+
+          deadline = time.time() + 90
+          for host, port, name in targets:
+              while True:
+                  try:
+                      with socket.create_connection((host, port), timeout=2):
+                          print(f"{name} is up on {host}:{port}")
+                          break
+                  except OSError:
+                      if time.time() > deadline:
+                          raise SystemExit(f"Timed out waiting for {name} on {host}:{port}")
+                      time.sleep(1)
+          PY
+
+      - name: Run storage integration tests
+        env:
+          MNEMO_TEST_REDIS_URL: redis://localhost:6379
+        run: cargo test -p mnemo-storage --test storage -- --test-threads=1
+
+      - name: Run ingest integration tests
+        env:
+          MNEMO_TEST_REDIS_URL: redis://localhost:6379
+        run: cargo test -p mnemo-ingest --test ingest -- --test-threads=1
+
+      - name: Run memory API falsification
+        env:
+          MNEMO_TEST_REDIS_URL: redis://localhost:6379
+          MNEMO_TEST_QDRANT_URL: http://localhost:6334
+          MNEMO_TEST_QDRANT_PREFIX: mnemo_
+        run: cargo test -p mnemo-server --test memory_api -- --test-threads=1

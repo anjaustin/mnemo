@@ -125,6 +125,8 @@ If you want an isolated local dependency stack for integration tests:
 
 ```bash
 docker compose -f docker-compose.test.yml up -d
+cargo test -p mnemo-storage --test storage -- --test-threads=1
+cargo test -p mnemo-ingest --test ingest -- --test-threads=1
 cargo test -p mnemo-server --test memory_api -- --test-threads=1
 docker compose -f docker-compose.test.yml down
 ```

@@ -14,3 +14,6 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+mnemo-storage = { workspace = true }

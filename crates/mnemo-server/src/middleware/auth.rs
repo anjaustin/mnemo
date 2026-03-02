@@ -19,11 +19,17 @@ pub struct AuthConfig {
 
 impl AuthConfig {
     pub fn disabled() -> Self {
-        Self { enabled: false, valid_keys: HashSet::new() }
+        Self {
+            enabled: false,
+            valid_keys: HashSet::new(),
+        }
     }
 
     pub fn with_keys(keys: Vec<String>) -> Self {
-        Self { enabled: true, valid_keys: keys.into_iter().collect() }
+        Self {
+            enabled: true,
+            valid_keys: keys.into_iter().collect(),
+        }
     }
 }
 
@@ -35,7 +41,9 @@ pub struct AuthLayer {
 
 impl AuthLayer {
     pub fn new(config: AuthConfig) -> Self {
-        Self { config: Arc::new(config) }
+        Self {
+            config: Arc::new(config),
+        }
     }
 }
 
@@ -43,7 +51,10 @@ impl<S> Layer<S> for AuthLayer {
     type Service = AuthMiddleware<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        AuthMiddleware { inner, config: self.config.clone() }
+        AuthMiddleware {
+            inner,
+            config: self.config.clone(),
+        }
     }
 }
 
@@ -81,13 +92,15 @@ where
             return Box::pin(async move { inner.call(req).await });
         }
 
-        let api_key = req.headers()
+        let api_key = req
+            .headers()
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(|s| s.to_string())
             .or_else(|| {
-                req.headers().get("x-api-key")
+                req.headers()
+                    .get("x-api-key")
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string())
             });
@@ -114,4 +127,81 @@ fn unauthorized_response() -> Response {
         },
     };
     (StatusCode::UNAUTHORIZED, Json(body)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    fn test_app(config: AuthConfig) -> Router {
+        Router::new()
+            .route("/private", get(|| async { StatusCode::OK }))
+            .route("/health", get(|| async { StatusCode::OK }))
+            .layer(AuthLayer::new(config))
+    }
+
+    #[tokio::test]
+    async fn allows_requests_when_auth_disabled() {
+        let app = test_app(AuthConfig::disabled());
+        let req = Request::builder()
+            .uri("/private")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn bypasses_health_without_api_key() {
+        let app = test_app(AuthConfig::with_keys(vec!["secret".to_string()]));
+        let req = Request::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_key_when_auth_enabled() {
+        let app = test_app(AuthConfig::with_keys(vec!["secret".to_string()]));
+        let req = Request::builder()
+            .uri("/private")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn accepts_bearer_authorization() {
+        let app = test_app(AuthConfig::with_keys(vec!["secret".to_string()]));
+        let req = Request::builder()
+            .uri("/private")
+            .header("authorization", "Bearer secret")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn accepts_x_api_key_header() {
+        let app = test_app(AuthConfig::with_keys(vec!["secret".to_string()]));
+        let req = Request::builder()
+            .uri("/private")
+            .header("x-api-key", "secret")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }
