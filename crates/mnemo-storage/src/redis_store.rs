@@ -361,7 +361,7 @@ impl EpisodeStore for RedisStateStore {
 
         // Update session episode count
         let mut session = self.get_session(session_id).await?;
-        session.record_episode();
+        session.record_episode(episode.id, episode.created_at);
         let sess_key = self.key(&["session", &session_id.to_string()]);
         self.set_json(&sess_key, &session).await?;
 

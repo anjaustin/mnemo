@@ -63,14 +63,16 @@ Retrieve context for a user by identifier (`:user` can be UUID, external_id, or 
   "session": "default",
   "max_tokens": 500,
   "min_relevance": 0.3,
+  "mode": "hybrid",
   "time_intent": "current",
   "as_of": "2025-01-01T00:00:00Z",
   "temporal_weight": 0.5
 }
 ```
 
-`session`, `max_tokens`, `min_relevance`, `time_intent`, `as_of`, and `temporal_weight` are optional.
+`session`, `max_tokens`, `min_relevance`, `mode`, `time_intent`, `as_of`, and `temporal_weight` are optional.
 
+- `mode`: `head | hybrid | historical`
 - `time_intent`: `auto | current | recent | historical`
 - `as_of`: point-in-time target for historical recall
 - `temporal_weight`: override temporal influence (0.0–1.0)
@@ -86,7 +88,14 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
   "facts": [],
   "episodes": [],
   "latency_ms": 47,
-  "sources": ["semantic_search", "full_text_search"]
+  "sources": ["semantic_search", "full_text_search"],
+  "mode": "hybrid",
+  "head": {
+    "session_id": "019513a4-8c1f-7000-8000-000000000002",
+    "episode_id": "019513a4-9d3a-7000-8000-000000000003",
+    "updated_at": "2026-03-02T12:34:56Z",
+    "version": 7
+  }
 }
 ```
 
@@ -321,6 +330,7 @@ This is the endpoint your agent calls on every turn. It retrieves relevant knowl
 | `search_types` | array | `["hybrid"]` | `semantic`, `full_text`, `graph`, `hybrid` |
 | `temporal_filter` | ISO 8601 | null | Only return facts valid at this time |
 | `as_of` | ISO 8601 | null | Point-in-time target (historical recall) |
+| `mode` | enum | `hybrid` | `head`, `hybrid`, `historical` |
 | `time_intent` | enum | `auto` | `auto`, `current`, `recent`, `historical` |
 | `temporal_weight` | float | null | Override temporal influence (0.0–1.0) |
 

@@ -30,6 +30,18 @@ pub struct Session {
     /// Token count of the summary (for budget tracking).
     pub summary_tokens: u32,
 
+    /// Pointer to the latest episode in this session (Thread HEAD).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_episode_id: Option<Uuid>,
+
+    /// When the session HEAD was last updated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_updated_at: Option<DateTime<Utc>>,
+
+    /// Monotonic counter incremented whenever HEAD advances.
+    #[serde(default)]
+    pub head_version: u64,
+
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 
@@ -91,6 +103,9 @@ impl Session {
             episode_count: 0,
             summary: None,
             summary_tokens: 0,
+            head_episode_id: None,
+            head_updated_at: None,
+            head_version: 0,
             created_at: now,
             updated_at: now,
             last_activity_at: None,
@@ -109,9 +124,12 @@ impl Session {
     }
 
     /// Record that a new episode was added.
-    pub fn record_episode(&mut self) {
+    pub fn record_episode(&mut self, episode_id: Uuid, event_time: DateTime<Utc>) {
         self.episode_count += 1;
         self.last_activity_at = Some(Utc::now());
+        self.head_episode_id = Some(episode_id);
+        self.head_updated_at = Some(event_time);
+        self.head_version += 1;
         self.updated_at = Utc::now();
     }
 }
@@ -133,6 +151,9 @@ mod tests {
         assert_eq!(session.episode_count, 0);
         assert!(session.summary.is_none());
         assert!(session.last_activity_at.is_none());
+        assert!(session.head_episode_id.is_none());
+        assert!(session.head_updated_at.is_none());
+        assert_eq!(session.head_version, 0);
     }
 
     #[test]
@@ -143,11 +164,14 @@ mod tests {
             name: None,
             metadata: serde_json::json!({}),
         });
-        session.record_episode();
-        session.record_episode();
-        session.record_episode();
+        session.record_episode(Uuid::now_v7(), Utc::now());
+        session.record_episode(Uuid::now_v7(), Utc::now());
+        session.record_episode(Uuid::now_v7(), Utc::now());
         assert_eq!(session.episode_count, 3);
         assert!(session.last_activity_at.is_some());
+        assert!(session.head_episode_id.is_some());
+        assert!(session.head_updated_at.is_some());
+        assert_eq!(session.head_version, 3);
     }
 
     #[test]

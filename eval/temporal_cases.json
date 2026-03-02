@@ -1,0 +1,69 @@
+[
+  {
+    "name": "preference_change_current",
+    "memories": [
+      {
+        "content": "I prefer Adidas running shoes.",
+        "created_at": "2024-01-10T12:00:00Z"
+      },
+      {
+        "content": "I switched and now prefer Nike running shoes.",
+        "created_at": "2026-03-01T12:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What running shoes do I prefer now?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["Nike"],
+      "not_contains": ["prefer Adidas running shoes"]
+    }
+  },
+  {
+    "name": "preference_change_historical",
+    "memories": [
+      {
+        "content": "I prefer Adidas running shoes.",
+        "created_at": "2024-01-10T12:00:00Z"
+      },
+      {
+        "content": "I switched and now prefer Nike running shoes.",
+        "created_at": "2026-03-01T12:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What did I prefer as of 2024?",
+      "mode": "historical",
+      "as_of": "2024-06-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["Adidas"],
+      "not_contains": ["prefer Nike"]
+    }
+  },
+  {
+    "name": "recent_focus_head",
+    "memories": [
+      {
+        "content": "I was debugging Redis indexing yesterday.",
+        "created_at": "2026-02-28T11:00:00Z"
+      },
+      {
+        "content": "Today I am implementing thread head mode for memory retrieval.",
+        "created_at": "2026-03-02T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What am I focused on right now?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["thread head mode"],
+      "not_contains": ["debugging Redis indexing"]
+    }
+  }
+]

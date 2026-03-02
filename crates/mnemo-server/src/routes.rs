@@ -405,6 +405,35 @@ struct MemoryContextRequest {
     as_of: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     temporal_weight: Option<f32>,
+    #[serde(default)]
+    mode: Option<MemoryContextMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MemoryContextMode {
+    Head,
+    Hybrid,
+    Historical,
+}
+
+#[derive(Serialize)]
+struct MemoryHeadInfo {
+    session_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    episode_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    version: u64,
+}
+
+#[derive(Serialize)]
+struct MemoryContextResponse {
+    #[serde(flatten)]
+    context: ContextBlock,
+    mode: MemoryContextMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    head: Option<MemoryHeadInfo>,
 }
 
 async fn remember_memory(
@@ -479,20 +508,21 @@ async fn get_memory_context(
     State(state): State<AppState>,
     Path(user): Path<String>,
     Json(req): Json<MemoryContextRequest>,
-) -> Result<Json<ContextBlock>, AppError> {
+) -> Result<Json<MemoryContextResponse>, AppError> {
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
 
     let user = find_user_by_identifier(&state, user.trim()).await?;
 
-    let session_id = match req.session.and_then(|s| {
+    let requested_session_name = req.session.and_then(|s| {
         let trimmed = s.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
-    }) {
-        Some(name) => Some(find_session_by_name(&state, user.id, &name).await?.id),
-        None => None,
-    };
+    });
+    let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
+    let scoped_session =
+        resolve_session_scope(&state, user.id, mode, requested_session_name).await?;
+    let session_id = scoped_session.as_ref().map(|s| s.id);
 
     let max_tokens = req.max_tokens.unwrap_or(500);
     let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
@@ -522,7 +552,91 @@ async fn get_memory_context(
         &mut context,
     )
     .await?;
-    Ok(Json(context))
+
+    let head = scoped_session.as_ref().map(|session| MemoryHeadInfo {
+        session_id: session.id,
+        episode_id: session.head_episode_id,
+        updated_at: session.head_updated_at.or(session.last_activity_at),
+        version: session.head_version,
+    });
+
+    Ok(Json(MemoryContextResponse {
+        context,
+        mode,
+        head,
+    }))
+}
+
+async fn resolve_session_scope(
+    state: &AppState,
+    user_id: Uuid,
+    mode: MemoryContextMode,
+    session_name: Option<String>,
+) -> Result<Option<Session>, MnemoError> {
+    if let Some(name) = session_name {
+        let session = find_session_by_name(state, user_id, &name).await?;
+        return Ok(Some(session));
+    }
+
+    match mode {
+        MemoryContextMode::Head => find_head_session_for_user(state, user_id).await,
+        MemoryContextMode::Hybrid | MemoryContextMode::Historical => Ok(None),
+    }
+}
+
+async fn find_head_session_for_user(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<Option<Session>, MnemoError> {
+    let mut after = None;
+    let mut best: Option<Session> = None;
+
+    loop {
+        let sessions = state
+            .state_store
+            .list_sessions(
+                user_id,
+                ListSessionsParams {
+                    limit: 200,
+                    after,
+                    since: None,
+                },
+            )
+            .await?;
+
+        if sessions.is_empty() {
+            break;
+        }
+
+        for session in sessions.iter().cloned() {
+            let candidate_time = session
+                .head_updated_at
+                .or(session.last_activity_at)
+                .unwrap_or(session.updated_at);
+
+            let is_better = match &best {
+                Some(current_best) => {
+                    let current_time = current_best
+                        .head_updated_at
+                        .or(current_best.last_activity_at)
+                        .unwrap_or(current_best.updated_at);
+                    candidate_time > current_time
+                }
+                None => true,
+            };
+
+            if is_better {
+                best = Some(session);
+            }
+        }
+
+        after = sessions.last().map(|s| s.id);
+        if after.is_none() || sessions.len() < 200 {
+            break;
+        }
+    }
+
+    Ok(best)
 }
 
 async fn maybe_attach_recent_episode_fallback(

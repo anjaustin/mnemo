@@ -23,6 +23,12 @@ Mnemo is a free, open-source, self-hosted memory and context engine for AI agent
 - `./tests/e2e.sh` (server running)
 - `cargo test -p mnemo-server --test memory_api -- --test-threads=1` (memory falsification)
 
+## Why Mnemo (Measured)
+
+- Temporal eval harness (`eval/temporal_eval.py`) currently shows better accuracy on time-sensitive recall than baseline mode in local runs.
+- Stale-fact rate is explicitly tracked and reported in `docs/EVALUATION.md`.
+- Memory API behavior is guarded by falsification tests in CI (`memory-falsification` workflow).
+
 ## Quick Start
 
 ```bash
@@ -128,6 +134,7 @@ Old facts aren't deleted. This enables point-in-time queries and change tracking
 |----------|-------------|
 | [API Reference](docs/API.md) | Every endpoint with request/response examples |
 | [Architecture](docs/ARCHITECTURE.md) | Data model, temporal reasoning, pipeline internals |
+| [Evaluation Playbook](docs/EVALUATION.md) | Reproducible temporal quality and latency measurements |
 | [Thread HEAD Proposal](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
 | [Temporal Vectorization](docs/TEMPORAL_VECTORIZATION.md) | Time-aware retrieval scoring and rollout plan |
 | [Testing Guide](docs/TESTING.md) | Workspace, E2E, and falsification test commands |

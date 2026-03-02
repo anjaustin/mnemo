@@ -23,8 +23,8 @@ async fn build_test_app() -> axum::Router {
 
     let uid = Uuid::now_v7();
     let redis_prefix = format!("memory_api_test:{}:", uid);
-    let qdrant_prefix = std::env::var("MNEMO_TEST_QDRANT_PREFIX")
-        .unwrap_or_else(|_| "mnemo_".to_string());
+    let qdrant_prefix =
+        std::env::var("MNEMO_TEST_QDRANT_PREFIX").unwrap_or_else(|_| "mnemo_".to_string());
 
     let state_store = Arc::new(
         RedisStateStore::new(&redis_url, &redis_prefix)
@@ -216,5 +216,97 @@ async fn test_memory_api_immediate_recall_fallback_contains_recent_text() {
     assert!(
         text.contains(marker),
         "expected immediate recall to include marker, got context: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_memory_api_head_mode_returns_thread_head_diagnostics() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "head-mode-user",
+            "external_id": "head-mode-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session_a) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "a" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_a_id = session_a["id"].as_str().unwrap().to_string();
+
+    let (status, session_b) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "b" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_b_id = session_b["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_a_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "old-session-marker",
+            "created_at": "2024-01-10T12:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_b_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "new-session-marker",
+            "created_at": "2026-03-01T12:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/head-mode-user/context",
+        serde_json::json!({
+            "query": "what is current?",
+            "mode": "head",
+            "max_tokens": 600
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(context["mode"], "head");
+    assert_eq!(context["head"]["session_id"], session_b_id);
+    assert!(context["head"]["episode_id"].is_string());
+    assert_eq!(context["head"]["version"], 1);
+    assert!(
+        context["context"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("new-session-marker"),
+        "expected head mode context to include latest session marker"
     );
 }
