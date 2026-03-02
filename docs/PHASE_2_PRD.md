@@ -26,6 +26,10 @@ Phase 2 focuses on four initiatives:
 3. **Metadata index layer** (filtering and planner-guided retrieval)
 4. **Evaluation + competitive publication** (evidence-backed narrative)
 
+P0 cross-cutting candidate:
+
+5. **Agent Identity Substrate** (homeostatic identity + homeoadaptive experience layer)
+
 ---
 
 ## 3. Success Criteria (Release Gates)
@@ -60,6 +64,7 @@ Phase 2 is complete when all three gates pass.
 | M2: Temporal retrieval v2 | complete | Retrieval | improved temporal ranking + diagnostics + eval delta vs baseline |
 | M3: Metadata index layer v1 | in_progress | Storage/Retrieval | metadata prefilter planner behind flag + latency/candidate metrics |
 | M4: Competitive publication v1 | in_progress | DevRel/Eng | published scorecard with run IDs and methodology caveats |
+| M5: Agent Identity Substrate P0 | planned | Core/Retrieval | isolated identity+experience planes, guarded updates, identity-aware context, falsification coverage |
 
 ---
 
@@ -135,13 +140,15 @@ Recommended execution order:
 
 1. M1 Thread HEAD completion
 2. M2 Temporal retrieval v2
-3. M4 Competitive publication v1 (parallel once evidence exists)
-4. M3 Metadata index layer v1
+3. M3 Metadata index layer v1
+4. M5 Agent Identity Substrate P0
+5. M4 Competitive publication v1 (parallel once evidence exists)
 
 Rationale:
 - M1 + M2 directly improve user-visible correctness.
-- M4 proves value early and guides prioritization.
-- M3 is high leverage but can follow once core behavior is stable.
+- M3 improves precision and scale control before identity layering.
+- M5 addresses long-run identity stability and self/user attribution quality.
+- M4 proves value continuously and guides prioritization.
 
 ---
 
@@ -163,5 +170,6 @@ Rationale:
 - `docs/THREAD_HEAD.md`
 - `docs/TEMPORAL_VECTORIZATION.md`
 - `docs/METADATA_INDEX_LAYER.md`
+- `docs/AGENT_IDENTITY_SUBSTRATE.md`
 - `docs/EVALUATION.md`
 - `docs/COMPETITIVE.md`
