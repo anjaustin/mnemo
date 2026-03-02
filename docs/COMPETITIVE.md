@@ -18,6 +18,12 @@ Show measurable user outcomes, not architecture claims:
 3. Record full environment metadata (machine, region, model, retries).
 4. Publish both aggregate metrics and raw run artifacts.
 
+Command used for side-by-side runs:
+
+```bash
+python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key
+```
+
 ## Scenario packs
 
 - Temporal preference changes
@@ -37,7 +43,7 @@ Current local pack: `eval/temporal_cases.json`.
 
 ## Internal snapshot (for development)
 
-From `eval/temporal_eval.py` local run on 2026-03-02:
+From `eval/temporal_eval.py` local run on 2026-03-02 (Mnemo target):
 
 | Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
 |---|---:|---:|---:|---:|

@@ -10,16 +10,24 @@ This is the reproducible path for proving Mnemo's memory quality and reliability
 
 ## Local temporal benchmark
 
-Run the built-in harness:
+Run the built-in harness (Mnemo only):
 
 ```bash
-python3 eval/temporal_eval.py --base-url http://localhost:8080
+python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080
 ```
 
-It executes two profiles over the same temporal dataset:
+Run Mnemo + Zep comparison (requires `zep_api.key`):
+
+```bash
+python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key
+```
+
+For Mnemo it executes two profiles over the same temporal dataset:
 
 - `temporal`: uses `mode`, `time_intent`, `as_of`, and temporal weighting
 - `baseline`: same queries without temporal controls
+
+For Zep it runs baseline-style memory retrieval on the same scenario pack.
 
 Current dataset: `eval/temporal_cases.json`.
 
@@ -34,7 +42,7 @@ Expected output format:
 
 ## Latest local snapshot
 
-From a local run on 2026-03-02 (`python3 eval/temporal_eval.py --base-url http://localhost:8080`):
+From a local run on 2026-03-02 (`python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080`):
 
 | Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
 |---|---:|---:|---:|---:|

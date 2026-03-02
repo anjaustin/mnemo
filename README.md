@@ -30,6 +30,11 @@ Mnemo is a free, open-source, self-hosted memory and context engine for AI agent
 - Memory API behavior is guarded by falsification tests in CI (`memory-falsification` workflow).
 - Competitive benchmarking publication format is defined in `docs/COMPETITIVE.md`.
 
+Quick benchmark commands:
+
+- Mnemo only: `python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080`
+- Mnemo vs Zep: `python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key`
+
 ## Quick Start
 
 ```bash
