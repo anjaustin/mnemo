@@ -504,8 +504,12 @@ struct AgentContextResponse {
 
 #[derive(Serialize)]
 struct MetadataFilterDiagnostics {
+    prefilter_enabled: bool,
     candidate_count_before_filters: u32,
     candidate_count_after_filters: u32,
+    candidate_reduction_ratio: f32,
+    planner_latency_ms: u64,
+    relaxed_fallback_applied: bool,
     applied_filters: serde_json::Value,
 }
 
@@ -597,32 +601,73 @@ async fn get_memory_context(
         resolve_session_scope(&state, user.id, mode, requested_session_name).await?;
     let mut session_id = scoped_session.as_ref().map(|s| s.id);
 
+    let planner_started = std::time::Instant::now();
     let (candidate_episode_ids, metadata_filter_diagnostics) =
         if let Some(filters) = req.filters.as_ref() {
-            let metadata =
-                collect_metadata_candidates(&state, user.id, session_id, filters, 400).await?;
+            if !state.metadata_prefilter.enabled {
+                (
+                    None,
+                    Some(MetadataFilterDiagnostics {
+                        prefilter_enabled: false,
+                        candidate_count_before_filters: 0,
+                        candidate_count_after_filters: 0,
+                        candidate_reduction_ratio: 0.0,
+                        planner_latency_ms: 0,
+                        relaxed_fallback_applied: false,
+                        applied_filters: serde_json::to_value(filters)
+                            .unwrap_or_else(|_| serde_json::json!({})),
+                    }),
+                )
+            } else {
+                let metadata = collect_metadata_candidates(
+                    &state,
+                    user.id,
+                    session_id,
+                    filters,
+                    state.metadata_prefilter.scan_limit,
+                )
+                .await?;
 
-            if session_id.is_none() {
-                if let Some(scoped) = dominant_session(&metadata.filtered_episodes) {
-                    session_id = Some(scoped);
+                let mut filtered_episodes = metadata.filtered_episodes;
+                let mut relaxed_fallback_applied = false;
+                if filtered_episodes.is_empty() && state.metadata_prefilter.relax_if_empty {
+                    filtered_episodes = metadata.scanned_episodes;
+                    relaxed_fallback_applied = true;
                 }
-            }
 
-            (
-                Some(
-                    metadata
-                        .filtered_episodes
-                        .iter()
-                        .map(|e| e.id)
-                        .collect::<std::collections::HashSet<_>>(),
-                ),
-                Some(MetadataFilterDiagnostics {
-                    candidate_count_before_filters: metadata.scanned_count,
-                    candidate_count_after_filters: metadata.filtered_episodes.len() as u32,
-                    applied_filters: serde_json::to_value(filters)
-                        .unwrap_or_else(|_| serde_json::json!({})),
-                }),
-            )
+                if session_id.is_none() {
+                    if let Some(scoped) = dominant_session(&filtered_episodes) {
+                        session_id = Some(scoped);
+                    }
+                }
+
+                let before = metadata.scanned_count;
+                let after = filtered_episodes.len() as u32;
+                let reduction_ratio = if before == 0 {
+                    0.0
+                } else {
+                    ((before.saturating_sub(after)) as f32) / (before as f32)
+                };
+
+                (
+                    Some(
+                        filtered_episodes
+                            .iter()
+                            .map(|e| e.id)
+                            .collect::<std::collections::HashSet<_>>(),
+                    ),
+                    Some(MetadataFilterDiagnostics {
+                        prefilter_enabled: true,
+                        candidate_count_before_filters: before,
+                        candidate_count_after_filters: after,
+                        candidate_reduction_ratio: reduction_ratio,
+                        planner_latency_ms: planner_started.elapsed().as_millis() as u64,
+                        relaxed_fallback_applied,
+                        applied_filters: serde_json::to_value(filters)
+                            .unwrap_or_else(|_| serde_json::json!({})),
+                    }),
+                )
+            }
         } else {
             (None, None)
         };
@@ -896,6 +941,7 @@ fn validate_identity_core(core: &serde_json::Value) -> Result<(), AppError> {
 
 struct MetadataCandidates {
     scanned_count: u32,
+    scanned_episodes: Vec<Episode>,
     filtered_episodes: Vec<Episode>,
 }
 
@@ -954,10 +1000,12 @@ async fn collect_metadata_candidates(
     }
 
     let scanned_count = episodes.len() as u32;
+    let scanned_episodes = episodes.clone();
     episodes.retain(|episode| matches_episode_filters(episode, filters));
 
     Ok(MetadataCandidates {
         scanned_count,
+        scanned_episodes,
         filtered_episodes: episodes,
     })
 }

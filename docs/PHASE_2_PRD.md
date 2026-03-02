@@ -62,7 +62,7 @@ Phase 2 is complete when all three gates pass.
 |---|---|---|---|
 | M1: Thread HEAD completion | complete | Core API | HEAD metadata + response diagnostics + SDK ergonomics + tests |
 | M2: Temporal retrieval v2 | complete | Retrieval | improved temporal ranking + diagnostics + eval delta vs baseline |
-| M3: Metadata index layer v1 | in_progress | Storage/Retrieval | metadata prefilter planner behind flag + latency/candidate metrics |
+| M3: Metadata index layer v1 | complete | Storage/Retrieval | metadata prefilter planner behind flag + latency/candidate metrics |
 | M4: Competitive publication v1 | in_progress | DevRel/Eng | published scorecard with run IDs and methodology caveats |
 | M5: Agent Identity Substrate P0 | in_progress | Core/Retrieval | isolated identity+experience planes, guarded updates, identity-aware context, falsification coverage |
 

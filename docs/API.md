@@ -104,8 +104,12 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
     "episodes_scored": 2
   },
   "metadata_filter_diagnostics": {
+    "prefilter_enabled": true,
     "candidate_count_before_filters": 18,
     "candidate_count_after_filters": 4,
+    "candidate_reduction_ratio": 0.78,
+    "planner_latency_ms": 3,
+    "relaxed_fallback_applied": false,
     "applied_filters": {
       "roles": ["user"],
       "tags_any": ["priority"]

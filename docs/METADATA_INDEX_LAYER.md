@@ -1,7 +1,7 @@
 # Metadata Index Layer (Design Spec)
 
 Date: 2026-03-02
-Status: in-progress-v1
+Status: implemented-v1
 
 ## Goal
 
@@ -94,7 +94,11 @@ Planned retrieval stages:
 - A metadata prefilter planner scans candidate episodes, applies filters, and emits diagnostics:
   - `candidate_count_before_filters`
   - `candidate_count_after_filters`
+  - `candidate_reduction_ratio`
+  - `planner_latency_ms`
   - `applied_filters`
+- Planner controls are configurable (`metadata_prefilter_enabled`, `metadata_scan_limit`, `metadata_relax_if_empty`).
+- Optional relaxed fallback can recover from over-pruning when enabled.
 - Filtered candidate sessions influence retrieval session scoping when explicit session is not provided.
 
 ### Example planner behavior

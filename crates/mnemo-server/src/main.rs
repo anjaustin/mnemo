@@ -8,7 +8,7 @@ use tracing_subscriber::EnvFilter;
 use mnemo_server::config::MnemoConfig;
 use mnemo_server::middleware::{AuthConfig, AuthLayer};
 use mnemo_server::routes::build_router;
-use mnemo_server::state::AppState;
+use mnemo_server::state::{AppState, MetadataPrefilterConfig};
 
 use mnemo_graph::GraphEngine;
 use mnemo_ingest::{IngestConfig, IngestWorker};
@@ -27,7 +27,10 @@ async fn main() -> anyhow::Result<()> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(&config.observability.log_level));
     if config.observability.log_format == "json" {
-        tracing_subscriber::fmt().with_env_filter(env_filter).json().init();
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .json()
+            .init();
     } else {
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
     }
@@ -36,12 +39,16 @@ async fn main() -> anyhow::Result<()> {
 
     // Storage
     tracing::info!(url = %config.redis.url, "Connecting to Redis");
-    let state_store = Arc::new(
-        RedisStateStore::new(&config.redis.url, &config.redis.prefix).await?
-    );
+    let state_store =
+        Arc::new(RedisStateStore::new(&config.redis.url, &config.redis.prefix).await?);
     tracing::info!(url = %config.qdrant.url, "Connecting to Qdrant");
     let vector_store = Arc::new(
-        QdrantVectorStore::new(&config.qdrant.url, &config.qdrant.collection_prefix, config.embedding.dimensions).await?
+        QdrantVectorStore::new(
+            &config.qdrant.url,
+            &config.qdrant.collection_prefix,
+            config.embedding.dimensions,
+        )
+        .await?,
     );
 
     // Embedder
@@ -53,7 +60,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Engines (don't need LLM, only embedder)
     let retrieval = Arc::new(RetrievalEngine::new(
-        state_store.clone(), vector_store.clone(), embedder.clone(),
+        state_store.clone(),
+        vector_store.clone(),
+        embedder.clone(),
     ));
     let graph = Arc::new(GraphEngine::new(state_store.clone()));
 
@@ -72,7 +81,11 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!(model = %config.llm.model, "Using Anthropic provider");
             let llm = Arc::new(AnthropicProvider::new(config.llm_config()));
             let worker = IngestWorker::new(
-                state_store.clone(), vector_store.clone(), llm, embedder.clone(), ingest_config,
+                state_store.clone(),
+                vector_store.clone(),
+                llm,
+                embedder.clone(),
+                ingest_config,
             );
             tokio::spawn(async move { worker.run().await });
         }
@@ -80,7 +93,11 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!(provider = %config.llm.provider, model = %config.llm.model, "Using OpenAI-compatible provider");
             let llm = Arc::new(OpenAiCompatibleProvider::new(config.llm_config()));
             let worker = IngestWorker::new(
-                state_store.clone(), vector_store.clone(), llm, embedder.clone(), ingest_config,
+                state_store.clone(),
+                vector_store.clone(),
+                llm,
+                embedder.clone(),
+                ingest_config,
             );
             tokio::spawn(async move { worker.run().await });
         }
@@ -97,7 +114,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // HTTP server
-    let app_state = AppState { state_store, vector_store, retrieval, graph };
+    let app_state = AppState {
+        state_store,
+        vector_store,
+        retrieval,
+        graph,
+        metadata_prefilter: MetadataPrefilterConfig {
+            enabled: config.retrieval.metadata_prefilter_enabled,
+            scan_limit: config.retrieval.metadata_scan_limit,
+            relax_if_empty: config.retrieval.metadata_relax_if_empty,
+        },
+    };
     let app = build_router(app_state)
         .layer(AuthLayer::new(auth_config))
         .layer(TraceLayer::new_for_http())
@@ -107,7 +134,8 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!(addr = %addr, "Mnemo server listening");
 
-    println!(r#"
+    println!(
+        r#"
   __  __
  |  \/  |_ __   ___ _ __ ___   ___
  | |\/| | '_ \ / _ \ '_ ` _ \ / _ \
@@ -115,7 +143,10 @@ async fn main() -> anyhow::Result<()> {
  |_|  |_|_| |_|\___|_| |_| |_|\___/
 
  v{} | {}
-"#, env!("CARGO_PKG_VERSION"), addr);
+"#,
+        env!("CARGO_PKG_VERSION"),
+        addr
+    );
 
     axum::serve(listener, app).await?;
     Ok(())

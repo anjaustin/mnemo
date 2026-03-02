@@ -12,10 +12,19 @@ use mnemo_graph::GraphEngine;
 use mnemo_llm::OpenAiCompatibleEmbedder;
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_server::routes::build_router;
-use mnemo_server::state::AppState;
+use mnemo_server::state::{AppState, MetadataPrefilterConfig};
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
 async fn build_test_app() -> axum::Router {
+    build_test_app_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await
+}
+
+async fn build_test_app_with_prefilter(prefilter: MetadataPrefilterConfig) -> axum::Router {
     let redis_url = std::env::var("MNEMO_TEST_REDIS_URL")
         .unwrap_or_else(|_| "redis://localhost:6379".to_string());
     let qdrant_url = std::env::var("MNEMO_TEST_QDRANT_URL")
@@ -67,6 +76,7 @@ async fn build_test_app() -> axum::Router {
         vector_store,
         retrieval,
         graph,
+        metadata_prefilter: prefilter,
     })
 }
 
@@ -634,12 +644,56 @@ async fn test_memory_api_metadata_filters_and_diagnostics() {
         context["metadata_filter_diagnostics"]["candidate_count_after_filters"],
         1
     );
+    assert_eq!(
+        context["metadata_filter_diagnostics"]["prefilter_enabled"],
+        true
+    );
+    assert!(context["metadata_filter_diagnostics"]["planner_latency_ms"].is_number());
 
     let episodes = context["episodes"].as_array().cloned().unwrap_or_default();
     if !episodes.is_empty() {
         let top_preview = episodes[0]["preview"].as_str().unwrap_or_default();
         assert!(top_preview.contains("Priority outage"));
     }
+}
+
+#[tokio::test]
+async fn test_memory_api_metadata_prefilter_disabled_diagnostics() {
+    let app = build_test_app_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 200,
+        relax_if_empty: false,
+    })
+    .await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "prefilter-disabled-user",
+            "text": "Priority incident happened today"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/prefilter-disabled-user/context",
+        serde_json::json!({
+            "query": "What incidents happened?",
+            "filters": {"tags_any": ["priority"]},
+            "max_tokens": 600
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        context["metadata_filter_diagnostics"]["prefilter_enabled"],
+        false
+    );
 }
 
 #[tokio::test]

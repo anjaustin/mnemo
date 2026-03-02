@@ -1,5 +1,5 @@
-use serde::Deserialize;
 use mnemo_core::error::MnemoError;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MnemoConfig {
@@ -18,6 +18,8 @@ pub struct MnemoConfig {
     #[serde(default)]
     pub extraction: ExtractionSection,
     #[serde(default)]
+    pub retrieval: RetrievalSection,
+    #[serde(default)]
     pub observability: ObservabilitySection,
 }
 
@@ -33,7 +35,11 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self { host: default_host(), port: default_port(), workers: 0 }
+        Self {
+            host: default_host(),
+            port: default_port(),
+            workers: 0,
+        }
     }
 }
 
@@ -47,7 +53,10 @@ pub struct AuthSection {
 
 impl Default for AuthSection {
     fn default() -> Self {
-        Self { enabled: false, api_keys: Vec::new() }
+        Self {
+            enabled: false,
+            api_keys: Vec::new(),
+        }
     }
 }
 
@@ -61,7 +70,10 @@ pub struct RedisConfig {
 
 impl Default for RedisConfig {
     fn default() -> Self {
-        Self { url: default_redis_url(), prefix: default_prefix() }
+        Self {
+            url: default_redis_url(),
+            prefix: default_prefix(),
+        }
     }
 }
 
@@ -75,7 +87,10 @@ pub struct QdrantConfig {
 
 impl Default for QdrantConfig {
     fn default() -> Self {
-        Self { url: default_qdrant_url(), collection_prefix: default_qdrant_prefix() }
+        Self {
+            url: default_qdrant_url(),
+            collection_prefix: default_qdrant_prefix(),
+        }
     }
 }
 
@@ -158,6 +173,26 @@ impl Default for ExtractionSection {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct RetrievalSection {
+    #[serde(default)]
+    pub metadata_prefilter_enabled: bool,
+    #[serde(default = "default_metadata_scan_limit")]
+    pub metadata_scan_limit: u32,
+    #[serde(default)]
+    pub metadata_relax_if_empty: bool,
+}
+
+impl Default for RetrievalSection {
+    fn default() -> Self {
+        Self {
+            metadata_prefilter_enabled: true,
+            metadata_scan_limit: default_metadata_scan_limit(),
+            metadata_relax_if_empty: false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct ObservabilitySection {
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -167,29 +202,71 @@ pub struct ObservabilitySection {
 
 impl Default for ObservabilitySection {
     fn default() -> Self {
-        Self { log_level: default_log_level(), log_format: default_log_format() }
+        Self {
+            log_level: default_log_level(),
+            log_format: default_log_format(),
+        }
     }
 }
 
 // Default value functions
-fn default_host() -> String { "0.0.0.0".into() }
-fn default_port() -> u16 { 8080 }
-fn default_redis_url() -> String { "redis://localhost:6379".into() }
-fn default_prefix() -> String { "mnemo:".into() }
-fn default_qdrant_url() -> String { "http://localhost:6334".into() }
-fn default_qdrant_prefix() -> String { "mnemo_".into() }
-fn default_llm_provider() -> String { "openai".into() }
-fn default_llm_model() -> String { "gpt-4o-mini".into() }
-fn default_llm_max_tokens() -> u32 { 2048 }
-fn default_embed_provider() -> String { "openai".into() }
-fn default_embed_model() -> String { "text-embedding-3-small".into() }
-fn default_dimensions() -> u32 { 1536 }
-fn default_batch_size() -> u32 { 10 }
-fn default_concurrency() -> usize { 4 }
-fn default_max_retries() -> u32 { 3 }
-fn default_poll_interval() -> u64 { 500 }
-fn default_log_level() -> String { "info".into() }
-fn default_log_format() -> String { "pretty".into() }
+fn default_host() -> String {
+    "0.0.0.0".into()
+}
+fn default_port() -> u16 {
+    8080
+}
+fn default_redis_url() -> String {
+    "redis://localhost:6379".into()
+}
+fn default_prefix() -> String {
+    "mnemo:".into()
+}
+fn default_qdrant_url() -> String {
+    "http://localhost:6334".into()
+}
+fn default_qdrant_prefix() -> String {
+    "mnemo_".into()
+}
+fn default_llm_provider() -> String {
+    "openai".into()
+}
+fn default_llm_model() -> String {
+    "gpt-4o-mini".into()
+}
+fn default_llm_max_tokens() -> u32 {
+    2048
+}
+fn default_embed_provider() -> String {
+    "openai".into()
+}
+fn default_embed_model() -> String {
+    "text-embedding-3-small".into()
+}
+fn default_dimensions() -> u32 {
+    1536
+}
+fn default_batch_size() -> u32 {
+    10
+}
+fn default_concurrency() -> usize {
+    4
+}
+fn default_max_retries() -> u32 {
+    3
+}
+fn default_poll_interval() -> u64 {
+    500
+}
+fn default_metadata_scan_limit() -> u32 {
+    400
+}
+fn default_log_level() -> String {
+    "info".into()
+}
+fn default_log_format() -> String {
+    "pretty".into()
+}
 
 impl MnemoConfig {
     /// Load config from TOML file, then apply environment variable overrides.
@@ -204,28 +281,69 @@ impl MnemoConfig {
         };
 
         // Environment variable overrides
-        if let Ok(v) = std::env::var("MNEMO_SERVER_HOST") { config.server.host = v; }
+        if let Ok(v) = std::env::var("MNEMO_SERVER_HOST") {
+            config.server.host = v;
+        }
         if let Ok(v) = std::env::var("MNEMO_SERVER_PORT") {
             config.server.port = v.parse().unwrap_or(config.server.port);
         }
-        if let Ok(v) = std::env::var("MNEMO_REDIS_URL") { config.redis.url = v; }
-        if let Ok(v) = std::env::var("MNEMO_QDRANT_URL") { config.qdrant.url = v; }
-        if let Ok(v) = std::env::var("MNEMO_LLM_PROVIDER") { config.llm.provider = v; }
-        if let Ok(v) = std::env::var("MNEMO_LLM_API_KEY") { config.llm.api_key = v; }
-        if let Ok(v) = std::env::var("MNEMO_LLM_MODEL") { config.llm.model = v; }
-        if let Ok(v) = std::env::var("MNEMO_LLM_BASE_URL") { config.llm.base_url = v; }
-        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_API_KEY") { config.embedding.api_key = v; }
-        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_MODEL") { config.embedding.model = v; }
-        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_BASE_URL") { config.embedding.base_url = v; }
-        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_DIMENSIONS") { if let Ok(d) = v.parse() { config.embedding.dimensions = d; } }
+        if let Ok(v) = std::env::var("MNEMO_REDIS_URL") {
+            config.redis.url = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_QDRANT_URL") {
+            config.qdrant.url = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_LLM_PROVIDER") {
+            config.llm.provider = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_LLM_API_KEY") {
+            config.llm.api_key = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_LLM_MODEL") {
+            config.llm.model = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_LLM_BASE_URL") {
+            config.llm.base_url = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_API_KEY") {
+            config.embedding.api_key = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_MODEL") {
+            config.embedding.model = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_BASE_URL") {
+            config.embedding.base_url = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_DIMENSIONS") {
+            if let Ok(d) = v.parse() {
+                config.embedding.dimensions = d;
+            }
+        }
 
         // Auth overrides
         if let Ok(v) = std::env::var("MNEMO_AUTH_ENABLED") {
             config.auth.enabled = v == "true" || v == "1";
         }
         if let Ok(v) = std::env::var("MNEMO_AUTH_API_KEYS") {
-            let keys: Vec<String> = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            let keys: Vec<String> = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
             config.auth.api_keys.extend(keys);
+        }
+
+        // Retrieval / metadata prefilter overrides
+        if let Ok(v) = std::env::var("MNEMO_METADATA_PREFILTER_ENABLED") {
+            config.retrieval.metadata_prefilter_enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_METADATA_SCAN_LIMIT") {
+            if let Ok(n) = v.parse() {
+                config.retrieval.metadata_scan_limit = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_METADATA_RELAX_IF_EMPTY") {
+            config.retrieval.metadata_relax_if_empty = v == "true" || v == "1";
         }
 
         Ok(config)
@@ -234,9 +352,17 @@ impl MnemoConfig {
     pub fn llm_config(&self) -> mnemo_core::traits::llm::LlmConfig {
         mnemo_core::traits::llm::LlmConfig {
             provider: self.llm.provider.clone(),
-            api_key: if self.llm.api_key.is_empty() { None } else { Some(self.llm.api_key.clone()) },
+            api_key: if self.llm.api_key.is_empty() {
+                None
+            } else {
+                Some(self.llm.api_key.clone())
+            },
             model: self.llm.model.clone(),
-            base_url: if self.llm.base_url.is_empty() { None } else { Some(self.llm.base_url.clone()) },
+            base_url: if self.llm.base_url.is_empty() {
+                None
+            } else {
+                Some(self.llm.base_url.clone())
+            },
             temperature: self.llm.temperature,
             max_tokens: self.llm.max_tokens,
         }
@@ -245,9 +371,17 @@ impl MnemoConfig {
     pub fn embedding_config(&self) -> mnemo_core::traits::llm::EmbeddingConfig {
         mnemo_core::traits::llm::EmbeddingConfig {
             provider: self.embedding.provider.clone(),
-            api_key: if self.embedding.api_key.is_empty() { None } else { Some(self.embedding.api_key.clone()) },
+            api_key: if self.embedding.api_key.is_empty() {
+                None
+            } else {
+                Some(self.embedding.api_key.clone())
+            },
             model: self.embedding.model.clone(),
-            base_url: if self.embedding.base_url.is_empty() { None } else { Some(self.embedding.base_url.clone()) },
+            base_url: if self.embedding.base_url.is_empty() {
+                None
+            } else {
+                Some(self.embedding.base_url.clone())
+            },
             dimensions: self.embedding.dimensions,
         }
     }
@@ -263,6 +397,7 @@ impl Default for MnemoConfig {
             llm: LlmSection::default(),
             embedding: EmbeddingSection::default(),
             extraction: ExtractionSection::default(),
+            retrieval: RetrievalSection::default(),
             observability: ObservabilitySection::default(),
         }
     }
