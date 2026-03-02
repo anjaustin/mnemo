@@ -54,14 +54,15 @@ Current local pack: `eval/temporal_cases.json`.
 
 | System | Temporal Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) | Setup to first recall (min) | Evidence |
 |---|---:|---:|---:|---:|---:|
-| Mnemo (temporal mode) | 100.0% | 0.0% | 51 | 51 | _pending_ | `benchmark-eval` push run `22591312119` |
-| Mnemo (baseline mode) | 66.7% | 33.3% | 48 | 48 | _pending_ | `benchmark-eval` push run `22591312119` |
-| Zep (baseline adapter) | _pending successful run_ | _pending successful run_ | _pending successful run_ | _pending successful run_ | _pending_ | manual run `22591413221` failed: missing `ZEP_API_KEY` secret |
+| Mnemo (temporal mode) | 100.0% | 0.0% | 74 | 74 | _pending_ | `benchmark-eval` manual run `22591534300` |
+| Mnemo (baseline mode) | 66.7% | 33.3% | 60 | 60 | _pending_ | `benchmark-eval` manual run `22591534300` |
+| Zep (baseline adapter) | 0.0% | 0.0% | 0 | 0 | _pending_ | `benchmark-eval` manual run `22591534300` (errors=3) |
 
 ## Run log
 
 - 2026-03-02: Captured Mnemo benchmark results from GitHub Actions push run `22591312119`.
 - 2026-03-02: Triggered manual `both` run `22591413221`; Mnemo section executed, Zep section blocked due missing repository secret `ZEP_API_KEY`.
+- 2026-03-02: Added `ZEP_API_KEY` repository secret and reran `both` as run `22591534300`; Zep path executed but all cases returned errors (`errors=3`), so Zep score remains non-comparable.
 
 ## Internal snapshot (for development)
 

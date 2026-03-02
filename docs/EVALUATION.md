@@ -37,6 +37,7 @@ Latest CI evidence:
 
 - Mnemo benchmark success: run `22591312119`
 - Manual `both` attempt: run `22591413221` (failed on missing `ZEP_API_KEY` secret)
+- Manual `both` rerun after setting secret: run `22591534300` (Zep adapter executed but returned `errors=3` across cases)
 
 For Mnemo it executes two profiles over the same temporal dataset:
 
