@@ -128,3 +128,66 @@ pub struct IdentityRollbackRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromotionStatus {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromotionProposal {
+    pub id: Uuid,
+    pub agent_id: String,
+    pub proposal: String,
+    #[serde(default)]
+    pub candidate_core: serde_json::Value,
+    pub reason: String,
+    pub risk_level: String,
+    pub status: PromotionStatus,
+    #[serde(default)]
+    pub source_event_ids: Vec<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejected_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePromotionProposalRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Uuid>,
+    pub proposal: String,
+    #[serde(default)]
+    pub candidate_core: serde_json::Value,
+    pub reason: String,
+    #[serde(default = "default_risk_level")]
+    pub risk_level: String,
+    #[serde(default)]
+    pub source_event_ids: Vec<Uuid>,
+}
+
+fn default_risk_level() -> String {
+    "medium".to_string()
+}
+
+impl PromotionProposal {
+    pub fn from_request(agent_id: &str, req: CreatePromotionProposalRequest) -> Self {
+        Self {
+            id: req.id.unwrap_or_else(Uuid::now_v7),
+            agent_id: agent_id.to_string(),
+            proposal: req.proposal,
+            candidate_core: req.candidate_core,
+            reason: req.reason,
+            risk_level: req.risk_level,
+            status: PromotionStatus::Pending,
+            source_event_ids: req.source_event_ids,
+            approved_at: None,
+            rejected_at: None,
+            created_at: Utc::now(),
+        }
+    }
+}

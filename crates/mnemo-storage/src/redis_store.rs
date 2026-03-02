@@ -9,7 +9,8 @@ use mnemo_core::error::MnemoError;
 use mnemo_core::models::{
     agent::{
         AgentIdentityAuditAction, AgentIdentityAuditEvent, AgentIdentityProfile,
-        CreateExperienceRequest, ExperienceEvent, UpdateAgentIdentityRequest,
+        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
+        PromotionProposal, UpdateAgentIdentityRequest,
     },
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -845,6 +846,80 @@ impl AgentStore for RedisStateStore {
             }
         }
         Ok(out)
+    }
+
+    async fn create_promotion_proposal(
+        &self,
+        agent_id: &str,
+        req: CreatePromotionProposalRequest,
+    ) -> StorageResult<PromotionProposal> {
+        let proposal = PromotionProposal::from_request(agent_id, req);
+        let key = self.key(&["promotion_proposal", &proposal.id.to_string()]);
+        self.set_json(&key, &proposal).await?;
+
+        let zset_key = self.key(&["agent_promotion_proposals", agent_id]);
+        let mut conn = self.conn.clone();
+        conn.zadd::<_, _, _, ()>(
+            &zset_key,
+            proposal.id.to_string(),
+            proposal.created_at.timestamp_millis() as f64,
+        )
+        .await
+        .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(proposal)
+    }
+
+    async fn list_promotion_proposals(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<PromotionProposal>> {
+        let zset_key = self.key(&["agent_promotion_proposals", agent_id]);
+        let mut conn = self.conn.clone();
+        let ids: Vec<String> = redis::cmd("ZREVRANGE")
+            .arg(&zset_key)
+            .arg(0)
+            .arg(limit as isize - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let key = self.key(&["promotion_proposal", &id]);
+            if let Some(proposal) = self.get_json::<PromotionProposal>(&key).await? {
+                out.push(proposal);
+            }
+        }
+        Ok(out)
+    }
+
+    async fn get_promotion_proposal(
+        &self,
+        agent_id: &str,
+        proposal_id: Uuid,
+    ) -> StorageResult<PromotionProposal> {
+        let key = self.key(&["promotion_proposal", &proposal_id.to_string()]);
+        let proposal =
+            self.get_json::<PromotionProposal>(&key)
+                .await?
+                .ok_or(MnemoError::NotFound {
+                    resource_type: "PromotionProposal".into(),
+                    id: proposal_id.to_string(),
+                })?;
+        if proposal.agent_id != agent_id {
+            return Err(MnemoError::NotFound {
+                resource_type: "PromotionProposal".into(),
+                id: proposal_id.to_string(),
+            });
+        }
+        Ok(proposal)
+    }
+
+    async fn update_promotion_proposal(&self, proposal: &PromotionProposal) -> StorageResult<()> {
+        let key = self.key(&["promotion_proposal", &proposal.id.to_string()]);
+        self.set_json(&key, proposal).await
     }
 }
 

@@ -9,8 +9,9 @@ use uuid::Uuid;
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
     agent::{
-        AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent,
-        IdentityRollbackRequest, UpdateAgentIdentityRequest,
+        AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest,
+        CreatePromotionProposalRequest, ExperienceEvent, IdentityRollbackRequest,
+        PromotionProposal, PromotionStatus, UpdateAgentIdentityRequest,
     },
     context::{
         estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary,
@@ -150,6 +151,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/agents/:agent_id/experience",
             post(add_agent_experience),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/promotions",
+            post(create_promotion_proposal).get(list_promotion_proposals),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/promotions/:proposal_id/approve",
+            post(approve_promotion_proposal),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/promotions/:proposal_id/reject",
+            post(reject_promotion_proposal),
         )
         .route("/api/v1/agents/:agent_id/context", post(get_agent_context))
         // Graph
@@ -531,6 +544,12 @@ struct ListLimitQuery {
     limit: Option<u32>,
 }
 
+#[derive(Deserialize)]
+struct RejectPromotionRequest {
+    #[serde(default)]
+    reason: Option<String>,
+}
+
 async fn remember_memory(
     State(state): State<AppState>,
     Json(req): Json<RememberMemoryRequest>,
@@ -833,6 +852,117 @@ async fn add_agent_experience(
     Ok((StatusCode::CREATED, Json(event)))
 }
 
+async fn create_promotion_proposal(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<CreatePromotionProposalRequest>,
+) -> Result<(StatusCode, Json<PromotionProposal>), AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    if req.proposal.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "proposal is required".into(),
+        )));
+    }
+    if req.reason.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "reason is required".into(),
+        )));
+    }
+    validate_identity_core(&req.candidate_core)?;
+    if req.source_event_ids.len() < 3 {
+        return Err(AppError(MnemoError::Validation(
+            "promotion requires at least 3 source_event_ids".into(),
+        )));
+    }
+
+    let proposal = state
+        .state_store
+        .create_promotion_proposal(&agent_id, req)
+        .await?;
+    Ok((StatusCode::CREATED, Json(proposal)))
+}
+
+async fn list_promotion_proposals(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Query(params): Query<ListLimitQuery>,
+) -> Result<Json<Vec<PromotionProposal>>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let limit = params.limit.unwrap_or(50).clamp(1, 500);
+    let proposals = state
+        .state_store
+        .list_promotion_proposals(&agent_id, limit)
+        .await?;
+    Ok(Json(proposals))
+}
+
+async fn approve_promotion_proposal(
+    State(state): State<AppState>,
+    Path((agent_id, proposal_id)): Path<(String, Uuid)>,
+) -> Result<Json<PromotionProposal>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let mut proposal = state
+        .state_store
+        .get_promotion_proposal(&agent_id, proposal_id)
+        .await?;
+
+    if proposal.status != PromotionStatus::Pending {
+        return Err(AppError(MnemoError::Validation(
+            "proposal is not pending".into(),
+        )));
+    }
+
+    validate_identity_core(&proposal.candidate_core)?;
+    state
+        .state_store
+        .update_agent_identity(
+            &agent_id,
+            UpdateAgentIdentityRequest {
+                core: proposal.candidate_core.clone(),
+            },
+        )
+        .await?;
+
+    proposal.status = PromotionStatus::Approved;
+    proposal.approved_at = Some(chrono::Utc::now());
+    state
+        .state_store
+        .update_promotion_proposal(&proposal)
+        .await?;
+    Ok(Json(proposal))
+}
+
+async fn reject_promotion_proposal(
+    State(state): State<AppState>,
+    Path((agent_id, proposal_id)): Path<(String, Uuid)>,
+    Json(req): Json<RejectPromotionRequest>,
+) -> Result<Json<PromotionProposal>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let mut proposal = state
+        .state_store
+        .get_promotion_proposal(&agent_id, proposal_id)
+        .await?;
+
+    if proposal.status != PromotionStatus::Pending {
+        return Err(AppError(MnemoError::Validation(
+            "proposal is not pending".into(),
+        )));
+    }
+
+    proposal.status = PromotionStatus::Rejected;
+    proposal.rejected_at = Some(chrono::Utc::now());
+    if let Some(reason) = req.reason {
+        if !reason.trim().is_empty() {
+            proposal.reason = format!("{} | rejection_reason={}", proposal.reason, reason.trim());
+        }
+    }
+    state
+        .state_store
+        .update_promotion_proposal(&proposal)
+        .await?;
+    Ok(Json(proposal))
+}
+
 async fn get_agent_context(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -955,6 +1085,26 @@ fn validate_identity_core(core: &serde_json::Value) -> Result<(), AppError> {
         return Err(AppError(MnemoError::Validation(
             "identity core must be a JSON object".into(),
         )));
+    }
+
+    let allowed_top_level = [
+        "mission",
+        "style",
+        "boundaries",
+        "capabilities",
+        "values",
+        "persona",
+    ];
+
+    if let Some(map) = core.as_object() {
+        for key in map.keys() {
+            if !allowed_top_level.contains(&key.as_str()) {
+                return Err(AppError(MnemoError::Validation(format!(
+                    "identity core key '{}' is not allowed",
+                    key
+                ))));
+            }
+        }
     }
 
     let forbidden_substrings = [

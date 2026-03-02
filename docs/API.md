@@ -189,6 +189,22 @@ Add an adaptive experience event.
 
 Identity-aware context assembly (prototype). Combines identity core, recent experience signals, and user memory context.
 
+### `POST /api/v1/agents/:agent_id/promotions`
+
+Create a pending promotion proposal (gated). Requires at least 3 `source_event_ids`.
+
+### `GET /api/v1/agents/:agent_id/promotions?limit=50`
+
+List promotion proposals (newest first).
+
+### `POST /api/v1/agents/:agent_id/promotions/:proposal_id/approve`
+
+Approve a pending promotion and apply `candidate_core` to identity core.
+
+### `POST /api/v1/agents/:agent_id/promotions/:proposal_id/reject`
+
+Reject a pending promotion without identity mutation.
+
 ---
 
 ## Users

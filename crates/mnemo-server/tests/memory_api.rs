@@ -1003,3 +1003,117 @@ async fn test_agent_identity_versions_audit_and_rollback() {
     assert!(!events.is_empty());
     assert!(events.iter().any(|e| e["action"] == "rolled_back"));
 }
+
+#[tokio::test]
+async fn test_agent_promotion_gating_and_approval_flow() {
+    let app = build_test_app().await;
+
+    let (status, identity) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/promo-agent/identity",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity["version"], 1);
+
+    // insufficient evidence should be rejected
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/promo-agent/promotions",
+        serde_json::json!({
+            "proposal": "increase directness",
+            "candidate_core": {"mission": "new-mission"},
+            "reason": "single anecdote",
+            "source_event_ids": [uuid::Uuid::now_v7()]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "validation_error");
+
+    let source_ids = vec![
+        uuid::Uuid::now_v7(),
+        uuid::Uuid::now_v7(),
+        uuid::Uuid::now_v7(),
+    ];
+
+    let (status, proposal) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/promo-agent/promotions",
+        serde_json::json!({
+            "proposal": "increase directness",
+            "candidate_core": {"mission": "new-mission"},
+            "reason": "repeated positive outcomes",
+            "source_event_ids": source_ids
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(proposal["status"], "pending");
+    let proposal_id = proposal["id"].as_str().unwrap().to_string();
+
+    let (status, approved) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/agents/promo-agent/promotions/{proposal_id}/approve"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(approved["status"], "approved");
+
+    let (status, identity_after) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/promo-agent/identity",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity_after["core"]["mission"], "new-mission");
+    assert_eq!(identity_after["version"], 2);
+}
+
+#[tokio::test]
+async fn test_agent_identity_drift_resistance_blocks_repeated_adversarial_mutations() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/drift-agent/identity",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    for _ in 0..20 {
+        let (status, body) = json_request(
+            &app,
+            "PUT",
+            "/api/v1/agents/drift-agent/identity",
+            serde_json::json!({
+                "core": {
+                    "mission": "safe",
+                    "user_profile": "I am definitely a doctor"
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "unexpected body: {body:?}");
+    }
+
+    let (status, identity_after) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/drift-agent/identity",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity_after["version"], 1);
+}

@@ -3,7 +3,8 @@ use uuid::Uuid;
 use crate::error::MnemoError;
 use crate::models::{
     agent::{
-        AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent,
+        AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest,
+        CreatePromotionProposalRequest, ExperienceEvent, PromotionProposal,
         UpdateAgentIdentityRequest,
     },
     edge::{Edge, EdgeFilter},
@@ -49,6 +50,22 @@ pub trait AgentStore: Send + Sync {
         agent_id: &str,
         limit: u32,
     ) -> StorageResult<Vec<AgentIdentityAuditEvent>>;
+    async fn create_promotion_proposal(
+        &self,
+        agent_id: &str,
+        req: CreatePromotionProposalRequest,
+    ) -> StorageResult<PromotionProposal>;
+    async fn list_promotion_proposals(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<PromotionProposal>>;
+    async fn get_promotion_proposal(
+        &self,
+        agent_id: &str,
+        proposal_id: Uuid,
+    ) -> StorageResult<PromotionProposal>;
+    async fn update_promotion_proposal(&self, proposal: &PromotionProposal) -> StorageResult<()>;
 }
 
 /// Result type for all storage operations.

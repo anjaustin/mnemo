@@ -1,7 +1,17 @@
 # Agent Identity Substrate (P0 Spec)
 
 Date: 2026-03-02
-Status: P0 proposed
+Status: implemented-p0
+
+## Delivered in P0
+
+- Identity profile endpoints (`get`, `update`) with versioning.
+- Experience ingestion and listing integrated into identity-aware context.
+- Identity contamination guardrails on core writes.
+- Identity snapshot history + append-only audit events.
+- Identity rollback endpoint with audit trail.
+- Promotion proposal workflow (`pending`, `approve`, `reject`) with evidence gating.
+- Integration and adversarial falsification coverage for contamination, rollback, and promotion flow.
 
 ## 1) Problem
 
