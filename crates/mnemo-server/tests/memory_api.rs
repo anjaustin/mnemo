@@ -697,6 +697,105 @@ async fn test_memory_api_metadata_prefilter_disabled_diagnostics() {
 }
 
 #[tokio::test]
+async fn test_memory_api_metadata_prefilter_relax_if_empty() {
+    let app = build_test_app_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: true,
+    })
+    .await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "prefilter-relax-user",
+            "text": "Priority incident happened today",
+            "session": "default"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/prefilter-relax-user/context",
+        serde_json::json!({
+            "query": "What happened?",
+            "session": "default",
+            "filters": {"tags_all": ["does-not-exist"]},
+            "max_tokens": 600
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        context["metadata_filter_diagnostics"]["relaxed_fallback_applied"],
+        true
+    );
+    assert_eq!(
+        context["metadata_filter_diagnostics"]["candidate_count_after_filters"],
+        1
+    );
+}
+
+#[tokio::test]
+async fn test_memory_api_metadata_scan_limit_applies() {
+    let app = build_test_app_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 1,
+        relax_if_empty: false,
+    })
+    .await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "prefilter-scan-limit-user",
+            "text": "Episode one",
+            "session": "default"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "prefilter-scan-limit-user",
+            "text": "Episode two",
+            "session": "default"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/prefilter-scan-limit-user/context",
+        serde_json::json!({
+            "query": "What happened?",
+            "session": "default",
+            "filters": {"roles": ["user"]},
+            "max_tokens": 600
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let scanned = context["metadata_filter_diagnostics"]["candidate_count_before_filters"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(scanned <= 1, "expected scan limit to cap candidates, got {scanned}");
+}
+
+#[tokio::test]
 async fn test_agent_identity_substrate_endpoints_prototype() {
     let app = build_test_app().await;
 
