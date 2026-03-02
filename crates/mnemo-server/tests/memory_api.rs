@@ -792,7 +792,10 @@ async fn test_memory_api_metadata_scan_limit_applies() {
     let scanned = context["metadata_filter_diagnostics"]["candidate_count_before_filters"]
         .as_u64()
         .unwrap_or(0);
-    assert!(scanned <= 1, "expected scan limit to cap candidates, got {scanned}");
+    assert!(
+        scanned <= 1,
+        "expected scan limit to cap candidates, got {scanned}"
+    );
 }
 
 #[tokio::test]
@@ -923,4 +926,80 @@ async fn test_agent_identity_rejects_user_memory_contamination_keys() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "validation_error");
+}
+
+#[tokio::test]
+async fn test_agent_identity_versions_audit_and_rollback() {
+    let app = build_test_app().await;
+
+    let (status, identity_v1) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/rollback-test/identity",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity_v1["version"], 1);
+
+    let (status, identity_v2) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/agents/rollback-test/identity",
+        serde_json::json!({
+            "core": {"mission": "version-2"}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity_v2["version"], 2);
+
+    let (status, identity_v3) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/agents/rollback-test/identity",
+        serde_json::json!({
+            "core": {"mission": "version-3"}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity_v3["version"], 3);
+
+    let (status, versions) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/rollback-test/identity/versions?limit=10",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let version_count = versions.as_array().map(|a| a.len()).unwrap_or(0);
+    assert!(version_count >= 3);
+
+    let (status, rolled) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/rollback-test/identity/rollback",
+        serde_json::json!({
+            "target_version": 2,
+            "reason": "revert to stable"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rolled["version"], 4);
+    assert_eq!(rolled["core"]["mission"], "version-2");
+
+    let (status, audit) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/rollback-test/identity/audit?limit=20",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let events = audit.as_array().cloned().unwrap_or_default();
+    assert!(!events.is_empty());
+    assert!(events.iter().any(|e| e["action"] == "rolled_back"));
 }

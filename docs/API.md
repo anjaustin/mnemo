@@ -150,6 +150,25 @@ Update the identity core.
 }
 ```
 
+### `GET /api/v1/agents/:agent_id/identity/versions?limit=20`
+
+Lists recent identity snapshots (newest first).
+
+### `GET /api/v1/agents/:agent_id/identity/audit?limit=50`
+
+Lists identity audit events (`created`, `updated`, `rolled_back`).
+
+### `POST /api/v1/agents/:agent_id/identity/rollback`
+
+Rollback identity core to a prior version while preserving an append-only version history.
+
+```json
+{
+  "target_version": 2,
+  "reason": "revert unsafe identity mutation"
+}
+```
+
 ### `POST /api/v1/agents/:agent_id/experience`
 
 Add an adaptive experience event.

@@ -9,7 +9,8 @@ use uuid::Uuid;
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
     agent::{
-        AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent, UpdateAgentIdentityRequest,
+        AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent,
+        IdentityRollbackRequest, UpdateAgentIdentityRequest,
     },
     context::{
         estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary,
@@ -133,6 +134,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/agents/:agent_id/identity",
             put(update_agent_identity),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/identity/versions",
+            get(list_agent_identity_versions),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/identity/audit",
+            get(list_agent_identity_audit),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/identity/rollback",
+            post(rollback_agent_identity),
         )
         .route(
             "/api/v1/agents/:agent_id/experience",
@@ -513,6 +526,11 @@ struct MetadataFilterDiagnostics {
     applied_filters: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+struct ListLimitQuery {
+    limit: Option<u32>,
+}
+
 async fn remember_memory(
     State(state): State<AppState>,
     Json(req): Json<RememberMemoryRequest>,
@@ -741,6 +759,52 @@ async fn update_agent_identity(
     let identity = state
         .state_store
         .update_agent_identity(&agent_id, req)
+        .await?;
+    Ok(Json(identity))
+}
+
+async fn list_agent_identity_versions(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Query(params): Query<ListLimitQuery>,
+) -> Result<Json<Vec<AgentIdentityProfile>>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let limit = params.limit.unwrap_or(20).clamp(1, 200);
+    let versions = state
+        .state_store
+        .list_agent_identity_versions(&agent_id, limit)
+        .await?;
+    Ok(Json(versions))
+}
+
+async fn list_agent_identity_audit(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Query(params): Query<ListLimitQuery>,
+) -> Result<Json<Vec<AgentIdentityAuditEvent>>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let limit = params.limit.unwrap_or(50).clamp(1, 500);
+    let audit = state
+        .state_store
+        .list_agent_identity_audit(&agent_id, limit)
+        .await?;
+    Ok(Json(audit))
+}
+
+async fn rollback_agent_identity(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<IdentityRollbackRequest>,
+) -> Result<Json<AgentIdentityProfile>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    if req.target_version == 0 {
+        return Err(AppError(MnemoError::Validation(
+            "target_version must be >= 1".into(),
+        )));
+    }
+    let identity = state
+        .state_store
+        .rollback_agent_identity(&agent_id, req.target_version, req.reason)
         .await?;
     Ok(Json(identity))
 }

@@ -98,3 +98,33 @@ impl ExperienceEvent {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentIdentityAuditAction {
+    Created,
+    Updated,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentIdentityAuditEvent {
+    pub id: Uuid,
+    pub agent_id: String,
+    pub action: AgentIdentityAuditAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_version: Option<u64>,
+    pub to_version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollback_to_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityRollbackRequest {
+    pub target_version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}

@@ -1,3 +1,4 @@
+use chrono::Utc;
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, Client};
 use serde::de::DeserializeOwned;
@@ -7,7 +8,8 @@ use uuid::Uuid;
 use mnemo_core::error::MnemoError;
 use mnemo_core::models::{
     agent::{
-        AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent, UpdateAgentIdentityRequest,
+        AgentIdentityAuditAction, AgentIdentityAuditEvent, AgentIdentityProfile,
+        CreateExperienceRequest, ExperienceEvent, UpdateAgentIdentityRequest,
     },
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -673,7 +675,16 @@ impl AgentStore for RedisStateStore {
             Some(identity) => Ok(identity),
             None => {
                 let identity = AgentIdentityProfile::new(agent_id.to_string());
-                self.set_json(&key, &identity).await?;
+                self.persist_identity_snapshot(agent_id, &identity).await?;
+                self.append_identity_audit(
+                    agent_id,
+                    AgentIdentityAuditAction::Created,
+                    None,
+                    identity.version,
+                    None,
+                    None,
+                )
+                .await?;
                 Ok(identity)
             }
         }
@@ -685,9 +696,18 @@ impl AgentStore for RedisStateStore {
         req: UpdateAgentIdentityRequest,
     ) -> StorageResult<AgentIdentityProfile> {
         let mut identity = self.get_agent_identity(agent_id).await?;
+        let from_version = identity.version;
         identity.apply_update(req);
-        let key = self.key(&["agent_identity", agent_id]);
-        self.set_json(&key, &identity).await?;
+        self.persist_identity_snapshot(agent_id, &identity).await?;
+        self.append_identity_audit(
+            agent_id,
+            AgentIdentityAuditAction::Updated,
+            Some(from_version),
+            identity.version,
+            None,
+            None,
+        )
+        .await?;
         Ok(identity)
     }
 
@@ -736,5 +756,160 @@ impl AgentStore for RedisStateStore {
             }
         }
         Ok(events)
+    }
+
+    async fn list_agent_identity_versions(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<AgentIdentityProfile>> {
+        let zset_key = self.key(&["agent_identity_versions", agent_id]);
+        let mut conn = self.conn.clone();
+        let versions: Vec<String> = redis::cmd("ZREVRANGE")
+            .arg(&zset_key)
+            .arg(0)
+            .arg(limit as isize - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut out = Vec::with_capacity(versions.len());
+        for version in versions {
+            let key = self.key(&["agent_identity_version", agent_id, &version]);
+            if let Some(identity) = self.get_json::<AgentIdentityProfile>(&key).await? {
+                out.push(identity);
+            }
+        }
+        Ok(out)
+    }
+
+    async fn rollback_agent_identity(
+        &self,
+        agent_id: &str,
+        target_version: u64,
+        reason: Option<String>,
+    ) -> StorageResult<AgentIdentityProfile> {
+        let target_key = self.key(&[
+            "agent_identity_version",
+            agent_id,
+            &target_version.to_string(),
+        ]);
+        let target = self
+            .get_json::<AgentIdentityProfile>(&target_key)
+            .await?
+            .ok_or(MnemoError::NotFound {
+                resource_type: "AgentIdentityVersion".into(),
+                id: format!("{}:{}", agent_id, target_version),
+            })?;
+
+        let current = self.get_agent_identity(agent_id).await?;
+        let mut rolled = target;
+        rolled.agent_id = agent_id.to_string();
+        rolled.version = current.version + 1;
+        rolled.updated_at = Utc::now();
+
+        self.persist_identity_snapshot(agent_id, &rolled).await?;
+        self.append_identity_audit(
+            agent_id,
+            AgentIdentityAuditAction::RolledBack,
+            Some(current.version),
+            rolled.version,
+            Some(target_version),
+            reason,
+        )
+        .await?;
+
+        Ok(rolled)
+    }
+
+    async fn list_agent_identity_audit(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> StorageResult<Vec<AgentIdentityAuditEvent>> {
+        let zset_key = self.key(&["agent_identity_audit", agent_id]);
+        let mut conn = self.conn.clone();
+        let ids: Vec<String> = redis::cmd("ZREVRANGE")
+            .arg(&zset_key)
+            .arg(0)
+            .arg(limit as isize - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let key = self.key(&["agent_identity_audit_event", &id]);
+            if let Some(event) = self.get_json::<AgentIdentityAuditEvent>(&key).await? {
+                out.push(event);
+            }
+        }
+        Ok(out)
+    }
+}
+
+impl RedisStateStore {
+    async fn persist_identity_snapshot(
+        &self,
+        agent_id: &str,
+        identity: &AgentIdentityProfile,
+    ) -> StorageResult<()> {
+        let current_key = self.key(&["agent_identity", agent_id]);
+        self.set_json(&current_key, identity).await?;
+
+        let version_key = self.key(&[
+            "agent_identity_version",
+            agent_id,
+            &identity.version.to_string(),
+        ]);
+        self.set_json(&version_key, identity).await?;
+
+        let versions_key = self.key(&["agent_identity_versions", agent_id]);
+        let mut conn = self.conn.clone();
+        conn.zadd::<_, _, _, ()>(
+            &versions_key,
+            identity.version.to_string(),
+            identity.version as f64,
+        )
+        .await
+        .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn append_identity_audit(
+        &self,
+        agent_id: &str,
+        action: AgentIdentityAuditAction,
+        from_version: Option<u64>,
+        to_version: u64,
+        rollback_to_version: Option<u64>,
+        reason: Option<String>,
+    ) -> StorageResult<()> {
+        let event = AgentIdentityAuditEvent {
+            id: Uuid::now_v7(),
+            agent_id: agent_id.to_string(),
+            action,
+            from_version,
+            to_version,
+            rollback_to_version,
+            reason,
+            created_at: Utc::now(),
+        };
+
+        let event_key = self.key(&["agent_identity_audit_event", &event.id.to_string()]);
+        self.set_json(&event_key, &event).await?;
+
+        let zset_key = self.key(&["agent_identity_audit", agent_id]);
+        let mut conn = self.conn.clone();
+        conn.zadd::<_, _, _, ()>(
+            &zset_key,
+            event.id.to_string(),
+            event.created_at.timestamp_millis() as f64,
+        )
+        .await
+        .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
     }
 }
