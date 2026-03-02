@@ -750,3 +750,24 @@ async fn test_agent_identity_substrate_endpoints_prototype() {
         .unwrap_or_default()
         .contains("Agent Identity Core"));
 }
+
+#[tokio::test]
+async fn test_agent_identity_rejects_user_memory_contamination_keys() {
+    let app = build_test_app().await;
+
+    let (status, body) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/agents/guard-test/identity",
+        serde_json::json!({
+            "core": {
+                "mission": "be useful",
+                "user_fact": "I am a doctor"
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "validation_error");
+}

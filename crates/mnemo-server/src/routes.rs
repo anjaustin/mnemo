@@ -692,6 +692,7 @@ async fn update_agent_identity(
     Json(req): Json<UpdateAgentIdentityRequest>,
 ) -> Result<Json<AgentIdentityProfile>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
+    validate_identity_core(&req.core)?;
     let identity = state
         .state_store
         .update_agent_identity(&agent_id, req)
@@ -838,6 +839,59 @@ fn effective_experience_weight(event: &ExperienceEvent) -> f32 {
     let half_life = event.decay_half_life_days.max(1) as f32;
     let decay_factor = 2f32.powf(-age_days / half_life);
     (event.weight * event.confidence * decay_factor).max(0.0)
+}
+
+fn validate_identity_core(core: &serde_json::Value) -> Result<(), AppError> {
+    if !core.is_object() {
+        return Err(AppError(MnemoError::Validation(
+            "identity core must be a JSON object".into(),
+        )));
+    }
+
+    let forbidden_substrings = [
+        "user",
+        "session",
+        "episode",
+        "external_id",
+        "email",
+        "phone",
+        "address",
+    ];
+
+    fn visit(
+        value: &serde_json::Value,
+        path: &str,
+        forbidden_substrings: &[&str],
+    ) -> Result<(), AppError> {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (k, v) in map {
+                    let normalized = k.to_ascii_lowercase();
+                    if forbidden_substrings
+                        .iter()
+                        .any(|token| normalized.contains(token))
+                    {
+                        return Err(AppError(MnemoError::Validation(format!(
+                            "identity core contains forbidden key at {}{}",
+                            path, k
+                        ))));
+                    }
+                    let next = format!("{}{}/", path, k);
+                    visit(v, &next, forbidden_substrings)?;
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (idx, item) in items.iter().enumerate() {
+                    let next = format!("{}[{idx}]/", path);
+                    visit(item, &next, forbidden_substrings)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    visit(core, "core/", &forbidden_substrings)
 }
 
 struct MetadataCandidates {
