@@ -16,7 +16,7 @@ use mnemo_core::models::{
     entity::Entity,
     episode::{
         BatchCreateEpisodesRequest, CreateEpisodeRequest, Episode, EpisodeType, ListEpisodesParams,
-        MessageRole,
+        MessageRole, ProcessingStatus,
     },
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     user::{CreateUserRequest, UpdateUserRequest, User},
@@ -407,6 +407,24 @@ struct MemoryContextRequest {
     temporal_weight: Option<f32>,
     #[serde(default)]
     mode: Option<MemoryContextMode>,
+    #[serde(default)]
+    filters: Option<MemoryContextFilters>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct MemoryContextFilters {
+    #[serde(default)]
+    roles: Option<Vec<MessageRole>>,
+    #[serde(default)]
+    tags_any: Option<Vec<String>>,
+    #[serde(default)]
+    tags_all: Option<Vec<String>>,
+    #[serde(default)]
+    created_after: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    created_before: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    processing_status: Option<ProcessingStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -434,6 +452,15 @@ struct MemoryContextResponse {
     mode: MemoryContextMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     head: Option<MemoryHeadInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata_filter_diagnostics: Option<MetadataFilterDiagnostics>,
+}
+
+#[derive(Serialize)]
+struct MetadataFilterDiagnostics {
+    candidate_count_before_filters: u32,
+    candidate_count_after_filters: u32,
+    applied_filters: serde_json::Value,
 }
 
 async fn remember_memory(
@@ -522,7 +549,37 @@ async fn get_memory_context(
     let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
     let scoped_session =
         resolve_session_scope(&state, user.id, mode, requested_session_name).await?;
-    let session_id = scoped_session.as_ref().map(|s| s.id);
+    let mut session_id = scoped_session.as_ref().map(|s| s.id);
+
+    let (candidate_episode_ids, metadata_filter_diagnostics) =
+        if let Some(filters) = req.filters.as_ref() {
+            let metadata =
+                collect_metadata_candidates(&state, user.id, session_id, filters, 400).await?;
+
+            if session_id.is_none() {
+                if let Some(scoped) = dominant_session(&metadata.filtered_episodes) {
+                    session_id = Some(scoped);
+                }
+            }
+
+            (
+                Some(
+                    metadata
+                        .filtered_episodes
+                        .iter()
+                        .map(|e| e.id)
+                        .collect::<std::collections::HashSet<_>>(),
+                ),
+                Some(MetadataFilterDiagnostics {
+                    candidate_count_before_filters: metadata.scanned_count,
+                    candidate_count_after_filters: metadata.filtered_episodes.len() as u32,
+                    applied_filters: serde_json::to_value(filters)
+                        .unwrap_or_else(|_| serde_json::json!({})),
+                }),
+            )
+        } else {
+            (None, None)
+        };
 
     let max_tokens = req.max_tokens.unwrap_or(500);
     let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
@@ -553,6 +610,12 @@ async fn get_memory_context(
     )
     .await?;
 
+    if let Some(candidate_episode_ids) = candidate_episode_ids.as_ref() {
+        context
+            .episodes
+            .retain(|episode| candidate_episode_ids.contains(&episode.id));
+    }
+
     let head = scoped_session.as_ref().map(|session| MemoryHeadInfo {
         session_id: session.id,
         episode_id: session.head_episode_id,
@@ -564,7 +627,142 @@ async fn get_memory_context(
         context,
         mode,
         head,
+        metadata_filter_diagnostics,
     }))
+}
+
+struct MetadataCandidates {
+    scanned_count: u32,
+    filtered_episodes: Vec<Episode>,
+}
+
+async fn collect_metadata_candidates(
+    state: &AppState,
+    user_id: Uuid,
+    session_id: Option<Uuid>,
+    filters: &MemoryContextFilters,
+    scan_limit: u32,
+) -> Result<MetadataCandidates, MnemoError> {
+    let mut episodes = Vec::new();
+
+    if let Some(session_id) = session_id {
+        let mut session_episodes = state
+            .state_store
+            .list_episodes(
+                session_id,
+                ListEpisodesParams {
+                    limit: scan_limit,
+                    after: None,
+                    status: None,
+                },
+            )
+            .await?;
+        episodes.append(&mut session_episodes);
+    } else {
+        let sessions = state
+            .state_store
+            .list_sessions(
+                user_id,
+                ListSessionsParams {
+                    limit: 12,
+                    after: None,
+                    since: None,
+                },
+            )
+            .await?;
+
+        for session in sessions {
+            let mut session_episodes = state
+                .state_store
+                .list_episodes(
+                    session.id,
+                    ListEpisodesParams {
+                        limit: 40,
+                        after: None,
+                        status: None,
+                    },
+                )
+                .await?;
+            episodes.append(&mut session_episodes);
+            if episodes.len() >= scan_limit as usize {
+                break;
+            }
+        }
+    }
+
+    let scanned_count = episodes.len() as u32;
+    episodes.retain(|episode| matches_episode_filters(episode, filters));
+
+    Ok(MetadataCandidates {
+        scanned_count,
+        filtered_episodes: episodes,
+    })
+}
+
+fn matches_episode_filters(episode: &Episode, filters: &MemoryContextFilters) -> bool {
+    if let Some(status) = filters.processing_status {
+        if episode.processing_status != status {
+            return false;
+        }
+    }
+
+    if let Some(after) = filters.created_after {
+        if episode.created_at < after {
+            return false;
+        }
+    }
+
+    if let Some(before) = filters.created_before {
+        if episode.created_at > before {
+            return false;
+        }
+    }
+
+    if let Some(roles) = filters.roles.as_ref() {
+        if !roles.is_empty() && !episode.role.map(|r| roles.contains(&r)).unwrap_or(false) {
+            return false;
+        }
+    }
+
+    let tag_values = episode
+        .metadata
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if let Some(tags_any) = filters.tags_any.as_ref() {
+        let wanted: Vec<String> = tags_any.iter().map(|t| t.to_lowercase()).collect();
+        if !wanted.is_empty() && !wanted.iter().any(|tag| tag_values.contains(tag)) {
+            return false;
+        }
+    }
+
+    if let Some(tags_all) = filters.tags_all.as_ref() {
+        let wanted: Vec<String> = tags_all.iter().map(|t| t.to_lowercase()).collect();
+        if !wanted.iter().all(|tag| tag_values.contains(tag)) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn dominant_session(episodes: &[Episode]) -> Option<Uuid> {
+    let mut counts: std::collections::HashMap<Uuid, usize> = std::collections::HashMap::new();
+    for episode in episodes {
+        *counts.entry(episode.session_id).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by(|(a_id, a_count), (b_id, b_count)| {
+            a_count.cmp(b_count).then_with(|| a_id.cmp(b_id))
+        })
+        .map(|(session_id, _)| session_id)
 }
 
 async fn resolve_session_scope(
@@ -609,18 +807,9 @@ async fn find_head_session_for_user(
         }
 
         for session in sessions.iter().cloned() {
-            let candidate_time = session
-                .head_updated_at
-                .or(session.last_activity_at)
-                .unwrap_or(session.updated_at);
-
             let is_better = match &best {
                 Some(current_best) => {
-                    let current_time = current_best
-                        .head_updated_at
-                        .or(current_best.last_activity_at)
-                        .unwrap_or(current_best.updated_at);
-                    candidate_time > current_time
+                    compare_head_candidate(&session, current_best) == std::cmp::Ordering::Greater
                 }
                 None => true,
             };
@@ -637,6 +826,25 @@ async fn find_head_session_for_user(
     }
 
     Ok(best)
+}
+
+fn compare_head_candidate(a: &Session, b: &Session) -> std::cmp::Ordering {
+    let a_time = a
+        .head_updated_at
+        .or(a.last_activity_at)
+        .unwrap_or(a.updated_at);
+    let b_time = b
+        .head_updated_at
+        .or(b.last_activity_at)
+        .unwrap_or(b.updated_at);
+
+    match a_time.cmp(&b_time) {
+        std::cmp::Ordering::Equal => match a.head_version.cmp(&b.head_version) {
+            std::cmp::Ordering::Equal => a.id.cmp(&b.id),
+            other => other,
+        },
+        other => other,
+    }
 }
 
 async fn maybe_attach_recent_episode_fallback(

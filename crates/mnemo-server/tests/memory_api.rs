@@ -548,3 +548,96 @@ async fn test_memory_api_temporal_intent_changes_rank_order() {
         "historical"
     );
 }
+
+#[tokio::test]
+async fn test_memory_api_metadata_filters_and_diagnostics() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "metadata-filter-user",
+            "external_id": "metadata-filter-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "default" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Priority outage in payments pipeline",
+            "metadata": {"tags": ["priority", "incident"]},
+            "created_at": "2026-03-01T12:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "assistant",
+            "content": "Normal weekly standup update",
+            "metadata": {"tags": ["routine"]},
+            "created_at": "2026-03-01T13:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/metadata-filter-user/context",
+        serde_json::json!({
+            "query": "What priority incidents did we discuss?",
+            "session": "default",
+            "filters": {
+                "roles": ["user"],
+                "tags_all": ["priority"],
+                "created_after": "2026-03-01T00:00:00Z"
+            },
+            "max_tokens": 600
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert!(context["metadata_filter_diagnostics"].is_object());
+    assert_eq!(
+        context["metadata_filter_diagnostics"]["candidate_count_before_filters"],
+        2
+    );
+    assert_eq!(
+        context["metadata_filter_diagnostics"]["candidate_count_after_filters"],
+        1
+    );
+
+    let episodes = context["episodes"].as_array().cloned().unwrap_or_default();
+    if !episodes.is_empty() {
+        let top_preview = episodes[0]["preview"].as_str().unwrap_or_default();
+        assert!(top_preview.contains("Priority outage"));
+    }
+}

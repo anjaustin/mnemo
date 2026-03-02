@@ -66,7 +66,12 @@ Retrieve context for a user by identifier (`:user` can be UUID, external_id, or 
   "mode": "hybrid",
   "time_intent": "current",
   "as_of": "2025-01-01T00:00:00Z",
-  "temporal_weight": 0.5
+  "temporal_weight": 0.5,
+  "filters": {
+    "roles": ["user"],
+    "tags_any": ["priority"],
+    "created_after": "2026-03-01T00:00:00Z"
+  }
 }
 ```
 
@@ -76,6 +81,7 @@ Retrieve context for a user by identifier (`:user` can be UUID, external_id, or 
 - `time_intent`: `auto | current | recent | historical`
 - `as_of`: point-in-time target for historical recall
 - `temporal_weight`: override temporal influence (0.0–1.0)
+- `filters`: optional metadata prefilter (`roles`, `tags_any`, `tags_all`, `created_after`, `created_before`, `processing_status`)
 
 If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to recent episode recall so the returned context is still usable immediately after `remember`.
 
@@ -96,6 +102,14 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
     "entities_scored": 3,
     "facts_scored": 5,
     "episodes_scored": 2
+  },
+  "metadata_filter_diagnostics": {
+    "candidate_count_before_filters": 18,
+    "candidate_count_after_filters": 4,
+    "applied_filters": {
+      "roles": ["user"],
+      "tags_any": ["priority"]
+    }
   },
   "mode": "hybrid",
   "head": {
@@ -344,7 +358,9 @@ This is the endpoint your agent calls on every turn. It retrieves relevant knowl
 | `mode` | enum | `hybrid` | `head`, `hybrid`, `historical` |
 | `time_intent` | enum | `auto` | `auto`, `current`, `recent`, `historical` |
 | `temporal_weight` | float | null | Override temporal influence (0.0–1.0) |
+| `filters` | object | null | Metadata prefilter for episode candidates |
 | `temporal_diagnostics` | object | null | Resolved temporal intent and scored result counts |
+| `metadata_filter_diagnostics` | object | null | Candidate counts before/after metadata filtering |
 
 ```json
 // Response 200

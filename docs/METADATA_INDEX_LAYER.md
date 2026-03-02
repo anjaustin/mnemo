@@ -1,7 +1,7 @@
 # Metadata Index Layer (Design Spec)
 
 Date: 2026-03-02
-Status: proposal (post temporal-vectorization hardening)
+Status: in-progress-v1
 
 ## Goal
 
@@ -87,6 +87,15 @@ Planned retrieval stages:
    - combine semantic, temporal, graph, and metadata priors
 4. Context assembly stage
    - construct output context with source diagnostics
+
+### v1 delivered
+
+- Memory context API now accepts metadata filters (`roles`, `tags_any`, `tags_all`, `created_after`, `created_before`, `processing_status`).
+- A metadata prefilter planner scans candidate episodes, applies filters, and emits diagnostics:
+  - `candidate_count_before_filters`
+  - `candidate_count_after_filters`
+  - `applied_filters`
+- Filtered candidate sessions influence retrieval session scoping when explicit session is not provided.
 
 ### Example planner behavior
 
