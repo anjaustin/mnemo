@@ -37,7 +37,7 @@ services:
       - QDRANT__SERVICE__GRPC_PORT=6334
       - QDRANT__LOG_LEVEL=INFO
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "pidof qdrant || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 5

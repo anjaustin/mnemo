@@ -1,7 +1,7 @@
 # Thread HEAD Design Note
 
 Date: 2026-03-02
-Status: proposal
+Status: implemented-v1
 
 ## Why
 
@@ -18,7 +18,16 @@ Using a Git-like `HEAD` concept can make temporal behavior easier to understand 
 
 So we already have implicit HEAD behavior, but not a first-class API concept.
 
-## Gap
+## v1 delivered
+
+- Session HEAD metadata fields are live (`head_episode_id`, `head_updated_at`, `head_version`).
+- Episode writes advance HEAD metadata.
+- Memory context supports `mode=head|hybrid|historical`.
+- `mode=head` returns `head` diagnostics in response payload.
+- Python SDK supports head mode (`context_head(...)` and `mode="head"`).
+- Falsification/integration coverage includes head-mode diagnostics and explicit session override behavior.
+
+## Remaining gap
 
 Developers cannot directly target "the current thread state" in a predictable, explicit way.
 
@@ -28,19 +37,18 @@ This causes ambiguity between:
 - long-term memory context (user history)
 - historical reconstruction (`as_of` style queries)
 
-## Proposal: first-class Thread HEAD
+## Deterministic selection semantics
 
-Define Thread HEAD as:
+Thread HEAD is:
 
 - latest stable state of a session
 - anchored by latest episode pointer + optional rolled-up summary
 
-### Session metadata additions
+When `mode=head` and no explicit session is provided, selection prefers:
 
-- `head_episode_id`
-- `head_updated_at`
-- optional `head_summary`
-- optional `head_version` (monotonic increment)
+1. newer `head_updated_at` (or `last_activity_at`/`updated_at` fallback)
+2. higher `head_version`
+3. stable tie-breaker by session ID
 
 ### Write path behavior
 
@@ -93,10 +101,8 @@ Thread HEAD should drive temporal weighting defaults:
 
 This keeps temporal logic tied to existing Mnemo concepts instead of introducing abstract controls first.
 
-## Rollout plan
+## Follow-ups (v1.1+)
 
-1. Add session head metadata fields and update on episode writes.
-2. Expose `mode` in memory context API (default `hybrid`).
-3. Add response `head` diagnostics.
-4. Update Python SDK with `mode` enum and helpers.
-5. Add falsification tests for `mode=head` correctness.
+1. Optional `head_summary` refresh strategy for long threads.
+2. Add explicit no-session diagnostics (`head: null` reason code).
+3. Add user-facing "changes since HEAD version" helper endpoint.
