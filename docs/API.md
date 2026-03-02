@@ -127,7 +127,7 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
 
 ---
 
-## Agent Identity Substrate (P0 Prototype)
+## Agent Identity Substrate (P0)
 
 These endpoints provide a separated agent identity/experience layer.
 
@@ -187,7 +187,7 @@ Add an adaptive experience event.
 
 ### `POST /api/v1/agents/:agent_id/context`
 
-Identity-aware context assembly (prototype). Combines identity core, recent experience signals, and user memory context.
+Identity-aware context assembly. Combines identity core, recent experience signals, and user memory context.
 
 ### `POST /api/v1/agents/:agent_id/promotions`
 

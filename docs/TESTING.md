@@ -33,6 +33,10 @@ It verifies:
 - immediate recall fallback (non-empty context right after remember)
 - head mode behavior (auto selection, explicit session override, empty-head safety)
 - temporal intent ranking shifts (`current` vs `historical`)
+- metadata prefilter planner behavior (`enabled`, `scan_limit`, `relax_if_empty`)
+- identity contamination guardrails (`identity_core` write blocking)
+- identity versioning/audit/rollback semantics
+- promotion gating and approve/reject flows
 
 ### Test infrastructure
 

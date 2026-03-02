@@ -143,7 +143,7 @@ Old facts aren't deleted. This enables point-in-time queries and change tracking
 | [Phase 2 PRD](docs/PHASE_2_PRD.md) | Productization plan for temporal memory and proof gates |
 | [Evaluation Playbook](docs/EVALUATION.md) | Reproducible temporal quality and latency measurements |
 | [Competitive Plan](docs/COMPETITIVE.md) | Cross-system benchmark methodology and scorecard |
-| [Agent Identity Substrate](docs/AGENT_IDENTITY_SUBSTRATE.md) | P0 spec for stable agent identity + adaptive experience |
+| [Agent Identity Substrate](docs/AGENT_IDENTITY_SUBSTRATE.md) | Implemented P0 design for stable identity + adaptive experience |
 | [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
 | [Temporal Vectorization](docs/TEMPORAL_VECTORIZATION.md) | Time-aware retrieval scoring and rollout plan |
 | [Testing Guide](docs/TESTING.md) | Workspace, E2E, and falsification test commands |
@@ -178,8 +178,9 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 
 - M1 Thread HEAD completion ✅
 - M2 Temporal retrieval v2 diagnostics ✅
-- M3 Metadata index layer ⏳
+- M3 Metadata index layer ✅
 - M4 Competitive publication v1 🚧
+- M5 Agent Identity Substrate P0 ✅
 
 See `docs/PHASE_2_PRD.md` for current milestones.
 
