@@ -68,14 +68,14 @@ bold "=== Remember Memory ==="
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
     "$BASE_URL/api/v1/memory" \
     -H "Content-Type: application/json" \
-    -d '{"user":"smoke_'$$'","session":"Smoke Session","text":"I like tea in the afternoon.","role":"user","name":"Smoke"}')
+    -d "{\"user\":\"$USER_ID\",\"session\":\"Smoke Session\",\"text\":\"I like tea in the afternoon.\",\"role\":\"user\",\"name\":\"Smoke\"}")
 BODY=$(echo "$RESPONSE" | python3 -c 'import sys; print("\n".join(sys.stdin.read().splitlines()[:-1]))')
 STATUS=$(echo "$RESPONSE" | python3 -c 'import sys; print(sys.stdin.read().splitlines()[-1])')
 assert_status 201 "$STATUS" "remember memory endpoint"
 
 bold "=== Memory Context API ==="
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-    "$BASE_URL/api/v1/memory/smoke_'$$'/context" \
+    "$BASE_URL/api/v1/memory/$USER_ID/context" \
     -H "Content-Type: application/json" \
     -d '{"query": "What did I say about tea?", "max_tokens": 300}')
 BODY=$(echo "$RESPONSE" | python3 -c 'import sys; print("\n".join(sys.stdin.read().splitlines()[:-1]))')
