@@ -73,6 +73,7 @@ Quick benchmark commands:
 
 - Mnemo only: `python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080`
 - Mnemo vs Zep: `python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key`
+- Scientific research pack (Mnemo): `python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases.json --mnemo-base-url http://localhost:8080`
 
 ## Quick Start
 
@@ -253,6 +254,7 @@ curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
 | [Phase 2 PRD](docs/PHASE_2_PRD.md) | Productization plan for temporal memory and proof gates |
 | [Evaluation Playbook](docs/EVALUATION.md) | Reproducible temporal quality and latency measurements |
 | [Competitive Plan](docs/COMPETITIVE.md) | Cross-system benchmark methodology and scorecard |
+| [Domain Readiness Matrix](docs/DOMAIN_READINESS_MATRIX.md) | Domain-by-domain readiness and 30/60/90 roadmap |
 | [Agent Identity Substrate](docs/AGENT_IDENTITY_SUBSTRATE.md) | Implemented P0 design for stable identity + adaptive experience |
 | [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
 | [Temporal Vectorization](docs/TEMPORAL_VECTORIZATION.md) | Time-aware retrieval scoring and rollout plan |

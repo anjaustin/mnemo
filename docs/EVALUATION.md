@@ -48,6 +48,14 @@ For Zep it runs baseline-style memory retrieval on the same scenario pack.
 
 Current dataset: `eval/temporal_cases.json`.
 
+Scientific research assistance dataset (Michael Levin style scenarios):
+
+```bash
+python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases.json --mnemo-base-url http://localhost:8080
+```
+
+This pack emphasizes evolving research claims, hypothesis updates, and historical vs current retrieval correctness.
+
 Expected output format:
 
 ```text

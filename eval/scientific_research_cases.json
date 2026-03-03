@@ -1,0 +1,182 @@
+[
+  {
+    "name": "levin_planaria_current_mechanism",
+    "memories": [
+      {
+        "content": "Early notes: serotonin alone explains planaria head-tail polarity changes.",
+        "created_at": "2023-02-10T10:00:00Z"
+      },
+      {
+        "content": "Updated finding: gap junction blockade can induce two-headed regeneration through bioelectric circuit changes.",
+        "created_at": "2025-04-15T09:30:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the current mechanism in our planaria regeneration notes?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["gap junction blockade", "two-headed"],
+      "not_contains": ["serotonin alone"]
+    }
+  },
+  {
+    "name": "levin_planaria_historical_mechanism",
+    "memories": [
+      {
+        "content": "Early notes: serotonin alone explains planaria head-tail polarity changes.",
+        "created_at": "2023-02-10T10:00:00Z"
+      },
+      {
+        "content": "Updated finding: gap junction blockade can induce two-headed regeneration through bioelectric circuit changes.",
+        "created_at": "2025-04-15T09:30:00Z"
+      }
+    ],
+    "query": {
+      "text": "As of 2023, what mechanism did our notes claim?",
+      "mode": "historical",
+      "as_of": "2023-06-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["serotonin alone"],
+      "not_contains": ["gap junction blockade"]
+    }
+  },
+  {
+    "name": "xenobot_scope_current",
+    "memories": [
+      {
+        "content": "Initial framing: xenobots are just static anatomical robots.",
+        "created_at": "2020-07-01T08:00:00Z"
+      },
+      {
+        "content": "Current framing: xenobots demonstrate collective behavior and can support programmable biological tasks.",
+        "created_at": "2024-11-22T14:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "How should we currently frame xenobot capability?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["collective behavior", "programmable biological tasks"],
+      "not_contains": ["just static anatomical robots"]
+    }
+  },
+  {
+    "name": "xenobot_scope_historical",
+    "memories": [
+      {
+        "content": "Initial framing: xenobots are just static anatomical robots.",
+        "created_at": "2020-07-01T08:00:00Z"
+      },
+      {
+        "content": "Current framing: xenobots demonstrate collective behavior and can support programmable biological tasks.",
+        "created_at": "2024-11-22T14:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What did we claim about xenobots in 2020?",
+      "mode": "historical",
+      "as_of": "2020-09-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["static anatomical robots"],
+      "not_contains": ["collective behavior"]
+    }
+  },
+  {
+    "name": "basal_cognition_definition_update_current",
+    "memories": [
+      {
+        "content": "Old summary: basal cognition only applies to neural tissue.",
+        "created_at": "2022-03-05T12:10:00Z"
+      },
+      {
+        "content": "Updated summary: basal cognition can include non-neural tissues coordinating goal-directed behavior through bioelectric signaling.",
+        "created_at": "2025-01-10T16:20:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is our current definition of basal cognition?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["non-neural tissues", "goal-directed behavior"],
+      "not_contains": ["only applies to neural tissue"]
+    }
+  },
+  {
+    "name": "basal_cognition_definition_historical",
+    "memories": [
+      {
+        "content": "Old summary: basal cognition only applies to neural tissue.",
+        "created_at": "2022-03-05T12:10:00Z"
+      },
+      {
+        "content": "Updated summary: basal cognition can include non-neural tissues coordinating goal-directed behavior through bioelectric signaling.",
+        "created_at": "2025-01-10T16:20:00Z"
+      }
+    ],
+    "query": {
+      "text": "As of 2022, how did we define basal cognition?",
+      "mode": "historical",
+      "as_of": "2022-06-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["only applies to neural tissue"],
+      "not_contains": ["non-neural tissues"]
+    }
+  },
+  {
+    "name": "research_program_focus_head",
+    "memories": [
+      {
+        "content": "Program focus in 2024: emphasize conceptual reviews and theory framing.",
+        "created_at": "2024-04-03T10:00:00Z"
+      },
+      {
+        "content": "Program focus now: prioritize reproducible perturbation experiments on bioelectric state transitions.",
+        "created_at": "2026-02-12T11:30:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the active program focus right now?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["reproducible perturbation experiments", "bioelectric state transitions"],
+      "not_contains": ["conceptual reviews"]
+    }
+  },
+  {
+    "name": "research_program_focus_historical",
+    "memories": [
+      {
+        "content": "Program focus in 2024: emphasize conceptual reviews and theory framing.",
+        "created_at": "2024-04-03T10:00:00Z"
+      },
+      {
+        "content": "Program focus now: prioritize reproducible perturbation experiments on bioelectric state transitions.",
+        "created_at": "2026-02-12T11:30:00Z"
+      }
+    ],
+    "query": {
+      "text": "As of mid-2024, what was the program focus?",
+      "mode": "historical",
+      "as_of": "2024-07-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["conceptual reviews", "theory framing"],
+      "not_contains": ["reproducible perturbation experiments"]
+    }
+  }
+]
