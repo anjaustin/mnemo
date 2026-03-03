@@ -182,7 +182,23 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full deep dive.
 
 ## How Temporal Memory Works
 
-Most memory systems store facts as static key-value pairs. Mnemo tracks *when* facts became true and *when* they were superseded:
+Most memory systems overwrite facts. Mnemo keeps the timeline.
+
+### Before and After
+
+```text
+Before (flat memory)
+  "Kendra prefers Adidas"
+  "Kendra prefers Nike"
+  -> no clear answer to "what was true in 2024?"
+
+After (temporal memory)
+  Aug 2024: Kendra -> prefers -> Adidas   (valid)
+  Feb 2025: Kendra -> prefers -> Adidas   (invalidated)
+  Feb 2025: Kendra -> prefers -> Nike     (valid)
+```
+
+Mnemo tracks *when* facts became true and *when* they were superseded:
 
 ```
 Aug 2024: "I love my Adidas shoes!"
@@ -194,6 +210,30 @@ Feb 2025: "Adidas fell apart. Nike is my new favorite."
 ```
 
 Old facts aren't deleted. This enables point-in-time queries and change tracking.
+
+### Real API Example
+
+```bash
+# 1) Initial preference
+curl -X POST http://localhost:8080/api/v1/memory \
+  -H "Content-Type: application/json" \
+  -d '{"user":"kendra","text":"I love my Adidas shoes."}'
+
+# 2) Later correction
+curl -X POST http://localhost:8080/api/v1/memory \
+  -H "Content-Type: application/json" \
+  -d '{"user":"kendra","text":"Adidas fell apart. Nike is my new favorite."}'
+
+# 3) Ask for current truth
+curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What shoes does Kendra prefer now?"}'
+
+# 4) Ask for historical truth
+curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What did Kendra prefer before switching to Nike?"}'
+```
 
 ## Production Readiness Checklist
 
