@@ -147,18 +147,36 @@ Inject the returned `context` string into your agent's system prompt. That's it.
 ## Architecture
 
 ```
-Your Agent ──▶ REST API ──▶ Mnemo Server
-                                │
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-                  Redis                  Qdrant
-               (state, graph           (vectors,
-               adjacency)              search)
+Agent Runtime
+    │
+    ▼
+REST API (mnemo-server)
+    │
+    ├── Redis   (users, sessions, episodes, graph state)
+    └── Qdrant  (vector index for semantic retrieval)
 ```
 
-Mnemo is a single Rust binary. No Neo4j. No JVM. No garbage collector.
+Mnemo is a single Rust binary with Redis + Qdrant as backing services.
 
-You send messages → Mnemo extracts entities and relationships via LLM → builds a temporal knowledge graph per user → on retrieval, runs hybrid search (semantic + graph traversal) → assembles a token-budgeted context string for your agent.
+### Write Path
+
+```
+Client message
+  -> /api/v1/memory or /api/v1/sessions/:id/episodes
+  -> episode persisted in Redis
+  -> ingest worker extracts entities/edges
+  -> graph updated in Redis + embeddings upserted to Qdrant
+```
+
+### Recall Path
+
+```
+Client query
+  -> /api/v1/memory/:user/context or /api/v1/users/:id/context
+  -> retrieval planner (metadata + temporal intent)
+  -> hybrid search (semantic + graph + lexical fallback)
+  -> token-budgeted context assembled for the agent prompt
+```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full deep dive.
 
