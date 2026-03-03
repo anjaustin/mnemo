@@ -13,6 +13,7 @@ See `docs/API.md` for full request/response schemas.
 
 - `ndjson`
 - `chatgpt_export`
+- `gemini_export`
 
 Request body size limit is currently configured to `64 MiB`.
 
@@ -39,6 +40,18 @@ Importer expects the standard conversation export shape with a `mapping` tree an
 - text from `message.content.parts`
 - timestamps from `message.create_time`
 - session name from conversation `title`
+
+## Gemini export format
+
+Importer expects an object with `chunkedPrompt.chunks` where each chunk includes:
+
+- `role` (`user` or `model`)
+- `text` or `parts[].text`
+
+Behavior:
+
+- `model` is normalized to `assistant`
+- chunks with `isThought: true` are skipped
 
 ## Idempotency and replay safety
 

@@ -539,6 +539,82 @@ async fn test_chat_history_import_chatgpt_export_pathway() {
 }
 
 #[tokio::test]
+async fn test_chat_history_import_gemini_export_pathway() {
+    let app = build_test_app().await;
+
+    let (status, import_resp) = json_request(
+        &app,
+        "POST",
+        "/api/v1/import/chat-history",
+        serde_json::json!({
+            "user": "import-user-gemini",
+            "source": "gemini_export",
+            "payload": {
+                "chunkedPrompt": {
+                    "chunks": [
+                        {"text": "hello from gemini user", "role": "user"},
+                        {"text": "internal thought should be skipped", "role": "model", "isThought": true},
+                        {"text": "hello from gemini model", "role": "model"}
+                    ]
+                }
+            },
+            "default_session": "Gemini Import"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job = wait_for_import_job(&app, import_resp["job_id"].as_str().unwrap()).await;
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["imported_messages"], 2);
+    assert_eq!(job["failed_messages"], 0);
+
+    let (status, user) = json_request(
+        &app,
+        "GET",
+        "/api/v1/users/external/import-user-gemini",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_id = user["id"].as_str().unwrap();
+
+    let (status, episodes) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/users/{user_id}/sessions?limit=20"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session_id = episodes["data"][0]["id"].as_str().unwrap();
+
+    let (status, rows) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{session_id}/episodes?limit=20"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rows["count"], 2);
+    let rendered = rows["data"].as_array().unwrap();
+    let contents: Vec<&str> = rendered
+        .iter()
+        .filter_map(|r| r["content"].as_str())
+        .collect();
+    assert!(contents
+        .iter()
+        .any(|c| c.contains("hello from gemini user")));
+    assert!(contents
+        .iter()
+        .any(|c| c.contains("hello from gemini model")));
+    assert!(contents
+        .iter()
+        .all(|c| !c.contains("internal thought should be skipped")));
+}
+
+#[tokio::test]
 async fn test_chat_history_import_dry_run_writes_no_data() {
     let app = build_test_app().await;
 

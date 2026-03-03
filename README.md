@@ -154,6 +154,8 @@ Inject the returned `context` string into your agent's system prompt. That's it.
 
 Mnemo supports async import jobs for existing chat logs.
 
+Supported sources: `ndjson`, `chatgpt_export`, `gemini_export`.
+
 ```bash
 # Start an import job (ndjson source)
 curl -X POST http://localhost:8080/api/v1/import/chat-history \

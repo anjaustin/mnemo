@@ -441,6 +441,7 @@ struct RememberMemoryResponse {
 enum ChatHistorySource {
     Ndjson,
     ChatgptExport,
+    GeminiExport,
 }
 
 impl ChatHistorySource {
@@ -448,6 +449,7 @@ impl ChatHistorySource {
         match self {
             ChatHistorySource::Ndjson => "ndjson",
             ChatHistorySource::ChatgptExport => "chatgpt_export",
+            ChatHistorySource::GeminiExport => "gemini_export",
         }
     }
 }
@@ -1590,7 +1592,82 @@ fn parse_import_messages(
     match source {
         ChatHistorySource::Ndjson => parse_ndjson_payload(payload),
         ChatHistorySource::ChatgptExport => parse_chatgpt_export_payload(payload),
+        ChatHistorySource::GeminiExport => parse_gemini_export_payload(payload),
     }
+}
+
+fn parse_gemini_export_payload(payload: serde_json::Value) -> Result<Vec<ImportMessage>, String> {
+    let obj = payload
+        .as_object()
+        .ok_or_else(|| "gemini export payload must be an object".to_string())?;
+
+    let chunks = obj
+        .get("chunkedPrompt")
+        .and_then(|v| v.get("chunks"))
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "gemini export missing chunkedPrompt.chunks".to_string())?;
+
+    let mut messages = Vec::new();
+    let base_time = chrono::Utc::now();
+
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let Some(item) = chunk.as_object() else {
+            continue;
+        };
+
+        if item
+            .get("isThought")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let Some(role_raw) = item.get("role").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(role) = parse_role(role_raw) else {
+            continue;
+        };
+
+        let content = item
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                item.get("parts")
+                    .and_then(|v| v.as_array())
+                    .map(|parts| {
+                        parts
+                            .iter()
+                            .filter_map(|p| p.get("text").and_then(|v| v.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                            .trim()
+                            .to_string()
+                    })
+                    .filter(|s| !s.is_empty())
+            });
+        let Some(content) = content else {
+            continue;
+        };
+
+        let created_at = base_time + chrono::Duration::seconds(idx as i64);
+
+        messages.push(ImportMessage {
+            session: None,
+            role,
+            content,
+            created_at,
+        });
+    }
+
+    if messages.is_empty() {
+        return Err("no importable messages found in gemini export payload".into());
+    }
+
+    Ok(messages)
 }
 
 fn parse_ndjson_payload(payload: serde_json::Value) -> Result<Vec<ImportMessage>, String> {
@@ -1767,7 +1844,7 @@ fn extract_chatgpt_content(message: &serde_json::Value) -> String {
 fn parse_role(input: &str) -> Option<MessageRole> {
     match input.to_ascii_lowercase().as_str() {
         "user" | "human" => Some(MessageRole::User),
-        "assistant" | "ai" => Some(MessageRole::Assistant),
+        "assistant" | "ai" | "model" => Some(MessageRole::Assistant),
         "system" => Some(MessageRole::System),
         "tool" | "function" => Some(MessageRole::Tool),
         _ => None,
