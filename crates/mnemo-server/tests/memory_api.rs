@@ -580,6 +580,182 @@ async fn test_chat_history_import_dry_run_writes_no_data() {
 }
 
 #[tokio::test]
+async fn test_scientific_current_context_includes_episode_provenance() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "science-provenance-user",
+            "external_id": "science-provenance-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({"user_id": user_id, "name": "research-log"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Legacy model: regenerative patterning is gene-expression only.",
+            "created_at": "2021-03-11T09:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Current model: regenerative patterning uses stable bioelectric prepatterns.",
+            "created_at": "2025-08-19T10:15:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/science-provenance-user/context",
+        serde_json::json!({
+            "query": "What is our current model of regenerative patterning?",
+            "time_intent": "current",
+            "mode": "head",
+            "max_tokens": 700
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let episodes = context["episodes"].as_array().unwrap();
+    assert!(
+        !episodes.is_empty(),
+        "expected episode provenance in response"
+    );
+    assert!(episodes.iter().all(|e| e["id"].is_string()));
+    assert!(episodes.iter().all(|e| e["session_id"].is_string()));
+    assert!(episodes.iter().all(|e| e["created_at"].is_string()));
+    assert!(
+        episodes.iter().any(|e| {
+            e["preview"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("stable bioelectric prepatterns")
+        }),
+        "expected provenance to cite current scientific claim"
+    );
+}
+
+#[tokio::test]
+async fn test_scientific_historical_context_cites_historical_episode() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "science-historical-user",
+            "external_id": "science-historical-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({"user_id": user_id, "name": "research-log"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Old framing: target morphology is a static endpoint snapshot only.",
+            "created_at": "2022-05-09T13:20:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Updated framing: target morphology behaves as an attractor-like setpoint in morphospace.",
+            "created_at": "2025-01-21T15:45:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/science-historical-user/context",
+        serde_json::json!({
+            "query": "What was our framing in 2022?",
+            "mode": "historical",
+            "time_intent": "historical",
+            "as_of": "2022-09-01T00:00:00Z",
+            "max_tokens": 700
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let episodes = context["episodes"].as_array().unwrap();
+    assert!(
+        !episodes.is_empty(),
+        "expected historical provenance episodes"
+    );
+    assert!(
+        episodes.iter().any(|e| {
+            e["preview"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("static endpoint snapshot")
+        }),
+        "expected historical provenance to include the historical claim"
+    );
+}
+
+#[tokio::test]
 async fn test_memory_api_head_mode_returns_thread_head_diagnostics() {
     let app = build_test_app().await;
 

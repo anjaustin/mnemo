@@ -49,6 +49,7 @@ It verifies:
 - promotion gating and approve/reject flows
 - async chat-history import pathway (`/api/v1/import/chat-history` + job polling)
 - import falsification checks for malformed rows, mixed timestamp quality, and idempotent replay
+- scientific retrieval provenance checks (episode citation coverage for current/historical queries)
 
 ### Test infrastructure
 
@@ -100,3 +101,4 @@ Reference workflows:
 
 - `.github/workflows/quality-gates.yml`
 - `.github/workflows/memory-falsification.yml`
+- `.github/workflows/nightly-soak.yml`

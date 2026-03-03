@@ -36,6 +36,11 @@ Workflow: `.github/workflows/benchmark-eval.yml`
 - PR / push to `main`: runs Mnemo benchmark on default pack and scientific research pack v2.
 - Manual dispatch: supports `mnemo`, `zep`, or `both`.
 
+Nightly stability soak workflow: `.github/workflows/nightly-soak.yml`
+
+- runs memory API falsification three times in sequence (flake detection)
+- runs temporal and scientific v2 eval packs with `--verbose`
+
 For Zep runs in GitHub Actions, configure repository secret:
 
 - `ZEP_API_KEY`

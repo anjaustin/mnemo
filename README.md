@@ -54,6 +54,8 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 
 Reference CI gate: `.github/workflows/quality-gates.yml`.
 
+Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
+
 ## Releases and Packages
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.

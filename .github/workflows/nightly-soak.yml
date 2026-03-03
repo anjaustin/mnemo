@@ -1,0 +1,106 @@
+name: nightly-soak
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis/redis-stack:latest
+        ports:
+          - 6379:6379
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+          - 6334:6334
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Wait for Redis and Qdrant
+        run: |
+          python3 - <<'PY'
+          import socket
+          import time
+
+          targets = [
+              ("127.0.0.1", 6379, "redis"),
+              ("127.0.0.1", 6334, "qdrant-grpc"),
+          ]
+          deadline = time.time() + 90
+
+          for host, port, name in targets:
+              while True:
+                  try:
+                      with socket.create_connection((host, port), timeout=2):
+                          print(f"{name} is up on {host}:{port}")
+                          break
+                  except OSError:
+                      if time.time() > deadline:
+                          raise SystemExit(f"Timed out waiting for {name} on {host}:{port}")
+                      time.sleep(1)
+          PY
+
+      - name: Repeated memory API falsification (flake soak)
+        env:
+          MNEMO_TEST_REDIS_URL: redis://localhost:6379
+          MNEMO_TEST_QDRANT_URL: http://localhost:6334
+          MNEMO_TEST_QDRANT_PREFIX: mnemo_
+        run: |
+          for i in 1 2 3; do
+            echo "### memory_api soak iteration $i"
+            cargo test -p mnemo-server --test memory_api -- --test-threads=1
+          done
+
+      - name: Build Mnemo server
+        run: cargo build --bin mnemo-server
+
+      - name: Run nightly eval soak packs
+        run: |
+          target/debug/mnemo-server >/tmp/mnemo_nightly.log 2>&1 &
+          SERVER_PID=$!
+          sleep 3
+
+          python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080 --verbose | tee /tmp/nightly_temporal.txt
+          python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080 --verbose | tee /tmp/nightly_scientific_v2.txt
+
+          kill $SERVER_PID || true
+          wait $SERVER_PID 2>/dev/null || true
+
+      - name: Publish nightly summary
+        if: always()
+        run: |
+          echo "## Nightly Soak" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f /tmp/nightly_temporal.txt ]; then
+            echo "### Temporal Pack" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/nightly_temporal.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f /tmp/nightly_scientific_v2.txt ]; then
+            echo "### Scientific Pack v2" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/nightly_scientific_v2.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Dump server log on failure
+        if: failure()
+        run: |
+          if [ -f /tmp/mnemo_nightly.log ]; then
+            cat /tmp/mnemo_nightly.log
+          fi
