@@ -119,6 +119,28 @@ From local runs on 2026-03-02:
 
 Interpretation: v2 raises difficulty with denser contradiction and synthesis cases. Temporal retrieval still materially outperforms baseline. During falsification, we identified and fixed one scorer false-positive in v2 expectation tokens (substring overlap between `2.5 uM` and `5 uM`), then reran the pack.
 
+## Importer stress snapshot
+
+Real export dataset used:
+
+- `downloads/6957c8e02c797beeb082b42e1f53a0d4f97ed813369f7b25376485225dded6b4-2025-10-21-02-29-50-e815fa493cfa481c941b2165f06911b9.zip`
+- importable messages: `8945`
+- conversations: `47`
+
+Local run commands:
+
+```bash
+python3 eval/import_stress.py --mode dry-run --iterations 1 --base-url http://localhost:8080
+python3 eval/import_stress.py --mode import --iterations 1 --base-url http://localhost:8080
+```
+
+Observed local throughput snapshot (single-iteration):
+
+| Mode | Imported Messages | Total Job Time (ms) | Throughput (messages/sec) | Failed Messages |
+|---|---:|---:|---:|---:|
+| dry-run | 8945 | 1573 | 5686.59 | 0 |
+| import | 8945 | 13109 | 682.36 | 0 |
+
 ## Competitive runbook (Mnemo vs Zep)
 
 1. Run the same scenario set end-to-end on both systems.

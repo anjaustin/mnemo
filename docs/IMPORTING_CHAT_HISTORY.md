@@ -14,6 +14,8 @@ See `docs/API.md` for full request/response schemas.
 - `ndjson`
 - `chatgpt_export`
 
+Request body size limit is currently configured to `64 MiB`.
+
 ## NDJSON format
 
 Accepts one of:
@@ -82,4 +84,22 @@ Then poll:
 
 ```bash
 curl http://localhost:8080/api/v1/import/jobs/JOB_ID
+```
+
+## Stress test with a real export zip
+
+Use the importer stress harness with a ChatGPT export archive:
+
+```bash
+python3 eval/import_stress.py \
+  --zip-path downloads/6957c8e02c797beeb082b42e1f53a0d4f97ed813369f7b25376485225dded6b4-2025-10-21-02-29-50-e815fa493cfa481c941b2165f06911b9.zip \
+  --mode dry-run \
+  --iterations 2 \
+  --base-url http://localhost:8080
+```
+
+For full-write stress, switch to:
+
+```bash
+python3 eval/import_stress.py --mode import --iterations 1 --base-url http://localhost:8080
 ```

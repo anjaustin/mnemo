@@ -51,6 +51,15 @@ It verifies:
 - import falsification checks for malformed rows, mixed timestamp quality, and idempotent replay
 - scientific retrieval provenance checks (episode citation coverage for current/historical queries)
 
+## 5) Importer stress harness (large real-world export)
+
+```bash
+python3 eval/import_stress.py --mode dry-run --iterations 2 --base-url http://localhost:8080
+python3 eval/import_stress.py --mode import --iterations 1 --base-url http://localhost:8080
+```
+
+This harness loads a real ChatGPT export zip, runs async import jobs, and reports per-iteration and aggregate throughput metrics.
+
 ### Test infrastructure
 
 By default the falsification suite expects:

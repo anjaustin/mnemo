@@ -1,4 +1,4 @@
-use axum::extract::{Json, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Json, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
@@ -171,6 +171,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/agents/:agent_id/context", post(get_agent_context))
         // Graph
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
+        // Allow larger request bodies for import payloads.
+        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state)
 }
 
