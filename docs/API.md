@@ -140,6 +140,7 @@ Start an import job.
 {
   "user": "kendra",
   "source": "ndjson",
+  "idempotency_key": "import-2026-03-03-001",
   "dry_run": false,
   "default_session": "Imported History",
   "payload": [
@@ -155,6 +156,7 @@ Start an import job.
 
 - `source` currently supports: `ndjson`, `chatgpt_export`
 - `dry_run=true` validates and counts importable rows without writing episodes.
+- `idempotency_key` replays a prior job for the same user/key pair without creating duplicate imports.
 
 ```json
 // Response 202
@@ -164,6 +166,8 @@ Start an import job.
   "status": "queued"
 }
 ```
+
+If the same `user` + `idempotency_key` is submitted again, the server returns `200` with the original `job_id` and latest job status.
 
 ### `GET /api/v1/import/jobs/:job_id`
 

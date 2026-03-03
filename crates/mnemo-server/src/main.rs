@@ -125,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
             relax_if_empty: config.retrieval.metadata_relax_if_empty,
         },
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
     let app = build_router(app_state)
         .layer(AuthLayer::new(auth_config))

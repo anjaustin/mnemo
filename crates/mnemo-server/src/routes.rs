@@ -467,6 +467,8 @@ struct ImportChatHistoryRequest {
     default_session: Option<String>,
     #[serde(default)]
     dry_run: bool,
+    #[serde(default)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -672,12 +674,44 @@ async fn import_chat_history(
         return Err(AppError(MnemoError::Validation("user is required".into())));
     }
 
+    let user = req.user.trim().to_string();
+    let idempotency_key = req
+        .idempotency_key
+        .as_ref()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty());
+
+    if let Some(idempotency_key) = idempotency_key.as_ref() {
+        let scoped_key = format!("{}:{}", user, idempotency_key);
+        let existing_job_id = {
+            let idempotency = state.import_idempotency.read().await;
+            idempotency.get(&scoped_key).copied()
+        };
+
+        if let Some(existing_job_id) = existing_job_id {
+            let existing_status = {
+                let jobs = state.import_jobs.read().await;
+                jobs.get(&existing_job_id).map(|j| j.status.clone())
+            };
+            if let Some(status) = existing_status {
+                return Ok((
+                    StatusCode::OK,
+                    Json(ImportChatHistoryResponse {
+                        ok: true,
+                        job_id: existing_job_id,
+                        status,
+                    }),
+                ));
+            }
+        }
+    }
+
     let job_id = Uuid::now_v7();
     let now = chrono::Utc::now();
     let record = ImportJobRecord {
         id: job_id,
         source: req.source.as_str().to_string(),
-        user: req.user.trim().to_string(),
+        user: user.clone(),
         dry_run: req.dry_run,
         status: ImportJobStatus::Queued,
         total_messages: 0,
@@ -695,9 +729,14 @@ async fn import_chat_history(
         jobs.insert(job_id, record);
     }
 
+    if let Some(idempotency_key) = idempotency_key {
+        let scoped_key = format!("{}:{}", user, idempotency_key);
+        let mut idempotency = state.import_idempotency.write().await;
+        idempotency.insert(scoped_key, job_id);
+    }
+
     let source = req.source;
     let payload = req.payload;
-    let user = req.user.trim().to_string();
     let default_session = req.default_session;
     let dry_run = req.dry_run;
     let state_for_job = state.clone();
@@ -1735,9 +1774,15 @@ fn parse_role(input: &str) -> Option<MessageRole> {
 
 fn parse_created_at(input: Option<&str>) -> Result<chrono::DateTime<chrono::Utc>, String> {
     if let Some(raw) = input {
-        chrono::DateTime::parse_from_rfc3339(raw)
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .map_err(|e| format!("invalid created_at timestamp: {e}"))
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
+            return Ok(dt.with_timezone(&chrono::Utc));
+        }
+        if let Ok(unix_seconds) = raw.parse::<i64>() {
+            if let Some(dt) = chrono::DateTime::<chrono::Utc>::from_timestamp(unix_seconds, 0) {
+                return Ok(dt);
+            }
+        }
+        Err("invalid created_at timestamp (expected RFC3339 or unix seconds string)".into())
     } else {
         Ok(chrono::Utc::now())
     }

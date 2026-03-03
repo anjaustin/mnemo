@@ -78,6 +78,7 @@ async fn build_test_app_with_prefilter(prefilter: MetadataPrefilterConfig) -> ax
         graph,
         metadata_prefilter: prefilter,
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     })
 }
 
@@ -103,6 +104,26 @@ async fn json_request(
         serde_json::from_slice::<Value>(&body).unwrap()
     };
     (status, parsed)
+}
+
+async fn wait_for_import_job(app: &axum::Router, job_id: &str) -> Value {
+    for _ in 0..80 {
+        let (status, job) = json_request(
+            app,
+            "GET",
+            &format!("/api/v1/import/jobs/{job_id}"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        if job["status"] == "completed" || job["status"] == "failed" {
+            return job;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    panic!("import job {job_id} did not reach terminal state in time");
 }
 
 #[tokio::test]
@@ -309,6 +330,147 @@ async fn test_chat_history_import_ndjson_pathway() {
             || context_text.contains("Imported response one"),
         "expected imported content in context, got: {}",
         context_text
+    );
+}
+
+#[tokio::test]
+async fn test_chat_history_import_rejects_malformed_rows() {
+    let app = build_test_app().await;
+
+    let (status, import_resp) = json_request(
+        &app,
+        "POST",
+        "/api/v1/import/chat-history",
+        serde_json::json!({
+            "user": "import-user-malformed",
+            "source": "ndjson",
+            "payload": [
+                {
+                    "session": "broken",
+                    "role": "user",
+                    "created_at": "2025-01-01T00:00:00Z"
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = import_resp["job_id"].as_str().unwrap();
+    let job = wait_for_import_job(&app, job_id).await;
+    assert_eq!(job["status"], "failed");
+    assert_eq!(job["total_messages"], 0);
+    assert_eq!(job["imported_messages"], 0);
+    assert!(job["errors"]
+        .as_array()
+        .map(|errors| !errors.is_empty())
+        .unwrap_or(false));
+}
+
+#[tokio::test]
+async fn test_chat_history_import_supports_mixed_timestamp_quality() {
+    let app = build_test_app().await;
+
+    let (status, import_resp) = json_request(
+        &app,
+        "POST",
+        "/api/v1/import/chat-history",
+        serde_json::json!({
+            "user": "import-user-timestamps",
+            "source": "ndjson",
+            "default_session": "Timestamp Mix",
+            "payload": [
+                {
+                    "role": "user",
+                    "content": "RFC3339 timestamp row",
+                    "created_at": "2025-01-01T00:00:00Z"
+                },
+                {
+                    "role": "assistant",
+                    "content": "Unix timestamp row",
+                    "created_at": "1735689605"
+                },
+                {
+                    "role": "user",
+                    "content": "Missing timestamp row"
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = import_resp["job_id"].as_str().unwrap();
+    let job = wait_for_import_job(&app, job_id).await;
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["total_messages"], 3);
+    assert_eq!(job["imported_messages"], 3);
+    assert_eq!(job["failed_messages"], 0);
+}
+
+#[tokio::test]
+async fn test_chat_history_import_idempotency_prevents_duplicate_replay() {
+    let app = build_test_app().await;
+
+    let payload = serde_json::json!({
+        "user": "import-user-idempotent",
+        "source": "ndjson",
+        "idempotency_key": "replay-key-42",
+        "default_session": "Idempotent Session",
+        "payload": [
+            {
+                "role": "user",
+                "content": "Import exactly once",
+                "created_at": "2025-01-01T00:00:00Z"
+            }
+        ]
+    });
+
+    let (status, first) =
+        json_request(&app, "POST", "/api/v1/import/chat-history", payload.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let first_job_id = first["job_id"].as_str().unwrap().to_string();
+
+    let first_job = wait_for_import_job(&app, &first_job_id).await;
+    assert_eq!(first_job["status"], "completed");
+    assert_eq!(first_job["imported_messages"], 1);
+
+    let (status, second) = json_request(&app, "POST", "/api/v1/import/chat-history", payload).await;
+    assert_eq!(status, StatusCode::OK);
+    let second_job_id = second["job_id"].as_str().unwrap().to_string();
+    assert_eq!(first_job_id, second_job_id);
+
+    let (status, user) = json_request(
+        &app,
+        "GET",
+        "/api/v1/users/external/import-user-idempotent",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_id = user["id"].as_str().unwrap();
+
+    let (status, sessions) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/users/{user_id}/sessions?limit=20"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session_id = sessions["data"][0]["id"].as_str().unwrap();
+
+    let (status, episodes) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{session_id}/episodes?limit=50"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        episodes["count"], 1,
+        "idempotent replay must not duplicate episodes"
     );
 }
 

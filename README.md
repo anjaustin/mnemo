@@ -157,6 +157,7 @@ curl -X POST http://localhost:8080/api/v1/import/chat-history \
   -d '{
     "user": "kendra",
     "source": "ndjson",
+    "idempotency_key": "import-001",
     "dry_run": false,
     "default_session": "Imported History",
     "payload": [

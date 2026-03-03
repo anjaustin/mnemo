@@ -48,6 +48,7 @@ It verifies:
 - identity versioning/audit/rollback semantics
 - promotion gating and approve/reject flows
 - async chat-history import pathway (`/api/v1/import/chat-history` + job polling)
+- import falsification checks for malformed rows, mixed timestamp quality, and idempotent replay
 
 ### Test infrastructure
 

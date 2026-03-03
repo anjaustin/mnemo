@@ -52,4 +52,5 @@ pub struct AppState {
     pub graph: Arc<GraphEngine<RedisStateStore>>,
     pub metadata_prefilter: MetadataPrefilterConfig,
     pub import_jobs: Arc<RwLock<HashMap<Uuid, ImportJobRecord>>>,
+    pub import_idempotency: Arc<RwLock<HashMap<String, Uuid>>>,
 }
