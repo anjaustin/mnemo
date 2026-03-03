@@ -1,136 +1,102 @@
 # Benchmarks
 
-## Status
+This document is the public benchmark snapshot for Mnemo. It focuses on falsifiable outcomes: temporal accuracy, stale-fact rate, and latency.
 
-Benchmark automation is active and publishing results through:
+Primary references:
 
-- `eval/temporal_eval.py`
-- `.github/workflows/benchmark-eval.yml`
+- Harness: `eval/temporal_eval.py`
+- CI workflow: `.github/workflows/benchmark-eval.yml`
+- Methodology details: `docs/EVALUATION.md`
+- Cross-system caveats: `docs/COMPETITIVE.md`
 
-Current measured snapshots:
+## Executive Snapshot
 
-Baseline temporal pack (local run, 2026-03-02):
+Latest local snapshots (2026-03-02):
 
-| System | Profile | Accuracy | Stale Fact Rate | Errors | p50 Latency (ms) | p95 Latency (ms) |
-|---|---|---:|---:|---:|---:|---:|
-| mnemo | temporal | 100.0% | 0.0% | 0 | 106 | 106 |
-| mnemo | baseline | 66.7% | 33.3% | 0 | 81 | 81 |
+| Dataset | System | Profile | Accuracy | Stale Fact Rate | Errors | p50 (ms) | p95 (ms) |
+|---|---|---|---:|---:|---:|---:|---:|
+| `temporal_cases.json` | mnemo | temporal | 100.0% | 0.0% | 0 | 106 | 106 |
+| `temporal_cases.json` | mnemo | baseline | 66.7% | 33.3% | 0 | 81 | 81 |
+| `scientific_research_cases_v2.json` | mnemo | temporal | 100.0% | 0.0% | 0 | 78 | 106 |
+| `scientific_research_cases_v2.json` | mnemo | baseline | 50.0% | 40.0% | 0 | 75 | 105 |
 
-Scientific research pack v2 (local run, 2026-03-02):
+Takeaways:
 
-| System | Profile | Accuracy | Stale Fact Rate | Errors | p50 Latency (ms) | p95 Latency (ms) |
-|---|---|---:|---:|---:|---:|---:|
-| mnemo | temporal | 100.0% | 0.0% | 0 | 78 | 106 |
-| mnemo | baseline | 50.0% | 40.0% | 0 | 75 | 105 |
+- Temporal mode consistently outperforms baseline on correctness and stale-fact suppression.
+- Scientific-domain cases increase difficulty and widen the gap between temporal and baseline behavior.
 
-Interpretation:
-
-- Mnemo temporal mode consistently outperforms Mnemo baseline on this dataset.
-- Scientific-domain cases widen the baseline-vs-temporal quality gap and are now part of routine falsification.
-
----
-
-## Methodology
-
-All benchmarks are run with:
-- **Tool:** [Criterion.rs](https://github.com/bheisler/criterion.rs) for microbenchmarks, `hey` or `wrk` for HTTP throughput
-- **Infrastructure:** Docker Compose (Redis Stack + Qdrant) on the same machine
-- **Warm-up:** 5 iterations discarded before measurement
-- **Samples:** 100 iterations minimum
-- **Metrics:** P50, P95, P99 latency; throughput (ops/sec)
-
-### How to Reproduce
+## Reproduce in 5 minutes
 
 ```bash
-# Start infrastructure
+# 1) Start dependencies
 docker compose up -d redis qdrant
 
-# Run eval harness against local Mnemo
-cargo run --bin mnemo-server &
-sleep 3
+# 2) Start Mnemo server
+cargo run --bin mnemo-server
+
+# 3) Run baseline temporal pack
 python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080
 
-# Run scientific research packs
+# 4) Run scientific research packs
 python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases.json --mnemo-base-url http://localhost:8080
 python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080 --verbose
-
-# Optional: side-by-side with Zep (requires API key)
-python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key
-
-# Legacy microbenchmarks
-cargo bench
-
-# Run HTTP benchmarks (requires server running)
-cargo run --release --bin mnemo-server &
-sleep 2
-
-# Throughput test: context retrieval
-hey -n 1000 -c 50 -m POST \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"What does the user prefer?"}]}' \
-  http://localhost:8080/api/v1/users/USER_ID/context
-
-# Throughput test: episode ingestion
-hey -n 5000 -c 100 -m POST \
-  -H "Content-Type: application/json" \
-  -d '{"type":"message","role":"user","content":"Test message"}' \
-  http://localhost:8080/api/v1/sessions/SESSION_ID/episodes
 ```
 
----
+Optional cross-system run (requires `zep_api.key`):
 
-## Targets
+```bash
+python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key
+```
 
-These are the performance targets from the PRD. Use `docs/EVALUATION.md` and `docs/COMPETITIVE.md` for the latest run evidence and methodology notes.
+## Scope and Caveats
 
-### Latency
+- These tables are from controlled local runs and should be treated as reproducible engineering evidence, not broad production guarantees.
+- Cross-system comparisons must include parity caveats because APIs are not 1:1 (see `docs/COMPETITIVE.md`).
+- Retrieval latency includes memory context assembly path. It does not include asynchronous ingestion-side LLM extraction latency.
 
-| Operation | Target | P50 | P95 | P99 |
-|-----------|--------|-----|-----|-----|
-| Episode ingestion (API → Redis) | <5ms | TBD | TBD | TBD |
-| Context retrieval (API → response) | <50ms | TBD | TBD | TBD |
-| Semantic search (Qdrant round-trip) | <30ms | TBD | TBD | TBD |
-| Entity extraction (LLM round-trip) | Measure only | TBD | TBD | TBD |
-| Full-text search (RediSearch) | <10ms | TBD | TBD | TBD |
-| RRF fusion (in-process) | <1ms | TBD | TBD | TBD |
+## Performance Targets
 
-### Throughput
+Targets are from the product roadmap and will be replaced by measured values as benchmark coverage expands.
 
-| Operation | Target | Measured |
-|-----------|--------|----------|
+### Latency Targets
+
+| Operation | Target | Current Measured |
+|---|---:|---:|
+| Episode ingestion (API -> Redis) | <5ms | TBD |
+| Context retrieval (API -> response) | <50ms | TBD |
+| Semantic search (Qdrant round-trip) | <30ms | TBD |
+| Full-text search (RediSearch) | <10ms | TBD |
+| RRF fusion (in-process) | <1ms | TBD |
+
+### Throughput Targets
+
+| Operation | Target | Current Measured |
+|---|---:|---:|
 | Concurrent episode ingestion | 1000 eps/sec | TBD |
 | Concurrent context retrieval | 500 req/sec | TBD |
-| Background extraction (with LLM) | Depends on LLM | TBD |
+| Background extraction (LLM-dependent) | provider-bound | TBD |
 
-### Memory
+### Memory Footprint Targets
 
-| Metric | Target | Measured |
-|--------|--------|----------|
+| Metric | Target | Current Measured |
+|---|---:|---:|
 | Base server footprint | <50MB RSS | TBD |
-| Per 1K users (100 episodes each) | <200MB Redis | TBD |
-| Per 1K users (100 episodes each) | <500MB Qdrant | TBD |
+| Per 1K users (100 episodes each) Redis | <200MB | TBD |
+| Per 1K users (100 episodes each) Qdrant | <500MB | TBD |
 
----
+## Environment Template
 
-## Hardware Spec
+Fill this block whenever publishing benchmark claims:
 
-*To be filled when benchmarks are run:*
-
+```text
+CPU:
+Memory:
+OS:
+Rust:
+Redis:
+Qdrant:
+Docker:
+Mnemo commit SHA:
+Dataset:
+Command:
 ```
-CPU:     
-Memory:  
-OS:      
-Rust:    
-Redis:   
-Qdrant:  
-Docker:  
-```
-
----
-
-## Notes
-
-- Episode ingestion latency measures the synchronous API call (store in Redis + add to pending queue). It does **not** include the asynchronous LLM extraction step.
-- Context retrieval latency includes embedding generation, Qdrant search, RediSearch full-text search, graph traversal, RRF fusion, and context string assembly.
-- LLM extraction latency is dominated by the external API call and varies by provider (OpenAI ≈ 500ms–2s, Ollama local ≈ 200ms–5s depending on model).
-- All latency measurements use pre-warmed connections (connection pool already established).
