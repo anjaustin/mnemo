@@ -1,6 +1,8 @@
-# 🧠 Mnemo
+# Mnemo
 
 [![memory-falsification](https://github.com/anjaustin/mnemo/actions/workflows/memory-falsification.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/memory-falsification.yml)
+
+![Mnemosyne](img/mnemosyne.gif)
 
 **Memory that evolves. Context that matters.**
 
