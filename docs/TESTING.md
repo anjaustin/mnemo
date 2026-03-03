@@ -83,6 +83,14 @@ cargo test -p mnemo-server --test memory_api -- --test-threads=1
 docker compose -f docker-compose.test.yml down
 ```
 
+If `mnemo-ingest` integration tests fail with `Connection refused` on Redis, set:
+
+```bash
+export MNEMO_TEST_REDIS_URL=redis://localhost:6379
+```
+
+(`crates/mnemo-ingest/tests/ingest.rs` defaults to `redis://localhost:6399` when the env var is unset.)
+
 ## CI troubleshooting
 
 ### Symptom: "containers failed to initialize"

@@ -141,6 +141,35 @@ Observed local throughput snapshot (single-iteration):
 | dry-run | 8945 | 1573 | 5686.59 | 0 |
 | import | 8945 | 13109 | 682.36 | 0 |
 
+## Latest max falsification sweep
+
+From a full local sweep on 2026-03-03:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo check --workspace`
+- `cargo test --workspace --lib --bins`
+- `MNEMO_TEST_REDIS_URL=redis://localhost:6379 MNEMO_TEST_QDRANT_URL=http://localhost:6334 cargo test --workspace --tests -- --test-threads=1`
+- `cargo test -p mnemo-server --test memory_api -- --test-threads=1` (repeated x3 for soak)
+- `python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080`
+- `python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases.json --mnemo-base-url http://localhost:8080`
+- `python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080 --verbose`
+- `bash tests/e2e_smoke.sh http://localhost:8080`
+- `python3 eval/import_stress.py --mode dry-run --iterations 1 --base-url http://localhost:8080`
+- `python3 eval/import_stress.py --mode import --iterations 1 --base-url http://localhost:8080`
+
+Observed outcomes:
+
+- workspace and integration suites passed (`memory_api`: 23/23, `ingest`: 3/3, `storage`: 6/6)
+- memory API soak loop passed 3/3 consecutive runs
+- deterministic smoke passed (9/9 checks)
+- scientific v2 remained stable (`temporal` 100% accuracy, 0% stale; `baseline` 50% accuracy, 40% stale)
+- importer stress remained green with no row failures:
+  - dry-run: 8945 messages, 1414 ms, 6326.03 msgs/sec
+  - import: 8945 messages, 9820 ms, 910.90 msgs/sec
+
+Note: `mnemo-ingest` integration tests require `MNEMO_TEST_REDIS_URL` to match a reachable Redis instance (CI uses `redis://localhost:6379`).
+
 ## Competitive runbook (Mnemo vs Zep)
 
 1. Run the same scenario set end-to-end on both systems.
