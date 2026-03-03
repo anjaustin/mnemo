@@ -136,6 +136,10 @@ pub fn build_router(state: AppState) -> Router {
             post(memory_changes_since),
         )
         .route("/api/v1/memory/:user/conflict_radar", post(conflict_radar))
+        .route(
+            "/api/v1/memory/:user/causal_recall",
+            post(causal_recall_chains),
+        )
         // Import API
         .route("/api/v1/import/chat-history", post(import_chat_history))
         .route("/api/v1/import/jobs/:job_id", get(get_import_job))
@@ -602,6 +606,64 @@ struct ConflictEdge {
     #[serde(skip_serializing_if = "Option::is_none")]
     invalid_at: Option<chrono::DateTime<chrono::Utc>>,
     is_active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CausalRecallRequest {
+    query: String,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    mode: Option<MemoryContextMode>,
+    #[serde(default)]
+    time_intent: Option<TemporalIntent>,
+    #[serde(default)]
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+struct CausalRecallResponse {
+    query: String,
+    user_id: Uuid,
+    mode: MemoryContextMode,
+    retrieval_sources: Vec<RetrievalSource>,
+    chains: Vec<CausalRecallChain>,
+    summary: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CausalRecallChain {
+    id: String,
+    confidence: f32,
+    reason: String,
+    fact: CausalFact,
+    source_episodes: Vec<CausalEpisode>,
+}
+
+#[derive(Debug, Serialize)]
+struct CausalFact {
+    fact_id: Uuid,
+    source_entity: String,
+    target_entity: String,
+    label: String,
+    text: String,
+    valid_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invalid_at: Option<chrono::DateTime<chrono::Utc>>,
+    relevance: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct CausalEpisode {
+    episode_id: Uuid,
+    session_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    relevance: f32,
+    preview: String,
 }
 
 #[derive(Deserialize)]
@@ -1392,6 +1454,180 @@ async fn conflict_radar(
     }))
 }
 
+async fn causal_recall_chains(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<CausalRecallRequest>,
+) -> Result<Json<CausalRecallResponse>, AppError> {
+    if req.query.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("query is required".into())));
+    }
+
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
+    let requested_session_name = req.session.and_then(|s| {
+        let trimmed = s.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    let scoped_session =
+        resolve_session_scope(&state, user.id, mode, requested_session_name.clone()).await?;
+    let session_id = scoped_session.as_ref().map(|s| s.id);
+    let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
+    let max_tokens = req.max_tokens.unwrap_or(700);
+
+    let context_req = ContextRequest {
+        session_id,
+        messages: vec![ContextMessage {
+            role: "user".to_string(),
+            content: req.query.clone(),
+        }],
+        max_tokens,
+        search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
+        temporal_filter: req.as_of,
+        as_of: req.as_of,
+        time_intent: temporal_intent,
+        temporal_weight: None,
+        min_relevance: 0.3,
+    };
+
+    let mut context = state.retrieval.get_context(user.id, &context_req).await?;
+    maybe_attach_recent_episode_fallback(
+        &state,
+        user.id,
+        session_id,
+        max_tokens,
+        temporal_intent,
+        req.as_of,
+        &mut context,
+    )
+    .await?;
+
+    let query_terms = normalized_terms(&req.query);
+    let mut chains: Vec<CausalRecallChain> = Vec::new();
+
+    for fact in &context.facts {
+        let mut linked_episodes = Vec::new();
+        let source_l = fact.source_entity.to_lowercase();
+        let target_l = fact.target_entity.to_lowercase();
+        let label_l = fact.label.to_lowercase();
+
+        for episode in &context.episodes {
+            let preview_l = episode.preview.to_lowercase();
+            if preview_l.contains(&source_l)
+                || preview_l.contains(&target_l)
+                || preview_l.contains(&label_l)
+                || fact
+                    .fact
+                    .split_whitespace()
+                    .take(6)
+                    .map(|t| t.to_ascii_lowercase())
+                    .any(|t| preview_l.contains(&t))
+            {
+                linked_episodes.push(CausalEpisode {
+                    episode_id: episode.id,
+                    session_id: episode.session_id,
+                    role: episode.role.clone(),
+                    created_at: episode.created_at,
+                    relevance: episode.relevance,
+                    preview: episode.preview.clone(),
+                });
+            }
+        }
+
+        if linked_episodes.is_empty() && !context.episodes.is_empty() {
+            let top = &context.episodes[0];
+            linked_episodes.push(CausalEpisode {
+                episode_id: top.id,
+                session_id: top.session_id,
+                role: top.role.clone(),
+                created_at: top.created_at,
+                relevance: top.relevance,
+                preview: top.preview.clone(),
+            });
+        }
+
+        let mut confidence = fact.relevance;
+        let fact_terms = normalized_terms(&fact.fact);
+        let overlap = query_terms.intersection(&fact_terms).count() as f32;
+        let denom = query_terms.len().max(1) as f32;
+        confidence = (confidence + (overlap / denom)).min(1.0);
+
+        let reason = format!(
+            "Matched fact '{}' with {} supporting episode(s)",
+            fact.label,
+            linked_episodes.len()
+        );
+
+        chains.push(CausalRecallChain {
+            id: format!("fact:{}", fact.id),
+            confidence,
+            reason,
+            fact: CausalFact {
+                fact_id: fact.id,
+                source_entity: fact.source_entity.clone(),
+                target_entity: fact.target_entity.clone(),
+                label: fact.label.clone(),
+                text: fact.fact.clone(),
+                valid_at: fact.valid_at,
+                invalid_at: fact.invalid_at,
+                relevance: fact.relevance,
+            },
+            source_episodes: linked_episodes,
+        });
+    }
+
+    if chains.is_empty() {
+        for episode in context.episodes.iter().take(5) {
+            chains.push(CausalRecallChain {
+                id: format!("episode:{}", episode.id),
+                confidence: episode.relevance,
+                reason: "No graph facts available; using direct episode recall lineage".to_string(),
+                fact: CausalFact {
+                    fact_id: episode.id,
+                    source_entity: "episode".to_string(),
+                    target_entity: "context".to_string(),
+                    label: "episode_recall".to_string(),
+                    text: episode.preview.clone(),
+                    valid_at: episode.created_at,
+                    invalid_at: None,
+                    relevance: episode.relevance,
+                },
+                source_episodes: vec![CausalEpisode {
+                    episode_id: episode.id,
+                    session_id: episode.session_id,
+                    role: episode.role.clone(),
+                    created_at: episode.created_at,
+                    relevance: episode.relevance,
+                    preview: episode.preview.clone(),
+                }],
+            });
+        }
+    }
+
+    chains.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    chains.truncate(25);
+
+    let summary = format!(
+        "{} causal chains built from {} facts and {} episodes",
+        chains.len(),
+        context.facts.len(),
+        context.episodes.len()
+    );
+
+    Ok(Json(CausalRecallResponse {
+        query: req.query,
+        user_id: user.id,
+        mode,
+        retrieval_sources: context.sources.clone(),
+        chains,
+        summary,
+    }))
+}
+
 async fn get_agent_identity(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -2011,6 +2247,15 @@ fn preview_text(content: &str, max_chars: usize) -> String {
     }
     out.push_str("...");
     out
+}
+
+fn normalized_terms(text: &str) -> std::collections::HashSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter_map(|t| {
+            let s = t.trim().to_ascii_lowercase();
+            (!s.is_empty()).then_some(s)
+        })
+        .collect()
 }
 
 async fn run_import_job(

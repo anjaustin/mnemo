@@ -440,6 +440,129 @@ async fn test_conflict_radar_detects_active_fact_conflict() {
 }
 
 #[tokio::test]
+async fn test_causal_recall_chains_returns_fact_lineage() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "causal-user",
+            "external_id": "causal-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = Uuid::parse_str(user["id"].as_str().unwrap()).unwrap();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({"user_id": user_id, "name": "causal-session"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap();
+
+    let (status, ep) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Kendra prefers Nike running shoes.",
+            "created_at": "2025-01-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let episode_id = Uuid::parse_str(ep["id"].as_str().unwrap()).unwrap();
+
+    let src = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Kendra".to_string(),
+                entity_type: EntityType::Person,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let nike = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Nike".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Nike".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Nike running shoes".to_string(),
+                confidence: 0.92,
+                valid_at: Some(Utc::now()),
+            },
+            user_id,
+            src.id,
+            nike.id,
+            episode_id,
+            Utc::now(),
+        ))
+        .await
+        .unwrap();
+
+    let (status, resp) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/causal-user/causal_recall",
+        serde_json::json!({
+            "query": "What does Kendra prefer?",
+            "session": "causal-session"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["mode"], "hybrid");
+    assert!(resp["chains"].is_array());
+    let chains = resp["chains"].as_array().unwrap();
+    assert!(!chains.is_empty(), "expected at least one causal chain");
+    assert!(chains[0]["fact"]["fact_id"].is_string());
+    assert!(chains[0]["source_episodes"].is_array());
+}
+
+#[tokio::test]
+async fn test_causal_recall_chains_rejects_empty_query() {
+    let app = build_test_app().await;
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/some-user/causal_recall",
+        serde_json::json!({"query": "   "}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_memory_api_immediate_recall_fallback_contains_recent_text() {
     let app = build_test_app().await;
     let marker = "falsify-anchovy-orbit-9271";

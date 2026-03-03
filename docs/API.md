@@ -224,6 +224,62 @@ All fields are optional.
 }
 ```
 
+### `POST /api/v1/memory/:user/causal_recall`
+
+Explain why memory was retrieved by returning fact-to-episode lineage chains.
+
+```json
+// Request
+{
+  "query": "What does Kendra prefer?",
+  "session": "default",
+  "mode": "hybrid",
+  "time_intent": "current",
+  "as_of": "2025-01-01T00:00:00Z",
+  "max_tokens": 700
+}
+```
+
+`query` is required. Other fields are optional.
+
+```json
+// Response 200
+{
+  "query": "What does Kendra prefer?",
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "mode": "hybrid",
+  "retrieval_sources": ["semantic_search", "graph_traversal"],
+  "chains": [
+    {
+      "id": "fact:019513a4-9d3a-7000-8000-000000000111",
+      "confidence": 0.94,
+      "reason": "Matched fact 'prefers' with 1 supporting episode(s)",
+      "fact": {
+        "fact_id": "019513a4-9d3a-7000-8000-000000000111",
+        "source_entity": "Kendra",
+        "target_entity": "Nike",
+        "label": "prefers",
+        "text": "Kendra prefers Nike running shoes",
+        "valid_at": "2025-01-01T00:00:00Z",
+        "invalid_at": null,
+        "relevance": 0.82
+      },
+      "source_episodes": [
+        {
+          "episode_id": "019513a4-9d3a-7000-8000-000000000222",
+          "session_id": "019513a4-8c1f-7000-8000-000000000002",
+          "role": "user",
+          "created_at": "2025-01-01T00:00:00Z",
+          "relevance": 0.74,
+          "preview": "Kendra prefers Nike running shoes."
+        }
+      ]
+    }
+  ],
+  "summary": "1 causal chains built from 1 facts and 1 episodes"
+}
+```
+
 ---
 
 ## Import API

@@ -130,6 +130,11 @@ curl -X POST http://localhost:8080/api/v1/memory/kendra/changes_since \
 curl -X POST http://localhost:8080/api/v1/memory/kendra/conflict_radar \
   -H "Content-Type: application/json" \
   -d '{}'
+
+# Explain why memory was retrieved
+curl -X POST http://localhost:8080/api/v1/memory/kendra/causal_recall \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What does Kendra prefer?"}'
 ```
 
 ### Full workflow: Users, Sessions, Episodes

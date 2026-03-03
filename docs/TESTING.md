@@ -52,6 +52,7 @@ It verifies:
 - scientific retrieval provenance checks (episode citation coverage for current/historical queries)
 - memory diff checks (`/api/v1/memory/:user/changes_since`) for timeline windows and head movement
 - conflict radar checks (`/api/v1/memory/:user/conflict_radar`) for active contradiction cluster detection
+- causal recall chain checks (`/api/v1/memory/:user/causal_recall`) for fact-to-episode lineage output
 
 ## 5) Importer stress harness (large real-world export)
 
