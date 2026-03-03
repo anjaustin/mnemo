@@ -16,6 +16,12 @@ Run the built-in harness (Mnemo only):
 python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080
 ```
 
+For per-case diagnostics during falsification:
+
+```bash
+python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080 --verbose
+```
+
 Run Mnemo + Zep comparison (requires `zep_api.key`):
 
 ```bash

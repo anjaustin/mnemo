@@ -266,7 +266,7 @@ class ZepBackend(Backend):
 
 
 def run_profile(
-    backend: Backend, cases: list[dict[str, Any]], profile: str
+    backend: Backend, cases: list[dict[str, Any]], profile: str, verbose: bool = False
 ) -> EvalResult:
     total = len(cases)
     passed = 0
@@ -291,6 +291,10 @@ def run_profile(
 
             if not memories_ok:
                 errors += 1
+                if verbose:
+                    print(
+                        f"[case:{case.get('name', 'unknown')}] profile={profile} status=remember_failed"
+                    )
                 continue
 
             status, context_text, latency_ms = backend.retrieve(
@@ -299,6 +303,10 @@ def run_profile(
             latencies_ms.append(latency_ms)
             if status != 200:
                 errors += 1
+                if verbose:
+                    print(
+                        f"[case:{case.get('name', 'unknown')}] profile={profile} status=http_{status} latency_ms={latency_ms}"
+                    )
                 continue
 
             top_line = extract_top_context_line(context_text)
@@ -310,8 +318,20 @@ def run_profile(
                 stale_failures += 1
             if contains and not stale:
                 passed += 1
+                if verbose:
+                    print(
+                        f"[case:{case.get('name', 'unknown')}] profile={profile} status=pass latency_ms={latency_ms}"
+                    )
+            elif verbose:
+                print(
+                    f"[case:{case.get('name', 'unknown')}] profile={profile} status=fail latency_ms={latency_ms} contains={contains} stale={stale} top={top_line!r}"
+                )
         except Exception:
             errors += 1
+            if verbose:
+                print(
+                    f"[case:{case.get('name', 'unknown')}] profile={profile} status=exception"
+                )
         finally:
             if user_id and session_id:
                 backend.cleanup(user_id, session_id)
@@ -363,6 +383,7 @@ def main() -> None:
     parser.add_argument("--zep-base-url", default="https://api.getzep.com/api/v2")
     parser.add_argument("--zep-api-key", default=None)
     parser.add_argument("--zep-api-key-file", default="zep_api.key")
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     with open(args.cases, "r", encoding="utf-8") as f:
@@ -372,8 +393,8 @@ def main() -> None:
 
     if args.target in ("mnemo", "both"):
         mnemo = MnemoBackend(args.mnemo_base_url)
-        results.append(run_profile(mnemo, cases, "temporal"))
-        results.append(run_profile(mnemo, cases, "baseline"))
+        results.append(run_profile(mnemo, cases, "temporal", verbose=args.verbose))
+        results.append(run_profile(mnemo, cases, "baseline", verbose=args.verbose))
 
     if args.target in ("zep", "both"):
         key = args.zep_api_key or os.environ.get("ZEP_API_KEY")
@@ -382,7 +403,7 @@ def main() -> None:
         zep = ZepBackend(args.zep_base_url, key)
         # Zep Memory API does not expose direct equivalents for Mnemo temporal controls.
         # We run baseline-style retrieval for comparison.
-        results.append(run_profile(zep, cases, "baseline"))
+        results.append(run_profile(zep, cases, "baseline", verbose=args.verbose))
 
     print_markdown(results)
 
