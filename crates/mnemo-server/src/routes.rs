@@ -135,6 +135,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/memory/:user/changes_since",
             post(memory_changes_since),
         )
+        .route("/api/v1/memory/:user/conflict_radar", post(conflict_radar))
         // Import API
         .route("/api/v1/import/chat-history", post(import_chat_history))
         .route("/api/v1/import/jobs/:job_id", get(get_import_job))
@@ -552,6 +553,55 @@ struct EpisodeChange {
     role: Option<MessageRole>,
     created_at: chrono::DateTime<chrono::Utc>,
     preview: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConflictRadarRequest {
+    #[serde(default)]
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    include_resolved: Option<bool>,
+    #[serde(default)]
+    max_items: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConflictRadarResponse {
+    user_id: Uuid,
+    as_of: chrono::DateTime<chrono::Utc>,
+    conflicts: Vec<ConflictCluster>,
+    summary: ConflictRadarSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct ConflictRadarSummary {
+    clusters: usize,
+    needs_resolution: usize,
+    high_severity: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct ConflictCluster {
+    source_entity: String,
+    label: String,
+    severity: f32,
+    active_edge_count: usize,
+    recent_supersessions: usize,
+    needs_resolution: bool,
+    reason: String,
+    edges: Vec<ConflictEdge>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConflictEdge {
+    edge_id: Uuid,
+    target_entity: String,
+    fact: String,
+    confidence: f32,
+    valid_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invalid_at: Option<chrono::DateTime<chrono::Utc>>,
+    is_active: bool,
 }
 
 #[derive(Deserialize)]
@@ -1209,6 +1259,135 @@ async fn memory_changes_since(
         confidence_deltas,
         head_changes,
         added_episodes,
+        summary,
+    }))
+}
+
+async fn conflict_radar(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<ConflictRadarRequest>,
+) -> Result<Json<ConflictRadarResponse>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let as_of = req.as_of.unwrap_or_else(chrono::Utc::now);
+    let include_resolved = req.include_resolved.unwrap_or(false);
+    let max_items = req.max_items.unwrap_or(50).clamp(1, 200) as usize;
+
+    let edges = state
+        .state_store
+        .query_edges(
+            user.id,
+            EdgeFilter {
+                include_invalidated: true,
+                limit: 10_000,
+                ..EdgeFilter::default()
+            },
+        )
+        .await?;
+
+    let entities = list_all_entities_for_user(&state, user.id).await?;
+    let entity_name_by_id: HashMap<Uuid, String> =
+        entities.into_iter().map(|e| (e.id, e.name)).collect();
+
+    let mut grouped: HashMap<(Uuid, String), Vec<Edge>> = HashMap::new();
+    for edge in edges {
+        grouped
+            .entry((edge.source_entity_id, edge.label.clone()))
+            .or_default()
+            .push(edge);
+    }
+
+    let mut conflicts = Vec::new();
+    for ((source_entity_id, label), mut group) in grouped {
+        group.sort_by(|a, b| a.valid_at.cmp(&b.valid_at));
+
+        let active: Vec<&Edge> = group.iter().filter(|e| e.is_valid_at(as_of)).collect();
+        let recent_supersessions = group
+            .iter()
+            .filter(|e| {
+                e.invalid_at
+                    .map(|t| t <= as_of && (as_of - t).num_days() <= 30)
+                    .unwrap_or(false)
+            })
+            .count();
+
+        let severity = if active.len() > 1 {
+            (0.85 + ((active.len().saturating_sub(2)) as f32 * 0.05)).min(1.0)
+        } else if recent_supersessions >= 2 {
+            (0.6 + ((recent_supersessions.saturating_sub(2)) as f32 * 0.08)).min(0.9)
+        } else if group.len() >= 3 {
+            0.4
+        } else {
+            0.0
+        };
+
+        if !include_resolved && severity <= 0.0 {
+            continue;
+        }
+
+        let needs_resolution = active.len() > 1 || recent_supersessions >= 3;
+        let reason = if active.len() > 1 {
+            "multiple simultaneously active facts".to_string()
+        } else if recent_supersessions >= 2 {
+            "frequent recent supersessions".to_string()
+        } else if group.len() >= 3 {
+            "high churn in fact lineage".to_string()
+        } else {
+            "resolved cluster".to_string()
+        };
+
+        let source_name = entity_name_by_id
+            .get(&source_entity_id)
+            .cloned()
+            .unwrap_or_else(|| source_entity_id.to_string());
+
+        let edges_view = group
+            .iter()
+            .map(|edge| ConflictEdge {
+                edge_id: edge.id,
+                target_entity: entity_name_by_id
+                    .get(&edge.target_entity_id)
+                    .cloned()
+                    .unwrap_or_else(|| edge.target_entity_id.to_string()),
+                fact: edge.fact.clone(),
+                confidence: edge.confidence,
+                valid_at: edge.valid_at,
+                invalid_at: edge.invalid_at,
+                is_active: edge.is_valid_at(as_of),
+            })
+            .collect::<Vec<_>>();
+
+        conflicts.push(ConflictCluster {
+            source_entity: source_name,
+            label,
+            severity,
+            active_edge_count: active.len(),
+            recent_supersessions,
+            needs_resolution,
+            reason,
+            edges: edges_view,
+        });
+    }
+
+    conflicts.sort_by(|a, b| {
+        b.severity
+            .partial_cmp(&a.severity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.recent_supersessions.cmp(&a.recent_supersessions))
+            .then_with(|| a.source_entity.cmp(&b.source_entity))
+    });
+    conflicts.truncate(max_items);
+
+    let summary = ConflictRadarSummary {
+        clusters: conflicts.len(),
+        needs_resolution: conflicts.iter().filter(|c| c.needs_resolution).count(),
+        high_severity: conflicts.iter().filter(|c| c.severity >= 0.8).count(),
+    };
+
+    Ok(Json(ConflictRadarResponse {
+        user_id: user.id,
+        as_of,
+        conflicts,
         summary,
     }))
 }

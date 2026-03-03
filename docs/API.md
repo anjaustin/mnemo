@@ -174,6 +174,56 @@ Return what changed in memory between two points in time.
 }
 ```
 
+### `POST /api/v1/memory/:user/conflict_radar`
+
+Build a contradiction/instability view over a user memory graph.
+
+```json
+// Request
+{
+  "as_of": "2026-03-03T00:00:00Z",
+  "include_resolved": false,
+  "max_items": 50
+}
+```
+
+All fields are optional.
+
+```json
+// Response 200
+{
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "as_of": "2026-03-03T00:00:00Z",
+  "conflicts": [
+    {
+      "source_entity": "Kendra",
+      "label": "prefers",
+      "severity": 0.85,
+      "active_edge_count": 2,
+      "recent_supersessions": 0,
+      "needs_resolution": true,
+      "reason": "multiple simultaneously active facts",
+      "edges": [
+        {
+          "edge_id": "019513a4-9d3a-7000-8000-000000000111",
+          "target_entity": "Adidas",
+          "fact": "Kendra prefers Adidas",
+          "confidence": 0.8,
+          "valid_at": "2026-03-01T00:00:00Z",
+          "invalid_at": null,
+          "is_active": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "clusters": 1,
+    "needs_resolution": 1,
+    "high_severity": 1
+  }
+}
+```
+
 ---
 
 ## Import API

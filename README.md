@@ -125,6 +125,11 @@ curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
 curl -X POST http://localhost:8080/api/v1/memory/kendra/changes_since \
   -H "Content-Type: application/json" \
   -d '{"from":"2025-02-01T00:00:00Z","to":"2025-04-01T00:00:00Z"}'
+
+# Detect active contradiction clusters
+curl -X POST http://localhost:8080/api/v1/memory/kendra/conflict_radar \
+  -H "Content-Type: application/json" \
+  -d '{}'
 ```
 
 ### Full workflow: Users, Sessions, Episodes

@@ -51,6 +51,7 @@ It verifies:
 - import falsification checks for malformed rows, mixed timestamp quality, and idempotent replay
 - scientific retrieval provenance checks (episode citation coverage for current/historical queries)
 - memory diff checks (`/api/v1/memory/:user/changes_since`) for timeline windows and head movement
+- conflict radar checks (`/api/v1/memory/:user/conflict_radar`) for active contradiction cluster detection
 
 ## 5) Importer stress harness (large real-world export)
 

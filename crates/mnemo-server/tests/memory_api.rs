@@ -2,12 +2,16 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+use chrono::Utc;
 use serde_json::Value;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use mnemo_core::models::edge::{Edge, ExtractedRelationship};
+use mnemo_core::models::entity::{Entity, EntityType, ExtractedEntity};
 use mnemo_core::traits::fulltext::FullTextStore;
 use mnemo_core::traits::llm::EmbeddingConfig;
+use mnemo_core::traits::storage::{EdgeStore, EntityStore};
 use mnemo_graph::GraphEngine;
 use mnemo_llm::OpenAiCompatibleEmbedder;
 use mnemo_retrieval::RetrievalEngine;
@@ -16,15 +20,22 @@ use mnemo_server::state::{AppState, MetadataPrefilterConfig};
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
 async fn build_test_app() -> axum::Router {
-    build_test_app_with_prefilter(MetadataPrefilterConfig {
+    build_test_harness_with_prefilter(MetadataPrefilterConfig {
         enabled: true,
         scan_limit: 400,
         relax_if_empty: false,
     })
     .await
+    .0
 }
 
 async fn build_test_app_with_prefilter(prefilter: MetadataPrefilterConfig) -> axum::Router {
+    build_test_harness_with_prefilter(prefilter).await.0
+}
+
+async fn build_test_harness_with_prefilter(
+    prefilter: MetadataPrefilterConfig,
+) -> (axum::Router, Arc<RedisStateStore>) {
     let redis_url = std::env::var("MNEMO_TEST_REDIS_URL")
         .unwrap_or_else(|_| "redis://localhost:6379".to_string());
     let qdrant_url = std::env::var("MNEMO_TEST_QDRANT_URL")
@@ -71,15 +82,17 @@ async fn build_test_app_with_prefilter(prefilter: MetadataPrefilterConfig) -> ax
     ));
     let graph = Arc::new(GraphEngine::new(state_store.clone()));
 
-    build_router(AppState {
-        state_store,
+    let app = build_router(AppState {
+        state_store: state_store.clone(),
         vector_store,
         retrieval,
         graph,
         metadata_prefilter: prefilter,
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-    })
+    });
+
+    (app, state_store.clone())
 }
 
 async fn json_request(
@@ -308,6 +321,122 @@ async fn test_memory_changes_since_rejects_invalid_window() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_conflict_radar_detects_active_fact_conflict() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "conflict-user",
+            "external_id": "conflict-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = Uuid::parse_str(user["id"].as_str().unwrap()).unwrap();
+
+    let episode_id = Uuid::now_v7();
+    let src = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Kendra".to_string(),
+                entity_type: EntityType::Person,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let adidas = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Adidas".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let nike = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Nike".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Adidas".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Adidas".to_string(),
+                confidence: 0.8,
+                valid_at: Some(now - chrono::Duration::days(2)),
+            },
+            user_id,
+            src.id,
+            adidas.id,
+            episode_id,
+            now,
+        ))
+        .await
+        .unwrap();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Nike".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Nike".to_string(),
+                confidence: 0.85,
+                valid_at: Some(now - chrono::Duration::days(1)),
+            },
+            user_id,
+            src.id,
+            nike.id,
+            episode_id,
+            now,
+        ))
+        .await
+        .unwrap();
+
+    let (status, radar) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/conflict-user/conflict_radar",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let clusters = radar["conflicts"].as_array().unwrap();
+    assert!(!clusters.is_empty());
+    let first = &clusters[0];
+    assert_eq!(first["label"], "prefers");
+    assert!(first["active_edge_count"].as_u64().unwrap_or(0) >= 2);
+    assert!(first["needs_resolution"].as_bool().unwrap_or(false));
+    assert!(first["severity"].as_f64().unwrap_or(0.0) >= 0.8);
 }
 
 #[tokio::test]
