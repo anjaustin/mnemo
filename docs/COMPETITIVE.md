@@ -48,7 +48,11 @@ Important parity caveats for Mnemo vs Zep:
 - Contradiction/supersession handling
 - Active-thread "what now" recall
 
-Current local pack: `eval/temporal_cases.json`.
+Current local packs:
+
+- `eval/temporal_cases.json`
+- `eval/scientific_research_cases.json`
+- `eval/scientific_research_cases_v2.json`
 
 ## Scorecard
 
@@ -74,6 +78,15 @@ From `eval/temporal_eval.py` local run on 2026-03-02 (Mnemo target):
 | baseline | 66.7% | 33.3% | 80 | 80 |
 
 These are directional and not cross-system claims until the same harness is run against external systems.
+
+Scientific research domain snapshots (local Mnemo-only runs):
+
+| Dataset | Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
+|---|---|---:|---:|---:|---:|
+| `scientific_research_cases.json` | temporal | 100.0% | 0.0% | 94 | 124 |
+| `scientific_research_cases.json` | baseline | 50.0% | 50.0% | 80 | 121 |
+| `scientific_research_cases_v2.json` | temporal | 100.0% | 0.0% | 78 | 106 |
+| `scientific_research_cases_v2.json` | baseline | 50.0% | 40.0% | 75 | 105 |
 
 ## Publishing standard
 

@@ -7,18 +7,26 @@ Benchmark automation is active and publishing results through:
 - `eval/temporal_eval.py`
 - `.github/workflows/benchmark-eval.yml`
 
-Current measured snapshot (GitHub Actions run `22591534300`):
+Current measured snapshots:
+
+Baseline temporal pack (local run, 2026-03-02):
 
 | System | Profile | Accuracy | Stale Fact Rate | Errors | p50 Latency (ms) | p95 Latency (ms) |
 |---|---|---:|---:|---:|---:|---:|
-| mnemo | temporal | 100.0% | 0.0% | 0 | 74 | 74 |
-| mnemo | baseline | 66.7% | 33.3% | 0 | 60 | 60 |
-| zep | baseline | 0.0% | 0.0% | 3 | 0 | 0 |
+| mnemo | temporal | 100.0% | 0.0% | 0 | 106 | 106 |
+| mnemo | baseline | 66.7% | 33.3% | 0 | 81 | 81 |
+
+Scientific research pack v2 (local run, 2026-03-02):
+
+| System | Profile | Accuracy | Stale Fact Rate | Errors | p50 Latency (ms) | p95 Latency (ms) |
+|---|---|---:|---:|---:|---:|---:|
+| mnemo | temporal | 100.0% | 0.0% | 0 | 78 | 106 |
+| mnemo | baseline | 50.0% | 40.0% | 0 | 75 | 105 |
 
 Interpretation:
 
 - Mnemo temporal mode consistently outperforms Mnemo baseline on this dataset.
-- Zep adapter path executed, but this run produced request errors and is not yet a valid performance comparison.
+- Scientific-domain cases widen the baseline-vs-temporal quality gap and are now part of routine falsification.
 
 ---
 
@@ -41,6 +49,10 @@ docker compose up -d redis qdrant
 cargo run --bin mnemo-server &
 sleep 3
 python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080
+
+# Run scientific research packs
+python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases.json --mnemo-base-url http://localhost:8080
+python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080 --verbose
 
 # Optional: side-by-side with Zep (requires API key)
 python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key

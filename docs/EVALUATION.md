@@ -52,7 +52,7 @@ For Mnemo it executes two profiles over the same temporal dataset:
 
 For Zep it runs baseline-style memory retrieval on the same scenario pack.
 
-Current dataset: `eval/temporal_cases.json`.
+Default dataset: `eval/temporal_cases.json`.
 
 Scientific research assistance dataset (Michael Levin style scenarios):
 

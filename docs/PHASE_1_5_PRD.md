@@ -64,7 +64,7 @@ A PR reviewer can verify each of these:
 - Verify `edition = "2021"` and `thiserror = "1"` work everywhere (already fixed in falsification pass)
 - Generate and commit `Cargo.lock`
 
-**Acceptance:** `cargo build --workspace` and `cargo clippy --workspace -- -D warnings` both succeed.
+**Acceptance:** `cargo build --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` both succeed.
 
 **Estimated effort:** 1–2 days. Most issues will be type mismatches and API changes in the Qdrant/Redis crates.
 

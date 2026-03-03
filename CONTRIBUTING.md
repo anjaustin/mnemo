@@ -15,7 +15,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 ### Getting Started
 
 ```bash
-git clone https://github.com/mnemo-ai/mnemo.git
+git clone https://github.com/anjaustin/mnemo.git
 cd mnemo
 
 # Start dependencies
@@ -74,7 +74,7 @@ mnemo-server
 ### Rust Conventions
 
 - Follow standard `rustfmt` formatting (`cargo fmt`)
-- Fix all `clippy` warnings (`cargo clippy --workspace`)
+- Fix all `clippy` warnings (`cargo clippy --workspace --all-targets -- -D warnings`)
 - Add doc comments (`///`) to all public types and functions
 - Use `tracing` for logging, not `println!` or `log`
 - Prefer `thiserror` for error types, `anyhow` only in `main()`
@@ -109,7 +109,7 @@ For bug fixes, documentation improvements, and small features:
 1. Fork the repository
 2. Create a branch: `git checkout -b fix/description`
 3. Make your changes
-4. Run `cargo fmt && cargo clippy --workspace && cargo test --workspace`
+4. Run `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --lib --bins`
 5. Open a pull request
 
 For API or retrieval changes, also run the memory falsification suite:
