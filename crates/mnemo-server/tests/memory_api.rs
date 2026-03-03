@@ -335,6 +335,82 @@ async fn test_memory_contract_support_safe_filters_non_user_episodes() {
 }
 
 #[tokio::test]
+async fn test_retrieval_policy_precision_reports_effective_thresholds() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "policy-precision-user",
+            "session": "policy-session",
+            "text": "I prefer Nike running shoes."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/policy-precision-user/context",
+        serde_json::json!({
+            "query": "What do I prefer?",
+            "session": "policy-session",
+            "retrieval_policy": "precision"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["retrieval_policy_applied"], "precision");
+    assert_eq!(
+        body["retrieval_policy_diagnostics"]["effective_min_relevance"],
+        serde_json::json!(0.55)
+    );
+    assert_eq!(
+        body["retrieval_policy_diagnostics"]["effective_max_tokens"],
+        serde_json::json!(400)
+    );
+}
+
+#[tokio::test]
+async fn test_retrieval_policy_stability_biases_temporal_intent_current() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "policy-stability-user",
+            "session": "policy-session",
+            "text": "I switched to Nike last week."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/policy-stability-user/context",
+        serde_json::json!({
+            "query": "What is current?",
+            "session": "policy-session",
+            "retrieval_policy": "stability"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["retrieval_policy_applied"], "stability");
+    assert_eq!(
+        body["retrieval_policy_diagnostics"]["effective_temporal_intent"],
+        "current"
+    );
+}
+
+#[tokio::test]
 async fn test_memory_changes_since_reports_episode_and_head_changes() {
     let app = build_test_app().await;
 

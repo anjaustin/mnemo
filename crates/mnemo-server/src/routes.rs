@@ -686,6 +686,8 @@ struct MemoryContextRequest {
     #[serde(default)]
     contract: Option<MemoryContract>,
     #[serde(default)]
+    retrieval_policy: Option<AdaptiveRetrievalPolicy>,
+    #[serde(default)]
     filters: Option<MemoryContextFilters>,
 }
 
@@ -722,6 +724,24 @@ enum MemoryContract {
     HistoricalStrict,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AdaptiveRetrievalPolicy {
+    Balanced,
+    Precision,
+    Recall,
+    Stability,
+}
+
+#[derive(Debug, Serialize)]
+struct RetrievalPolicyDiagnostics {
+    effective_max_tokens: u32,
+    effective_min_relevance: f32,
+    effective_temporal_intent: TemporalIntent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effective_temporal_weight: Option<f32>,
+}
+
 #[derive(Serialize)]
 struct MemoryHeadInfo {
     session_id: Uuid,
@@ -738,6 +758,8 @@ struct MemoryContextResponse {
     context: ContextBlock,
     mode: MemoryContextMode,
     contract_applied: MemoryContract,
+    retrieval_policy_applied: AdaptiveRetrievalPolicy,
+    retrieval_policy_diagnostics: RetrievalPolicyDiagnostics,
     #[serde(skip_serializing_if = "Option::is_none")]
     head: Option<MemoryHeadInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -995,6 +1017,9 @@ async fn get_memory_context(
     });
     let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
     let contract = req.contract.unwrap_or(MemoryContract::Default);
+    let retrieval_policy = req
+        .retrieval_policy
+        .unwrap_or(AdaptiveRetrievalPolicy::Balanced);
     if matches!(contract, MemoryContract::HistoricalStrict) && req.as_of.is_none() {
         return Err(AppError(MnemoError::Validation(
             "historical_strict contract requires as_of".into(),
@@ -1075,12 +1100,41 @@ async fn get_memory_context(
             (None, None)
         };
 
-    let max_tokens = req.max_tokens.unwrap_or(500);
-    let temporal_intent = match contract {
+    let default_max_tokens = match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => 500,
+        AdaptiveRetrievalPolicy::Precision => 400,
+        AdaptiveRetrievalPolicy::Recall => 700,
+        AdaptiveRetrievalPolicy::Stability => 500,
+    };
+    let max_tokens = req.max_tokens.unwrap_or(default_max_tokens);
+
+    let base_temporal_intent = match contract {
         MemoryContract::CurrentStrict => TemporalIntent::Current,
         MemoryContract::HistoricalStrict => TemporalIntent::Historical,
         _ => req.time_intent.unwrap_or(TemporalIntent::Auto),
     };
+    let temporal_intent = if matches!(retrieval_policy, AdaptiveRetrievalPolicy::Stability)
+        && !matches!(contract, MemoryContract::HistoricalStrict)
+        && req.time_intent.is_none()
+    {
+        TemporalIntent::Current
+    } else {
+        base_temporal_intent
+    };
+
+    let effective_temporal_weight = req.temporal_weight.or(match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => None,
+        AdaptiveRetrievalPolicy::Precision => Some(0.35),
+        AdaptiveRetrievalPolicy::Recall => Some(0.2),
+        AdaptiveRetrievalPolicy::Stability => Some(0.8),
+    });
+
+    let min_relevance = req.min_relevance.unwrap_or(match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => 0.3,
+        AdaptiveRetrievalPolicy::Precision => 0.55,
+        AdaptiveRetrievalPolicy::Recall => 0.15,
+        AdaptiveRetrievalPolicy::Stability => 0.4,
+    });
     let context_req = ContextRequest {
         session_id,
         messages: vec![ContextMessage {
@@ -1092,8 +1146,8 @@ async fn get_memory_context(
         temporal_filter: req.as_of,
         as_of: req.as_of,
         time_intent: temporal_intent,
-        temporal_weight: req.temporal_weight,
-        min_relevance: req.min_relevance.unwrap_or(0.3),
+        temporal_weight: effective_temporal_weight,
+        min_relevance,
     };
 
     let mut context = state.retrieval.get_context(user.id, &context_req).await?;
@@ -1127,6 +1181,13 @@ async fn get_memory_context(
         context,
         mode,
         contract_applied: contract,
+        retrieval_policy_applied: retrieval_policy,
+        retrieval_policy_diagnostics: RetrievalPolicyDiagnostics {
+            effective_max_tokens: max_tokens,
+            effective_min_relevance: min_relevance,
+            effective_temporal_intent: temporal_intent,
+            effective_temporal_weight,
+        },
         head,
         metadata_filter_diagnostics,
     }))

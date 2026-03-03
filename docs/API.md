@@ -65,6 +65,7 @@ Retrieve context for a user by identifier (`:user` can be UUID, external_id, or 
   "min_relevance": 0.3,
   "mode": "hybrid",
   "contract": "default",
+  "retrieval_policy": "balanced",
   "time_intent": "current",
   "as_of": "2025-01-01T00:00:00Z",
   "temporal_weight": 0.5,
@@ -76,10 +77,11 @@ Retrieve context for a user by identifier (`:user` can be UUID, external_id, or 
 }
 ```
 
-`session`, `max_tokens`, `min_relevance`, `mode`, `contract`, `time_intent`, `as_of`, and `temporal_weight` are optional.
+`session`, `max_tokens`, `min_relevance`, `mode`, `contract`, `retrieval_policy`, `time_intent`, `as_of`, and `temporal_weight` are optional.
 
 - `mode`: `head | hybrid | historical`
 - `contract`: `default | support_safe | current_strict | historical_strict`
+- `retrieval_policy`: `balanced | precision | recall | stability`
 - `time_intent`: `auto | current | recent | historical`
 - `as_of`: point-in-time target for historical recall
 - `temporal_weight`: override temporal influence (0.0–1.0)
@@ -119,6 +121,13 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
   },
   "mode": "hybrid",
   "contract_applied": "default",
+  "retrieval_policy_applied": "balanced",
+  "retrieval_policy_diagnostics": {
+    "effective_max_tokens": 500,
+    "effective_min_relevance": 0.3,
+    "effective_temporal_intent": "auto",
+    "effective_temporal_weight": null
+  },
   "head": {
     "session_id": "019513a4-8c1f-7000-8000-000000000002",
     "episode_id": "019513a4-9d3a-7000-8000-000000000003",

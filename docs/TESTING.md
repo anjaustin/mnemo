@@ -54,6 +54,7 @@ It verifies:
 - conflict radar checks (`/api/v1/memory/:user/conflict_radar`) for active contradiction cluster detection
 - causal recall chain checks (`/api/v1/memory/:user/causal_recall`) for fact-to-episode lineage output
 - memory contract checks (`support_safe`, `current_strict`, `historical_strict`) for policy-scoped context behavior
+- adaptive retrieval policy checks (`balanced`, `precision`, `recall`, `stability`) for effective threshold diagnostics
 
 ## 5) Importer stress harness (large real-world export)
 
