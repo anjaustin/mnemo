@@ -19,9 +19,16 @@ Mnemo is a free, open-source, self-hosted memory and context engine for AI agent
 
 ## Quality Gates
 
-- `cargo test --workspace`
-- `./tests/e2e.sh` (server running)
-- `cargo test -p mnemo-server --test memory_api -- --test-threads=1` (memory falsification)
+- `cargo fmt --all -- --check`
+- `cargo check --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace --lib --bins`
+- `cargo test -p mnemo-storage --test storage -- --test-threads=1`
+- `cargo test -p mnemo-ingest --test ingest -- --test-threads=1`
+- `cargo test -p mnemo-server --test memory_api -- --test-threads=1`
+- `bash tests/e2e_smoke.sh http://localhost:8080` (server running)
+
+Reference CI gate: `.github/workflows/quality-gates.yml`.
 
 ## Why Mnemo (Measured)
 

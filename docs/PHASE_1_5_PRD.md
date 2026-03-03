@@ -283,9 +283,9 @@ Merge results from semantic search, full-text search, and graph traversal. Dedup
 
 **Scope:**
 - Docker Compose test profile (`docker-compose.test.yml`) with Redis + Qdrant
-- Integration test suite in `tests/integration/` covering:
+- Integration test suites covering:
 
-**Storage tests (`tests/integration/storage.rs`):**
+**Storage tests (`crates/mnemo-storage/tests/storage.rs`):**
 - User CRUD lifecycle
 - Session CRUD lifecycle
 - Episode creation + pending queue behavior
@@ -297,18 +297,18 @@ Merge results from semantic search, full-text search, and graph traversal. Dedup
 - Pagination (cursor-based, correct ordering)
 - Delete cascading (user delete cleans up vectors)
 
-**Ingestion tests (`tests/integration/ingest.rs`):**
+**Ingestion tests (`crates/mnemo-ingest/tests/ingest.rs`):**
 - Full pipeline: add episode → wait → verify entities + edges created
 - Duplicate entity dedup across multiple episodes
 - Contradiction detection: two conflicting facts → old edge invalidated
 - Retry behavior: mock LLM fails once, succeeds on retry
 
-**Retrieval tests (`tests/integration/retrieval.rs`):**
-- Semantic search returns relevant entities
-- Context assembly respects token budget
-- Temporal filter excludes invalidated edges
-- Graph traversal includes connected facts
-- Full-text search finds exact matches (after 3.5 lands)
+**Memory/retrieval falsification tests (`crates/mnemo-server/tests/memory_api.rs`):**
+- Input validation and identifier resolution
+- Immediate recall fallback (non-empty context right after remember)
+- Head mode behavior and temporal intent diagnostics
+- Metadata prefilter controls and scan-limit behavior
+- Identity guardrails and promotion/versioning governance
 
 **End-to-end smoke test (`tests/e2e.sh`):**
 ```bash
@@ -318,7 +318,12 @@ Merge results from semantic search, full-text search, and graph traversal. Dedup
 # Used in CI and as the "10-minute developer experience"
 ```
 
-**Acceptance:** `docker compose -f docker-compose.test.yml up -d && cargo test --test integration` passes. `./tests/e2e.sh` passes.
+**Acceptance:** `docker compose -f docker-compose.test.yml up -d` plus crate-level integration/falsification suites pass:
+
+- `cargo test -p mnemo-storage --test storage -- --test-threads=1`
+- `cargo test -p mnemo-ingest --test ingest -- --test-threads=1`
+- `cargo test -p mnemo-server --test memory_api -- --test-threads=1`
+- `bash tests/e2e_smoke.sh http://localhost:8080`
 
 **Estimated effort:** 2 days.
 
@@ -379,7 +384,7 @@ Work items have this dependency order:
 | 3.3 Auth | `crates/mnemo-server/src/middleware/auth.rs`, `crates/mnemo-server/src/middleware/mod.rs` | `crates/mnemo-server/src/main.rs`, `crates/mnemo-server/src/config.rs`, `crates/mnemo-server/src/lib.rs` |
 | 3.4 Retry | — | `crates/mnemo-core/src/models/episode.rs`, `crates/mnemo-ingest/src/lib.rs`, `crates/mnemo-storage/src/redis_store.rs` |
 | 3.5 Full-Text | `crates/mnemo-core/src/traits/fulltext.rs`, `crates/mnemo-storage/src/redisearch.rs` | `crates/mnemo-core/src/traits/mod.rs`, `crates/mnemo-storage/src/lib.rs`, `crates/mnemo-retrieval/src/lib.rs` |
-| 3.6 Integration | `tests/integration/storage.rs`, `tests/integration/ingest.rs`, `tests/integration/retrieval.rs`, `tests/e2e.sh`, `docker-compose.test.yml` | `Cargo.toml` (workspace test config) |
+| 3.6 Integration | `crates/mnemo-storage/tests/storage.rs`, `crates/mnemo-ingest/tests/ingest.rs`, `crates/mnemo-server/tests/memory_api.rs`, `tests/e2e.sh`, `tests/e2e_smoke.sh`, `docker-compose.test.yml` | `.github/workflows/quality-gates.yml` |
 | 3.7 Benchmarks | `benches/latency.rs`, `benches/throughput.rs`, `docs/BENCHMARKS.md` | `Cargo.toml` (bench config) |
 
 ---
