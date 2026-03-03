@@ -197,7 +197,7 @@ mod tests {
         let resp = ApiErrorResponse::from(err);
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("user_not_found"));
-        assert!(json.contains("404") == false); // status code not in body
+        assert!(!json.contains("404")); // status code not in body
     }
 
     #[test]

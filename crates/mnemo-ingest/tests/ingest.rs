@@ -8,7 +8,9 @@ use uuid::Uuid;
 
 use mnemo_core::models::edge::ExtractedRelationship;
 use mnemo_core::models::entity::{EntityType, ExtractedEntity};
-use mnemo_core::models::episode::{CreateEpisodeRequest, EpisodeType, MessageRole, ProcessingStatus};
+use mnemo_core::models::episode::{
+    CreateEpisodeRequest, EpisodeType, MessageRole, ProcessingStatus,
+};
 use mnemo_core::models::session::CreateSessionRequest;
 use mnemo_core::models::user::CreateUserRequest;
 use mnemo_core::traits::llm::*;
@@ -74,8 +76,12 @@ impl LlmProvider for MockLlm {
         Ok(Vec::new())
     }
 
-    fn provider_name(&self) -> &str { "mock" }
-    fn model_name(&self) -> &str { "mock-v1" }
+    fn provider_name(&self) -> &str {
+        "mock"
+    }
+    fn model_name(&self) -> &str {
+        "mock-v1"
+    }
 }
 
 /// Mock LLM that fails N times then succeeds.
@@ -120,51 +126,103 @@ impl LlmProvider for FailingLlm {
         self.inner.summarize(content, max_tokens).await
     }
 
-    async fn detect_contradictions(&self, new: &str, existing: &[String]) -> LlmResult<Vec<String>> {
+    async fn detect_contradictions(
+        &self,
+        new: &str,
+        existing: &[String],
+    ) -> LlmResult<Vec<String>> {
         self.inner.detect_contradictions(new, existing).await
     }
 
-    fn provider_name(&self) -> &str { "mock-failing" }
-    fn model_name(&self) -> &str { "mock-failing-v1" }
+    fn provider_name(&self) -> &str {
+        "mock-failing"
+    }
+    fn model_name(&self) -> &str {
+        "mock-failing-v1"
+    }
 }
 
 /// Mock embedder that returns zero vectors of the right dimension.
 struct MockEmbedder;
 
 impl EmbeddingProvider for MockEmbedder {
-    async fn embed(&self, _text: &str) -> LlmResult<Vec<f32>> { Ok(vec![0.0; 384]) }
+    async fn embed(&self, _text: &str) -> LlmResult<Vec<f32>> {
+        Ok(vec![0.0; 384])
+    }
 
     async fn embed_batch(&self, texts: &[String]) -> LlmResult<Vec<Vec<f32>>> {
         Ok(texts.iter().map(|_| vec![0.0; 384]).collect())
     }
 
-    fn dimensions(&self) -> u32 { 384 }
-    fn provider_name(&self) -> &str { "mock" }
+    fn dimensions(&self) -> u32 {
+        384
+    }
+    fn provider_name(&self) -> &str {
+        "mock"
+    }
 }
 
 /// Mock vector store that silently accepts and ignores all operations.
 struct NoopVectorStore;
 
 impl VectorStore for NoopVectorStore {
-    async fn upsert_entity_embedding(&self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value) -> StorageResult<()> {
+    async fn upsert_entity_embedding(
+        &self,
+        _: Uuid,
+        _: Uuid,
+        _: Vec<f32>,
+        _: serde_json::Value,
+    ) -> StorageResult<()> {
         Ok(())
     }
-    async fn upsert_edge_embedding(&self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value) -> StorageResult<()> {
+    async fn upsert_edge_embedding(
+        &self,
+        _: Uuid,
+        _: Uuid,
+        _: Vec<f32>,
+        _: serde_json::Value,
+    ) -> StorageResult<()> {
         Ok(())
     }
-    async fn upsert_episode_embedding(&self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value) -> StorageResult<()> {
+    async fn upsert_episode_embedding(
+        &self,
+        _: Uuid,
+        _: Uuid,
+        _: Vec<f32>,
+        _: serde_json::Value,
+    ) -> StorageResult<()> {
         Ok(())
     }
-    async fn search_entities(&self, _: Uuid, _: Vec<f32>, _: u32, _: f32) -> StorageResult<Vec<(Uuid, f32)>> {
+    async fn search_entities(
+        &self,
+        _: Uuid,
+        _: Vec<f32>,
+        _: u32,
+        _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> {
         Ok(Vec::new())
     }
-    async fn search_edges(&self, _: Uuid, _: Vec<f32>, _: u32, _: f32) -> StorageResult<Vec<(Uuid, f32)>> {
+    async fn search_edges(
+        &self,
+        _: Uuid,
+        _: Vec<f32>,
+        _: u32,
+        _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> {
         Ok(Vec::new())
     }
-    async fn search_episodes(&self, _: Uuid, _: Vec<f32>, _: u32, _: f32) -> StorageResult<Vec<(Uuid, f32)>> {
+    async fn search_episodes(
+        &self,
+        _: Uuid,
+        _: Vec<f32>,
+        _: u32,
+        _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> {
         Ok(Vec::new())
     }
-    async fn delete_user_vectors(&self, _: Uuid) -> StorageResult<()> { Ok(()) }
+    async fn delete_user_vectors(&self, _: Uuid) -> StorageResult<()> {
+        Ok(())
+    }
 }
 
 async fn setup_user_session(store: &RedisStateStore) -> (Uuid, Uuid) {
@@ -256,7 +314,10 @@ async fn test_ingest_full_pipeline() {
         !processed.entity_ids.is_empty(),
         "Should have extracted entities"
     );
-    assert!(!processed.edge_ids.is_empty(), "Should have extracted edges");
+    assert!(
+        !processed.edge_ids.is_empty(),
+        "Should have extracted edges"
+    );
 
     // Verify entities were created
     let entities = store.list_entities(user_id, 10, None).await.unwrap();
@@ -294,7 +355,10 @@ async fn test_ingest_entity_dedup_across_episodes() {
     );
 
     // Add two episodes that mention the same entities
-    for content in &["Kendra loves Nike shoes", "Kendra just bought more Nike gear"] {
+    for content in &[
+        "Kendra loves Nike shoes",
+        "Kendra just bought more Nike gear",
+    ] {
         store
             .create_episode(
                 CreateEpisodeRequest {

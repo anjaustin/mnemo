@@ -574,7 +574,7 @@ async fn remember_memory(
             };
             match state.state_store.create_user(create).await {
                 Ok(user) => user,
-                Err(create_err) if matches!(create_err, MnemoError::Duplicate(_)) => {
+                Err(MnemoError::Duplicate(_)) => {
                     find_user_by_identifier(&state, user_identifier).await?
                 }
                 Err(create_err) => return Err(create_err.into()),
@@ -1042,10 +1042,7 @@ async fn get_agent_context(
     };
     context.token_count = estimate_tokens(&context.context);
 
-    let experience_weight_sum: f32 = experiences
-        .iter()
-        .map(|e| effective_experience_weight(e))
-        .sum();
+    let experience_weight_sum: f32 = experiences.iter().map(effective_experience_weight).sum();
 
     Ok(Json(AgentContextResponse {
         identity_version: identity.version,

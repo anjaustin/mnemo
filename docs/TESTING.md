@@ -1,6 +1,6 @@
 # Testing Guide
 
-This project has three practical testing layers.
+This project has four practical testing layers.
 
 ## 1) Workspace tests
 
@@ -8,7 +8,17 @@ This project has three practical testing layers.
 cargo test --workspace
 ```
 
-## 2) End-to-end smoke script
+## 2) Deterministic end-to-end smoke script
+
+Assumes the server is already running on `http://localhost:8080`.
+
+```bash
+./tests/e2e_smoke.sh
+```
+
+This smoke test is designed to pass without external LLM credentials.
+
+## 3) Full end-to-end script (LLM-dependent)
 
 Assumes the server is already running on `http://localhost:8080`.
 
@@ -16,7 +26,7 @@ Assumes the server is already running on `http://localhost:8080`.
 ./tests/e2e.sh
 ```
 
-## 3) Memory API falsification suite
+## 4) Memory API falsification suite
 
 This is the high-value regression suite for the new memory surface.
 
@@ -75,8 +85,16 @@ If a health check tries `curl http://localhost:6334/readyz`, it can fail even wh
 Current workflow guidance:
 
 - Prefer explicit startup waits over brittle health probes.
-- For the memory falsification gate, wait for open sockets on:
+- For integration and smoke gates, wait for open sockets on:
   - `127.0.0.1:6379` (Redis)
   - `127.0.0.1:6334` (Qdrant gRPC used by tests)
+- CI quality gates also enforce:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo check --workspace`
+  - `cargo test --workspace --lib --bins`
 
-Reference workflow: `.github/workflows/memory-falsification.yml`.
+Reference workflows:
+
+- `.github/workflows/quality-gates.yml`
+- `.github/workflows/memory-falsification.yml`

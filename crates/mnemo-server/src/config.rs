@@ -1,7 +1,7 @@
 use mnemo_core::error::MnemoError;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct MnemoConfig {
     #[serde(default)]
     pub server: ServerConfig,
@@ -43,21 +43,12 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct AuthSection {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub api_keys: Vec<String>,
-}
-
-impl Default for AuthSection {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            api_keys: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -383,22 +374,6 @@ impl MnemoConfig {
                 Some(self.embedding.base_url.clone())
             },
             dimensions: self.embedding.dimensions,
-        }
-    }
-}
-
-impl Default for MnemoConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            auth: AuthSection::default(),
-            redis: RedisConfig::default(),
-            qdrant: QdrantConfig::default(),
-            llm: LlmSection::default(),
-            embedding: EmbeddingSection::default(),
-            extraction: ExtractionSection::default(),
-            retrieval: RetrievalSection::default(),
-            observability: ObservabilitySection::default(),
         }
     }
 }

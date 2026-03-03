@@ -26,6 +26,9 @@ jobs:
       - name: Workspace compile check
         run: cargo check --workspace
 
+      - name: Workspace clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Workspace unit tests
         run: cargo test --workspace --lib --bins
 
@@ -93,3 +96,52 @@ jobs:
           MNEMO_TEST_QDRANT_URL: http://localhost:6334
           MNEMO_TEST_QDRANT_PREFIX: mnemo_
         run: cargo test -p mnemo-server --test memory_api -- --test-threads=1
+
+      - name: Launch Mnemo server for smoke test
+        env:
+          MNEMO_SERVER_HOST: 127.0.0.1
+          MNEMO_SERVER_PORT: 8080
+          MNEMO_REDIS_URL: redis://localhost:6379
+          MNEMO_QDRANT_URL: http://localhost:6334
+          RUST_LOG: info
+        run: |
+          cargo run -p mnemo-server > /tmp/mnemo-server.log 2>&1 &
+          echo $! > /tmp/mnemo-server.pid
+
+      - name: Wait for Mnemo server health
+        run: |
+          python3 - <<'PY'
+          import time
+          import urllib.request
+
+          deadline = time.time() + 90
+          url = "http://127.0.0.1:8080/health"
+          while True:
+              try:
+                  with urllib.request.urlopen(url, timeout=2) as resp:
+                      if resp.status == 200:
+                          print("mnemo server healthy")
+                          break
+              except Exception:
+                  pass
+              if time.time() > deadline:
+                  raise SystemExit("Timed out waiting for mnemo server health")
+              time.sleep(1)
+          PY
+
+      - name: Run deterministic e2e smoke test
+        run: bash tests/e2e_smoke.sh http://127.0.0.1:8080
+
+      - name: Stop Mnemo server
+        if: always()
+        run: |
+          if [ -f /tmp/mnemo-server.pid ]; then
+            kill "$(cat /tmp/mnemo-server.pid)" || true
+          fi
+
+      - name: Dump Mnemo server log on failure
+        if: failure()
+        run: |
+          if [ -f /tmp/mnemo-server.log ]; then
+            cat /tmp/mnemo-server.log
+          fi

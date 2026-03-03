@@ -5,7 +5,9 @@
 
 use uuid::Uuid;
 
-use mnemo_core::models::episode::{CreateEpisodeRequest, EpisodeType, MessageRole, ProcessingStatus};
+use mnemo_core::models::episode::{
+    CreateEpisodeRequest, EpisodeType, MessageRole, ProcessingStatus,
+};
 use mnemo_core::models::session::CreateSessionRequest;
 use mnemo_core::models::user::CreateUserRequest;
 use mnemo_core::traits::storage::*;
@@ -143,7 +145,11 @@ async fn test_episode_pending_queue() {
 
     // Create episode -> should be in pending queue
     let episode = store
-        .create_episode(test_episode_req("Hello from integration test!"), session.id, user.id)
+        .create_episode(
+            test_episode_req("Hello from integration test!"),
+            session.id,
+            user.id,
+        )
         .await
         .unwrap();
     assert_eq!(episode.processing_status, ProcessingStatus::Pending);
