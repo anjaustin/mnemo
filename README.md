@@ -30,6 +30,21 @@ Mnemo is a free, open-source, self-hosted memory and context engine for AI agent
 
 Reference CI gate: `.github/workflows/quality-gates.yml`.
 
+## Releases
+
+- Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
+- Release artifacts include:
+  - `mnemo-server-<version>-linux-amd64`
+  - `mnemo-server-<version>-linux-amd64.tar.gz`
+  - `SHA256SUMS.txt`
+
+## Packages
+
+- Docker images are published to GHCR via `.github/workflows/package-ghcr.yml`.
+- Published image namespace: `ghcr.io/anjaustin/mnemo/mnemo-server`.
+- Main branch publishes rolling tags (`main`, `sha-*`, and `latest` on default branch).
+- Version tags publish immutable release tags (for example `v0.1.1`).
+
 ## Why Mnemo (Measured)
 
 - Temporal eval harness (`eval/temporal_eval.py`) currently shows better accuracy on time-sensitive recall than baseline mode in local runs.

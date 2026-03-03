@@ -1,0 +1,58 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-artifacts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --bin mnemo-server
+
+      - name: Package release artifacts
+        run: |
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          mkdir -p dist
+          cp target/release/mnemo-server "dist/mnemo-server-${VERSION}-linux-amd64"
+          tar -C dist -czf "dist/mnemo-server-${VERSION}-linux-amd64.tar.gz" "mnemo-server-${VERSION}-linux-amd64"
+          sha256sum "dist/mnemo-server-${VERSION}-linux-amd64" "dist/mnemo-server-${VERSION}-linux-amd64.tar.gz" > "dist/SHA256SUMS.txt"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/*
+
+  github-release:
+    runs-on: ubuntu-latest
+    needs: build-artifacts
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -4,6 +4,18 @@ All notable changes to Mnemo will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Release automation workflow for version tags (`.github/workflows/release.yml`).
+- GHCR package publication workflow (`.github/workflows/package-ghcr.yml`).
+
+### Changed
+
+- Workspace repository metadata now points to the canonical repository URL.
+- Added `.dockerignore` to reduce container build context and improve image build consistency.
+
 ## [0.1.0] — 2026-03-01
 
 ### Added

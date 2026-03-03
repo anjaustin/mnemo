@@ -1,0 +1,13 @@
+.git
+.github
+target
+notes
+*.md
+*.key
+.env
+sdk
+eval
+tests
+docs
+redis-data
+qdrant-data
