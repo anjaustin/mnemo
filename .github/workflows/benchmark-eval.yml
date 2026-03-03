@@ -80,6 +80,7 @@ jobs:
           SERVER_PID=$!
           sleep 3
           python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080 | tee /tmp/mnemo_eval_table.txt
+          python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080 --verbose | tee /tmp/mnemo_eval_scientific_v2_table.txt
           STATUS=$?
           kill $SERVER_PID || true
           wait $SERVER_PID 2>/dev/null || true
@@ -117,6 +118,13 @@ jobs:
             echo "### Mnemo" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             cat /tmp/mnemo_eval_table.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f /tmp/mnemo_eval_scientific_v2_table.txt ]; then
+            echo "### Mnemo Scientific Pack v2" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/mnemo_eval_scientific_v2_table.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
           fi

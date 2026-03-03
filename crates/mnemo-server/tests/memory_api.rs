@@ -475,6 +475,111 @@ async fn test_chat_history_import_idempotency_prevents_duplicate_replay() {
 }
 
 #[tokio::test]
+async fn test_chat_history_import_chatgpt_export_pathway() {
+    let app = build_test_app().await;
+
+    let (status, import_resp) = json_request(
+        &app,
+        "POST",
+        "/api/v1/import/chat-history",
+        serde_json::json!({
+            "user": "import-user-chatgpt",
+            "source": "chatgpt_export",
+            "payload": {
+                "title": "Lab Notebook",
+                "mapping": {
+                    "m1": {
+                        "message": {
+                            "author": {"role": "user"},
+                            "create_time": 1735689600,
+                            "content": {"parts": ["first exported message"]}
+                        }
+                    },
+                    "m2": {
+                        "message": {
+                            "author": {"role": "assistant"},
+                            "create_time": 1735689610,
+                            "content": {"parts": ["assistant exported reply"]}
+                        }
+                    }
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job = wait_for_import_job(&app, import_resp["job_id"].as_str().unwrap()).await;
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["imported_messages"], 2);
+
+    let (status, user) = json_request(
+        &app,
+        "GET",
+        "/api/v1/users/external/import-user-chatgpt",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_id = user["id"].as_str().unwrap();
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{user_id}/context"),
+        serde_json::json!({"query": "what did we import?", "session": "Lab Notebook"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let text = context["context"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("first exported message") || text.contains("assistant exported reply"),
+        "expected chatgpt import content in context, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_chat_history_import_dry_run_writes_no_data() {
+    let app = build_test_app().await;
+
+    let (status, import_resp) = json_request(
+        &app,
+        "POST",
+        "/api/v1/import/chat-history",
+        serde_json::json!({
+            "user": "import-user-dry-run",
+            "source": "ndjson",
+            "dry_run": true,
+            "payload": [
+                {
+                    "role": "user",
+                    "content": "dry run row",
+                    "created_at": "2025-01-01T00:00:00Z"
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job = wait_for_import_job(&app, import_resp["job_id"].as_str().unwrap()).await;
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["total_messages"], 1);
+    assert_eq!(job["imported_messages"], 1);
+    assert_eq!(job["failed_messages"], 0);
+
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/users/external/import-user-dry-run",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
 async fn test_memory_api_head_mode_returns_thread_head_diagnostics() {
     let app = build_test_app().await;
 

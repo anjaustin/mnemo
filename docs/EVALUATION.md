@@ -33,6 +33,7 @@ python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:80
 Workflow: `.github/workflows/benchmark-eval.yml`
 
 - PR / push to `main`: runs Mnemo benchmark (`--target mnemo`).
+- PR / push to `main`: runs Mnemo benchmark on default pack and scientific research pack v2.
 - Manual dispatch: supports `mnemo`, `zep`, or `both`.
 
 For Zep runs in GitHub Actions, configure repository secret:
