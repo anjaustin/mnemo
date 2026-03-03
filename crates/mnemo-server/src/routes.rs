@@ -4,6 +4,7 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
@@ -30,7 +31,7 @@ use mnemo_core::traits::storage::{
     AgentStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, UserStore, VectorStore,
 };
 
-use crate::state::AppState;
+use crate::state::{AppState, ImportJobRecord, ImportJobStatus};
 
 // ─── Error handling ────────────────────────────────────────────────
 
@@ -130,6 +131,9 @@ pub fn build_router(state: AppState) -> Router {
         // Memory API (high-level DX)
         .route("/api/v1/memory", post(remember_memory))
         .route("/api/v1/memory/:user/context", post(get_memory_context))
+        // Import API
+        .route("/api/v1/import/chat-history", post(import_chat_history))
+        .route("/api/v1/import/jobs/:job_id", get(get_import_job))
         // Agent identity substrate (P0)
         .route("/api/v1/agents/:agent_id/identity", get(get_agent_identity))
         .route(
@@ -430,6 +434,48 @@ struct RememberMemoryResponse {
     episode_id: Uuid,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ChatHistorySource {
+    Ndjson,
+    ChatgptExport,
+}
+
+impl ChatHistorySource {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ChatHistorySource::Ndjson => "ndjson",
+            ChatHistorySource::ChatgptExport => "chatgpt_export",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ImportMessage {
+    session: Option<String>,
+    role: MessageRole,
+    content: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportChatHistoryRequest {
+    user: String,
+    source: ChatHistorySource,
+    payload: serde_json::Value,
+    #[serde(default)]
+    default_session: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Serialize)]
+struct ImportChatHistoryResponse {
+    ok: bool,
+    job_id: Uuid,
+    status: ImportJobStatus,
+}
+
 #[derive(Deserialize)]
 struct MemoryContextRequest {
     query: String,
@@ -616,6 +662,81 @@ async fn remember_memory(
             episode_id: episode.id,
         }),
     ))
+}
+
+async fn import_chat_history(
+    State(state): State<AppState>,
+    Json(req): Json<ImportChatHistoryRequest>,
+) -> Result<(StatusCode, Json<ImportChatHistoryResponse>), AppError> {
+    if req.user.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("user is required".into())));
+    }
+
+    let job_id = Uuid::now_v7();
+    let now = chrono::Utc::now();
+    let record = ImportJobRecord {
+        id: job_id,
+        source: req.source.as_str().to_string(),
+        user: req.user.trim().to_string(),
+        dry_run: req.dry_run,
+        status: ImportJobStatus::Queued,
+        total_messages: 0,
+        imported_messages: 0,
+        failed_messages: 0,
+        sessions_touched: 0,
+        errors: Vec::new(),
+        created_at: now,
+        started_at: None,
+        finished_at: None,
+    };
+
+    {
+        let mut jobs = state.import_jobs.write().await;
+        jobs.insert(job_id, record);
+    }
+
+    let source = req.source;
+    let payload = req.payload;
+    let user = req.user.trim().to_string();
+    let default_session = req.default_session;
+    let dry_run = req.dry_run;
+    let state_for_job = state.clone();
+
+    tokio::spawn(async move {
+        run_import_job(
+            state_for_job,
+            job_id,
+            source,
+            user,
+            payload,
+            default_session,
+            dry_run,
+        )
+        .await;
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ImportChatHistoryResponse {
+            ok: true,
+            job_id,
+            status: ImportJobStatus::Queued,
+        }),
+    ))
+}
+
+async fn get_import_job(
+    State(state): State<AppState>,
+    Path(job_id): Path<Uuid>,
+) -> Result<Json<ImportJobRecord>, AppError> {
+    let jobs = state.import_jobs.read().await;
+    let record = jobs.get(&job_id).cloned().ok_or_else(|| {
+        AppError(MnemoError::NotFound {
+            resource_type: "ImportJob".into(),
+            id: job_id.to_string(),
+        })
+    })?;
+    Ok(Json(record))
 }
 
 async fn get_memory_context(
@@ -1285,6 +1406,416 @@ fn dominant_session(episodes: &[Episode]) -> Option<Uuid> {
             a_count.cmp(b_count).then_with(|| a_id.cmp(b_id))
         })
         .map(|(session_id, _)| session_id)
+}
+
+async fn run_import_job(
+    state: AppState,
+    job_id: Uuid,
+    source: ChatHistorySource,
+    user_identifier: String,
+    payload: serde_json::Value,
+    default_session: Option<String>,
+    dry_run: bool,
+) {
+    set_import_job_status(&state, job_id, ImportJobStatus::Running).await;
+
+    let messages = match parse_import_messages(&source, payload) {
+        Ok(messages) => messages,
+        Err(err) => {
+            finalize_import_job_failure(&state, job_id, vec![err]).await;
+            return;
+        }
+    };
+
+    update_import_job_totals(&state, job_id, messages.len() as u32).await;
+
+    if dry_run {
+        let mut session_names = std::collections::HashSet::new();
+        for message in &messages {
+            if let Some(name) = message.session.as_ref() {
+                session_names.insert(name.clone());
+            }
+        }
+        if session_names.is_empty() {
+            if let Some(name) = default_session
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                session_names.insert(name.to_string());
+            } else {
+                session_names.insert("imported".to_string());
+            }
+        }
+        finalize_import_job_success(
+            &state,
+            job_id,
+            messages.len() as u32,
+            0,
+            session_names.len() as u32,
+            Vec::new(),
+        )
+        .await;
+        return;
+    }
+
+    let user = match find_or_create_memory_user(&state, &user_identifier).await {
+        Ok(user) => user,
+        Err(err) => {
+            finalize_import_job_failure(&state, job_id, vec![err.to_string()]).await;
+            return;
+        }
+    };
+
+    let mut imported_messages = 0u32;
+    let mut failed_messages = 0u32;
+    let mut sessions: HashMap<String, Session> = HashMap::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for (idx, message) in messages.into_iter().enumerate() {
+        let session_name = message
+            .session
+            .or_else(|| {
+                default_session
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_else(|| "imported".to_string());
+
+        let session = if let Some(cached) = sessions.get(&session_name) {
+            cached.clone()
+        } else {
+            match find_or_create_session(&state, user.id, &session_name).await {
+                Ok(session) => {
+                    sessions.insert(session_name.clone(), session.clone());
+                    session
+                }
+                Err(err) => {
+                    failed_messages += 1;
+                    if errors.len() < 20 {
+                        errors.push(format!(
+                            "row {} session '{}' failed: {}",
+                            idx + 1,
+                            session_name,
+                            err
+                        ));
+                    }
+                    continue;
+                }
+            }
+        };
+
+        let episode_req = CreateEpisodeRequest {
+            id: None,
+            episode_type: EpisodeType::Message,
+            content: message.content,
+            role: Some(message.role),
+            name: Some(user.name.clone()),
+            metadata: serde_json::json!({ "import_source": source.as_str() }),
+            created_at: Some(message.created_at),
+        };
+
+        match state
+            .state_store
+            .create_episode(episode_req, session.id, user.id)
+            .await
+        {
+            Ok(_) => imported_messages += 1,
+            Err(err) => {
+                failed_messages += 1;
+                if errors.len() < 20 {
+                    errors.push(format!("row {} import failed: {}", idx + 1, err));
+                }
+            }
+        }
+    }
+
+    finalize_import_job_success(
+        &state,
+        job_id,
+        imported_messages,
+        failed_messages,
+        sessions.len() as u32,
+        errors,
+    )
+    .await;
+}
+
+fn parse_import_messages(
+    source: &ChatHistorySource,
+    payload: serde_json::Value,
+) -> Result<Vec<ImportMessage>, String> {
+    match source {
+        ChatHistorySource::Ndjson => parse_ndjson_payload(payload),
+        ChatHistorySource::ChatgptExport => parse_chatgpt_export_payload(payload),
+    }
+}
+
+fn parse_ndjson_payload(payload: serde_json::Value) -> Result<Vec<ImportMessage>, String> {
+    let mut raw_rows: Vec<serde_json::Value> = Vec::new();
+
+    match payload {
+        serde_json::Value::String(lines) => {
+            for line in lines.lines().filter(|l| !l.trim().is_empty()) {
+                let value: serde_json::Value =
+                    serde_json::from_str(line).map_err(|e| format!("invalid NDJSON row: {e}"))?;
+                raw_rows.push(value);
+            }
+        }
+        serde_json::Value::Array(rows) => raw_rows = rows,
+        serde_json::Value::Object(map) => {
+            if let Some(rows) = map.get("messages").and_then(|v| v.as_array()) {
+                raw_rows = rows.clone();
+            } else if let Some(lines) = map.get("ndjson").and_then(|v| v.as_str()) {
+                for line in lines.lines().filter(|l| !l.trim().is_empty()) {
+                    let value: serde_json::Value = serde_json::from_str(line)
+                        .map_err(|e| format!("invalid NDJSON row: {e}"))?;
+                    raw_rows.push(value);
+                }
+            } else {
+                return Err("ndjson payload requires string, array, or object.messages".into());
+            }
+        }
+        _ => return Err("unsupported ndjson payload shape".into()),
+    }
+
+    let mut messages = Vec::new();
+    for (idx, row) in raw_rows.into_iter().enumerate() {
+        let obj = row
+            .as_object()
+            .ok_or_else(|| format!("row {} is not an object", idx + 1))?;
+
+        let content = obj
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("row {} missing content", idx + 1))?;
+
+        let role = parse_role(
+            obj.get("role")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("row {} missing role", idx + 1))?,
+        )
+        .ok_or_else(|| format!("row {} invalid role", idx + 1))?;
+
+        let created_at = parse_created_at(
+            obj.get("created_at")
+                .or_else(|| obj.get("timestamp"))
+                .and_then(|v| v.as_str()),
+        )?;
+
+        let session = obj
+            .get("session")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        messages.push(ImportMessage {
+            session,
+            role,
+            content,
+            created_at,
+        });
+    }
+
+    Ok(messages)
+}
+
+fn parse_chatgpt_export_payload(payload: serde_json::Value) -> Result<Vec<ImportMessage>, String> {
+    let conversations: Vec<serde_json::Value> = match payload {
+        serde_json::Value::Array(items) => items,
+        serde_json::Value::Object(map) => {
+            if let Some(items) = map.get("conversations").and_then(|v| v.as_array()) {
+                items.clone()
+            } else {
+                vec![serde_json::Value::Object(map)]
+            }
+        }
+        _ => return Err("chatgpt export payload must be an object or array".into()),
+    };
+
+    let mut messages: Vec<ImportMessage> = Vec::new();
+
+    for convo in conversations {
+        let title = convo
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let Some(mapping) = convo.get("mapping").and_then(|v| v.as_object()) else {
+            continue;
+        };
+
+        let mut extracted: Vec<(chrono::DateTime<chrono::Utc>, ImportMessage)> = Vec::new();
+        for node in mapping.values() {
+            let Some(message) = node.get("message") else {
+                continue;
+            };
+            let Some(author_role) = message
+                .get("author")
+                .and_then(|v| v.get("role"))
+                .and_then(|v| v.as_str())
+            else {
+                continue;
+            };
+            let Some(role) = parse_role(author_role) else {
+                continue;
+            };
+
+            let content = extract_chatgpt_content(message);
+            if content.trim().is_empty() {
+                continue;
+            }
+
+            let created_at = if let Some(ts) = message.get("create_time").and_then(|v| v.as_f64()) {
+                chrono::DateTime::<chrono::Utc>::from_timestamp(ts as i64, 0)
+                    .unwrap_or_else(chrono::Utc::now)
+            } else {
+                chrono::Utc::now()
+            };
+
+            extracted.push((
+                created_at,
+                ImportMessage {
+                    session: title.clone(),
+                    role,
+                    content,
+                    created_at,
+                },
+            ));
+        }
+
+        extracted.sort_by(|(a_ts, _), (b_ts, _)| a_ts.cmp(b_ts));
+        messages.extend(extracted.into_iter().map(|(_, msg)| msg));
+    }
+
+    if messages.is_empty() {
+        return Err("no importable messages found in chatgpt export payload".into());
+    }
+
+    Ok(messages)
+}
+
+fn extract_chatgpt_content(message: &serde_json::Value) -> String {
+    if let Some(parts) = message
+        .get("content")
+        .and_then(|v| v.get("parts"))
+        .and_then(|v| v.as_array())
+    {
+        return parts
+            .iter()
+            .filter_map(|part| part.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string();
+    }
+
+    message
+        .get("content")
+        .and_then(|v| v.get("text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn parse_role(input: &str) -> Option<MessageRole> {
+    match input.to_ascii_lowercase().as_str() {
+        "user" | "human" => Some(MessageRole::User),
+        "assistant" | "ai" => Some(MessageRole::Assistant),
+        "system" => Some(MessageRole::System),
+        "tool" | "function" => Some(MessageRole::Tool),
+        _ => None,
+    }
+}
+
+fn parse_created_at(input: Option<&str>) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    if let Some(raw) = input {
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .map_err(|e| format!("invalid created_at timestamp: {e}"))
+    } else {
+        Ok(chrono::Utc::now())
+    }
+}
+
+async fn set_import_job_status(state: &AppState, job_id: Uuid, status: ImportJobStatus) {
+    let mut jobs = state.import_jobs.write().await;
+    if let Some(job) = jobs.get_mut(&job_id) {
+        if matches!(status, ImportJobStatus::Running) {
+            job.started_at = Some(chrono::Utc::now());
+        }
+        job.status = status;
+    }
+}
+
+async fn update_import_job_totals(state: &AppState, job_id: Uuid, total_messages: u32) {
+    let mut jobs = state.import_jobs.write().await;
+    if let Some(job) = jobs.get_mut(&job_id) {
+        job.total_messages = total_messages;
+    }
+}
+
+async fn finalize_import_job_failure(state: &AppState, job_id: Uuid, errors: Vec<String>) {
+    let mut jobs = state.import_jobs.write().await;
+    if let Some(job) = jobs.get_mut(&job_id) {
+        job.status = ImportJobStatus::Failed;
+        job.finished_at = Some(chrono::Utc::now());
+        job.errors = errors;
+    }
+}
+
+async fn finalize_import_job_success(
+    state: &AppState,
+    job_id: Uuid,
+    imported_messages: u32,
+    failed_messages: u32,
+    sessions_touched: u32,
+    errors: Vec<String>,
+) {
+    let mut jobs = state.import_jobs.write().await;
+    if let Some(job) = jobs.get_mut(&job_id) {
+        job.status = if failed_messages > 0 {
+            ImportJobStatus::Failed
+        } else {
+            ImportJobStatus::Completed
+        };
+        job.imported_messages = imported_messages;
+        job.failed_messages = failed_messages;
+        job.sessions_touched = sessions_touched;
+        job.errors = errors;
+        job.finished_at = Some(chrono::Utc::now());
+    }
+}
+
+async fn find_or_create_memory_user(
+    state: &AppState,
+    user_identifier: &str,
+) -> Result<User, MnemoError> {
+    match find_user_by_identifier(state, user_identifier).await {
+        Ok(user) => Ok(user),
+        Err(err) if is_user_not_found(&err) => {
+            let create = CreateUserRequest {
+                id: None,
+                external_id: Some(user_identifier.to_string()),
+                name: user_identifier.to_string(),
+                email: None,
+                metadata: serde_json::json!({}),
+            };
+            match state.state_store.create_user(create).await {
+                Ok(user) => Ok(user),
+                Err(MnemoError::Duplicate(_)) => {
+                    find_user_by_identifier(state, user_identifier).await
+                }
+                Err(create_err) => Err(create_err),
+            }
+        }
+        Err(err) => Err(err),
+    }
 }
 
 async fn resolve_session_scope(

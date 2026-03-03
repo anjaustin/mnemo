@@ -77,6 +77,7 @@ async fn build_test_app_with_prefilter(prefilter: MetadataPrefilterConfig) -> ax
         retrieval,
         graph,
         metadata_prefilter: prefilter,
+        import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     })
 }
 
@@ -226,6 +227,88 @@ async fn test_memory_api_immediate_recall_fallback_contains_recent_text() {
     assert!(
         text.contains(marker),
         "expected immediate recall to include marker, got context: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_chat_history_import_ndjson_pathway() {
+    let app = build_test_app().await;
+
+    let (status, import_resp) = json_request(
+        &app,
+        "POST",
+        "/api/v1/import/chat-history",
+        serde_json::json!({
+            "user": "import-user-1",
+            "source": "ndjson",
+            "payload": [
+                {
+                    "session": "Imported Thread",
+                    "role": "user",
+                    "content": "Imported message one",
+                    "created_at": "2025-01-01T00:00:00Z"
+                },
+                {
+                    "session": "Imported Thread",
+                    "role": "assistant",
+                    "content": "Imported response one",
+                    "created_at": "2025-01-01T00:00:10Z"
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let job_id = import_resp["job_id"].as_str().unwrap().to_string();
+
+    let mut completed = false;
+    for _ in 0..40 {
+        let (job_status, job) = json_request(
+            &app,
+            "GET",
+            &format!("/api/v1/import/jobs/{job_id}"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(job_status, StatusCode::OK);
+
+        if job["status"] == "completed" {
+            completed = true;
+            assert_eq!(job["imported_messages"], 2);
+            assert_eq!(job["failed_messages"], 0);
+            break;
+        }
+        if job["status"] == "failed" {
+            panic!("import job failed unexpectedly: {job}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(completed, "import job did not complete in time");
+
+    let (status, user) = json_request(
+        &app,
+        "GET",
+        "/api/v1/users/external/import-user-1",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_id = user["id"].as_str().unwrap();
+
+    let (status, context) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{user_id}/context"),
+        serde_json::json!({"query": "What was imported?", "session": "Imported Thread"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let context_text = context["context"].as_str().unwrap_or_default();
+    assert!(
+        context_text.contains("Imported message one")
+            || context_text.contains("Imported response one"),
+        "expected imported content in context, got: {}",
+        context_text
     );
 }
 

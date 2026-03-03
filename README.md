@@ -146,6 +146,29 @@ curl -X POST http://localhost:8080/api/v1/users/USER_ID/context \
 
 Inject the returned `context` string into your agent's system prompt. That's it.
 
+### Import existing chat history
+
+Mnemo supports async import jobs for existing chat logs.
+
+```bash
+# Start an import job (ndjson source)
+curl -X POST http://localhost:8080/api/v1/import/chat-history \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user": "kendra",
+    "source": "ndjson",
+    "dry_run": false,
+    "default_session": "Imported History",
+    "payload": [
+      {"role": "user", "content": "I switched to Nike.", "created_at": "2025-02-01T10:00:00Z"},
+      {"role": "assistant", "content": "Got it.", "created_at": "2025-02-01T10:00:05Z"}
+    ]
+  }'
+
+# Poll job status
+curl http://localhost:8080/api/v1/import/jobs/JOB_ID
+```
+
 ## Architecture
 
 ```

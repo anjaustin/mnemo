@@ -47,6 +47,7 @@ It verifies:
 - identity contamination guardrails (`identity_core` write blocking)
 - identity versioning/audit/rollback semantics
 - promotion gating and approve/reject flows
+- async chat-history import pathway (`/api/v1/import/chat-history` + job polling)
 
 ### Test infrastructure
 

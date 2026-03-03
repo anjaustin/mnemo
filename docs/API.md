@@ -127,6 +127,69 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
 
 ---
 
+## Import API
+
+Async import jobs for migrating existing chat history into Mnemo.
+
+### `POST /api/v1/import/chat-history`
+
+Start an import job.
+
+```json
+// Request
+{
+  "user": "kendra",
+  "source": "ndjson",
+  "dry_run": false,
+  "default_session": "Imported History",
+  "payload": [
+    {
+      "session": "Imported History",
+      "role": "user",
+      "content": "I switched to Nike.",
+      "created_at": "2025-02-01T10:00:00Z"
+    }
+  ]
+}
+```
+
+- `source` currently supports: `ndjson`, `chatgpt_export`
+- `dry_run=true` validates and counts importable rows without writing episodes.
+
+```json
+// Response 202
+{
+  "ok": true,
+  "job_id": "01954b4f-4f35-7000-8000-000000000001",
+  "status": "queued"
+}
+```
+
+### `GET /api/v1/import/jobs/:job_id`
+
+Get import job status and counters.
+
+```json
+// Response 200
+{
+  "id": "01954b4f-4f35-7000-8000-000000000001",
+  "source": "ndjson",
+  "user": "kendra",
+  "dry_run": false,
+  "status": "completed",
+  "total_messages": 24,
+  "imported_messages": 24,
+  "failed_messages": 0,
+  "sessions_touched": 2,
+  "errors": [],
+  "created_at": "2026-03-03T03:10:14Z",
+  "started_at": "2026-03-03T03:10:14Z",
+  "finished_at": "2026-03-03T03:10:15Z"
+}
+```
+
+---
+
 ## Agent Identity Substrate (P0)
 
 These endpoints provide a separated agent identity/experience layer.

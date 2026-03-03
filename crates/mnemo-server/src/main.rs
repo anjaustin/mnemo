@@ -124,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
             scan_limit: config.retrieval.metadata_scan_limit,
             relax_if_empty: config.retrieval.metadata_relax_if_empty,
         },
+        import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
     let app = build_router(app_state)
         .layer(AuthLayer::new(auth_config))
