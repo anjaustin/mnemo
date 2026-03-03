@@ -74,6 +74,7 @@ Quick benchmark commands:
 - Mnemo only: `python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080`
 - Mnemo vs Zep: `python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-api-key-file zep_api.key`
 - Scientific research pack (Mnemo): `python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases.json --mnemo-base-url http://localhost:8080`
+- Scientific research pack v2 (Mnemo): `python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080`
 
 ## Quick Start
 

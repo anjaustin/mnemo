@@ -1,0 +1,243 @@
+[
+  {
+    "name": "bioelectric_vs_gene_only_current",
+    "memories": [
+      {
+        "content": "Legacy model: regenerative patterning is gene-expression only with no stable bioelectric memory.",
+        "created_at": "2021-03-11T09:00:00Z"
+      },
+      {
+        "content": "Current model: regenerative patterning uses stable bioelectric prepatterns that can store instructive state.",
+        "created_at": "2025-08-19T10:15:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is our current model of regenerative patterning?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["stable bioelectric prepatterns", "instructive state"],
+      "not_contains": ["gene-expression only"]
+    }
+  },
+  {
+    "name": "bioelectric_vs_gene_only_historical",
+    "memories": [
+      {
+        "content": "Legacy model: regenerative patterning is gene-expression only with no stable bioelectric memory.",
+        "created_at": "2021-03-11T09:00:00Z"
+      },
+      {
+        "content": "Current model: regenerative patterning uses stable bioelectric prepatterns that can store instructive state.",
+        "created_at": "2025-08-19T10:15:00Z"
+      }
+    ],
+    "query": {
+      "text": "As of 2021, what model did we use for regenerative patterning?",
+      "mode": "historical",
+      "as_of": "2021-12-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["gene-expression only"],
+      "not_contains": ["stable bioelectric prepatterns"]
+    }
+  },
+  {
+    "name": "target_morphology_framing_current",
+    "memories": [
+      {
+        "content": "Old framing: target morphology is a static endpoint snapshot only.",
+        "created_at": "2022-05-09T13:20:00Z"
+      },
+      {
+        "content": "Updated framing: target morphology behaves as an attractor-like setpoint in morphospace.",
+        "created_at": "2025-01-21T15:45:00Z"
+      }
+    ],
+    "query": {
+      "text": "How do we currently frame target morphology?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["attractor-like setpoint", "morphospace"],
+      "not_contains": ["static endpoint snapshot"]
+    }
+  },
+  {
+    "name": "target_morphology_framing_historical",
+    "memories": [
+      {
+        "content": "Old framing: target morphology is a static endpoint snapshot only.",
+        "created_at": "2022-05-09T13:20:00Z"
+      },
+      {
+        "content": "Updated framing: target morphology behaves as an attractor-like setpoint in morphospace.",
+        "created_at": "2025-01-21T15:45:00Z"
+      }
+    ],
+    "query": {
+      "text": "What was our framing of target morphology in 2022?",
+      "mode": "historical",
+      "as_of": "2022-09-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["static endpoint snapshot"],
+      "not_contains": ["attractor-like setpoint"]
+    }
+  },
+  {
+    "name": "protocol_revision_current",
+    "memories": [
+      {
+        "content": "Protocol v1 uses ivermectin at 5 uM for 24 hours.",
+        "created_at": "2024-02-01T08:00:00Z"
+      },
+      {
+        "content": "Protocol v2 uses ivermectin at 2.5 uM for 18 hours due to toxicity observations.",
+        "created_at": "2025-06-14T08:30:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the current ivermectin protocol version?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["2.5 uM", "18 hours"],
+      "not_contains": ["5 uM", "24 hours"]
+    }
+  },
+  {
+    "name": "protocol_revision_historical",
+    "memories": [
+      {
+        "content": "Protocol v1 uses ivermectin at 5 uM for 24 hours.",
+        "created_at": "2024-02-01T08:00:00Z"
+      },
+      {
+        "content": "Protocol v2 uses ivermectin at 2.5 uM for 18 hours due to toxicity observations.",
+        "created_at": "2025-06-14T08:30:00Z"
+      }
+    ],
+    "query": {
+      "text": "As of early 2024, what ivermectin protocol did we use?",
+      "mode": "historical",
+      "as_of": "2024-03-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["5 uM", "24 hours"],
+      "not_contains": ["2.5 uM", "18 hours"]
+    }
+  },
+  {
+    "name": "replication_conclusion_current",
+    "memories": [
+      {
+        "content": "Draft conclusion: perturbation P robustly increases anteriorization across all tested species.",
+        "created_at": "2024-08-02T12:00:00Z"
+      },
+      {
+        "content": "Replication update: species beta showed opposite polarity response to perturbation P.",
+        "created_at": "2025-02-27T12:00:00Z"
+      },
+      {
+        "content": "Current conclusion: perturbation P response is species-specific and not universally anteriorizing.",
+        "created_at": "2025-11-03T12:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is our current cross-species conclusion for perturbation P?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["species-specific", "not universally anteriorizing"],
+      "not_contains": ["across all tested species"]
+    }
+  },
+  {
+    "name": "replication_conclusion_historical",
+    "memories": [
+      {
+        "content": "Draft conclusion: perturbation P robustly increases anteriorization across all tested species.",
+        "created_at": "2024-08-02T12:00:00Z"
+      },
+      {
+        "content": "Replication update: species beta showed opposite polarity response to perturbation P.",
+        "created_at": "2025-02-27T12:00:00Z"
+      },
+      {
+        "content": "Current conclusion: perturbation P response is species-specific and not universally anteriorizing.",
+        "created_at": "2025-11-03T12:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "Before the replication update, what did our draft claim about perturbation P?",
+      "mode": "historical",
+      "as_of": "2024-10-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["across all tested species"],
+      "not_contains": ["species-specific"]
+    }
+  },
+  {
+    "name": "multi_hop_synthesis_current",
+    "memories": [
+      {
+        "content": "Observation A: depolarization pulse D1 expanded ectopic eye formation in cohort alpha.",
+        "created_at": "2024-01-05T09:00:00Z"
+      },
+      {
+        "content": "Observation B: prolonged D1 caused viability loss above 20 minutes.",
+        "created_at": "2024-01-12T09:00:00Z"
+      },
+      {
+        "content": "Current synthesis: use short D1 pulses to balance ectopic eye induction with viability constraints.",
+        "created_at": "2025-03-08T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is our current synthesis recommendation for D1 pulses?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["short D1 pulses", "viability constraints"],
+      "not_contains": ["prolonged D1"]
+    }
+  },
+  {
+    "name": "multi_hop_synthesis_historical",
+    "memories": [
+      {
+        "content": "Observation A: depolarization pulse D1 expanded ectopic eye formation in cohort alpha.",
+        "created_at": "2024-01-05T09:00:00Z"
+      },
+      {
+        "content": "Observation B: prolonged D1 caused viability loss above 20 minutes.",
+        "created_at": "2024-01-12T09:00:00Z"
+      },
+      {
+        "content": "Current synthesis: use short D1 pulses to balance ectopic eye induction with viability constraints.",
+        "created_at": "2025-03-08T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "As of January 2024, what warning did we already have about D1?",
+      "mode": "historical",
+      "as_of": "2024-01-20T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["viability loss", "above 20 minutes"],
+      "not_contains": ["current synthesis"]
+    }
+  }
+]

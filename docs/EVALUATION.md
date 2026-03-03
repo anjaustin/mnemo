@@ -56,6 +56,12 @@ python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_ca
 
 This pack emphasizes evolving research claims, hypothesis updates, and historical vs current retrieval correctness.
 
+Scientific research assistance v2 dataset (harder contradiction and synthesis cases):
+
+```bash
+python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080
+```
+
 Expected output format:
 
 ```text
@@ -76,6 +82,30 @@ From a local run on 2026-03-02 (`python3 eval/temporal_eval.py --target mnemo --
 | baseline | 66.7% | 33.3% | 80 | 80 |
 
 Interpretation: temporal controls improved correctness and reduced stale recall in this dataset with a small latency tradeoff.
+
+## Latest scientific pack snapshot
+
+From local runs on 2026-03-02:
+
+`python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases.json --mnemo-base-url http://localhost:8080`
+
+| Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
+|---|---:|---:|---:|---:|
+| temporal | 100.0% | 0.0% | 94 | 124 |
+| baseline | 50.0% | 50.0% | 80 | 121 |
+
+Interpretation: domain-shaped scientific cases show a larger gap between temporal and baseline retrieval, with baseline stale-fact exposure reaching 50%.
+
+From local runs on 2026-03-02:
+
+`python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080`
+
+| Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
+|---|---:|---:|---:|---:|
+| temporal | 90.0% | 10.0% | 103 | 136 |
+| baseline | 40.0% | 50.0% | 98 | 116 |
+
+Interpretation: v2 raises difficulty with denser contradiction and synthesis cases. Temporal retrieval still materially outperforms baseline, but the non-zero stale rate in temporal mode identifies real room for retrieval hardening before domain production claims.
 
 ## Competitive runbook (Mnemo vs Zep)
 

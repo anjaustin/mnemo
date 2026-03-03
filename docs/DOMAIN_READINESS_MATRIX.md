@@ -50,4 +50,4 @@ This document tracks Mnemo's near-term readiness for high-value application doma
 ## Current Focus
 
 The active first domain pack is scientific research assistance.
-See `eval/scientific_research_cases.json` and `docs/EVALUATION.md`.
+See `eval/scientific_research_cases.json`, `eval/scientific_research_cases_v2.json`, and `docs/EVALUATION.md`.
