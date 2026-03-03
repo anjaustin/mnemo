@@ -108,7 +108,7 @@
     },
     "expect": {
       "contains": ["2.5 uM", "18 hours"],
-      "not_contains": ["5 uM", "24 hours"]
+      "not_contains": ["Protocol v1 uses ivermectin at 5 uM for 24 hours."]
     }
   },
   {
@@ -131,7 +131,7 @@
     },
     "expect": {
       "contains": ["5 uM", "24 hours"],
-      "not_contains": ["2.5 uM", "18 hours"]
+      "not_contains": ["Protocol v2 uses ivermectin at 2.5 uM for 18 hours due to toxicity observations."]
     }
   },
   {

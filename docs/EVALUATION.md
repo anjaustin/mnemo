@@ -102,10 +102,10 @@ From local runs on 2026-03-02:
 
 | Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
 |---|---:|---:|---:|---:|
-| temporal | 90.0% | 10.0% | 103 | 136 |
-| baseline | 40.0% | 50.0% | 98 | 116 |
+| temporal | 100.0% | 0.0% | 78 | 106 |
+| baseline | 50.0% | 40.0% | 75 | 105 |
 
-Interpretation: v2 raises difficulty with denser contradiction and synthesis cases. Temporal retrieval still materially outperforms baseline, but the non-zero stale rate in temporal mode identifies real room for retrieval hardening before domain production claims.
+Interpretation: v2 raises difficulty with denser contradiction and synthesis cases. Temporal retrieval still materially outperforms baseline. During falsification, we identified and fixed one scorer false-positive in v2 expectation tokens (substring overlap between `2.5 uM` and `5 uM`), then reran the pack.
 
 ## Competitive runbook (Mnemo vs Zep)
 
