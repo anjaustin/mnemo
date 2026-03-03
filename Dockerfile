@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Cache dependency compilation
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
 COPY crates/mnemo-core/Cargo.toml crates/mnemo-core/Cargo.toml
 COPY crates/mnemo-server/Cargo.toml crates/mnemo-server/Cargo.toml
 COPY crates/mnemo-storage/Cargo.toml crates/mnemo-storage/Cargo.toml
@@ -29,6 +29,9 @@ RUN for crate in mnemo-core mnemo-server mnemo-storage mnemo-graph mnemo-ingest 
       mkdir -p "crates/$crate/src" && \
       echo "fn main() {}" > "crates/$crate/src/lib.rs"; \
     done
+
+# Generate lockfile inside the build context
+RUN cargo generate-lockfile
 
 # Build dependencies only (cached layer)
 RUN cargo build --release 2>/dev/null || true
