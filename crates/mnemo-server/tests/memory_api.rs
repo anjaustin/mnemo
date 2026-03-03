@@ -219,6 +219,98 @@ async fn test_memory_api_validation_and_resolution() {
 }
 
 #[tokio::test]
+async fn test_memory_changes_since_reports_episode_and_head_changes() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "diff-user",
+            "external_id": "diff-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "diff-session" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "older event",
+            "created_at": "2025-01-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "newer event",
+            "created_at": "2025-03-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, diff) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/diff-user/changes_since",
+        serde_json::json!({
+            "from": "2025-02-01T00:00:00Z",
+            "to": "2025-04-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!diff["added_episodes"].as_array().unwrap().is_empty());
+    assert!(!diff["head_changes"].as_array().unwrap().is_empty());
+    assert!(diff["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("added episodes"));
+}
+
+#[tokio::test]
+async fn test_memory_changes_since_rejects_invalid_window() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/nope/changes_since",
+        serde_json::json!({
+            "from": "2025-04-01T00:00:00Z",
+            "to": "2025-01-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_memory_api_immediate_recall_fallback_contains_recent_text() {
     let app = build_test_app().await;
     let marker = "falsify-anchovy-orbit-9271";

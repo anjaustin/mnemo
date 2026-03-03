@@ -131,6 +131,10 @@ pub fn build_router(state: AppState) -> Router {
         // Memory API (high-level DX)
         .route("/api/v1/memory", post(remember_memory))
         .route("/api/v1/memory/:user/context", post(get_memory_context))
+        .route(
+            "/api/v1/memory/:user/changes_since",
+            post(memory_changes_since),
+        )
         // Import API
         .route("/api/v1/import/chat-history", post(import_chat_history))
         .route("/api/v1/import/jobs/:job_id", get(get_import_job))
@@ -480,6 +484,74 @@ struct ImportChatHistoryResponse {
     ok: bool,
     job_id: Uuid,
     status: ImportJobStatus,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryChangesSinceRequest {
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    session: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryChangesSinceResponse {
+    user_id: Uuid,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
+    added_facts: Vec<FactChange>,
+    superseded_facts: Vec<FactChange>,
+    confidence_deltas: Vec<ConfidenceDelta>,
+    head_changes: Vec<HeadChange>,
+    added_episodes: Vec<EpisodeChange>,
+    summary: String,
+}
+
+#[derive(Debug, Serialize)]
+struct FactChange {
+    edge_id: Uuid,
+    fact: String,
+    label: String,
+    source_entity: String,
+    target_entity: String,
+    confidence: f32,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfidenceDelta {
+    source_entity: String,
+    target_entity: String,
+    label: String,
+    previous_confidence: f32,
+    current_confidence: f32,
+    delta: f32,
+    at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct HeadChange {
+    session_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    head_episode_id: Option<Uuid>,
+    head_version: u64,
+    at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct EpisodeChange {
+    episode_id: Uuid,
+    session_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<MessageRole>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    preview: String,
 }
 
 #[derive(Deserialize)]
@@ -920,6 +992,224 @@ async fn get_memory_context(
         mode,
         head,
         metadata_filter_diagnostics,
+    }))
+}
+
+async fn memory_changes_since(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<MemoryChangesSinceRequest>,
+) -> Result<Json<MemoryChangesSinceResponse>, AppError> {
+    if req.to <= req.from {
+        return Err(AppError(MnemoError::Validation(
+            "'to' must be after 'from'".to_string(),
+        )));
+    }
+
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let sessions = list_all_sessions_for_user(&state, user.id).await?;
+
+    let scoped_sessions: Vec<Session> = if let Some(session_scope) = req
+        .session
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        let matched: Vec<Session> = sessions
+            .iter()
+            .filter(|session| {
+                session.id.to_string() == session_scope
+                    || session
+                        .name
+                        .as_ref()
+                        .map(|n| n == &session_scope)
+                        .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        if matched.is_empty() {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "Session".into(),
+                id: session_scope,
+            }));
+        }
+        matched
+    } else {
+        sessions.clone()
+    };
+
+    let mut session_name_by_id: HashMap<Uuid, Option<String>> = HashMap::new();
+    for session in &scoped_sessions {
+        session_name_by_id.insert(session.id, session.name.clone());
+    }
+
+    let mut added_episodes: Vec<EpisodeChange> = Vec::new();
+    let mut episode_session_by_id: HashMap<Uuid, Uuid> = HashMap::new();
+    for session in &scoped_sessions {
+        let episodes = list_all_episodes_for_session(&state, session.id).await?;
+        for episode in episodes {
+            episode_session_by_id.insert(episode.id, episode.session_id);
+            if episode.created_at > req.from && episode.created_at <= req.to {
+                added_episodes.push(EpisodeChange {
+                    episode_id: episode.id,
+                    session_id: episode.session_id,
+                    session_name: session.name.clone(),
+                    role: episode.role,
+                    created_at: episode.created_at,
+                    preview: preview_text(&episode.content, 140),
+                });
+            }
+        }
+    }
+
+    let mut head_changes = Vec::new();
+    for session in &scoped_sessions {
+        if let Some(at) = session.head_updated_at {
+            if at > req.from && at <= req.to {
+                head_changes.push(HeadChange {
+                    session_id: session.id,
+                    session_name: session.name.clone(),
+                    head_episode_id: session.head_episode_id,
+                    head_version: session.head_version,
+                    at,
+                });
+            }
+        }
+    }
+
+    let edges = state
+        .state_store
+        .query_edges(
+            user.id,
+            EdgeFilter {
+                include_invalidated: true,
+                limit: 10_000,
+                ..EdgeFilter::default()
+            },
+        )
+        .await?;
+
+    let entities = list_all_entities_for_user(&state, user.id).await?;
+    let entity_name_by_id: HashMap<Uuid, String> =
+        entities.into_iter().map(|e| (e.id, e.name)).collect();
+
+    let in_scope_edge = |edge: &Edge| {
+        if req.session.is_none() {
+            return true;
+        }
+        episode_session_by_id
+            .get(&edge.source_episode_id)
+            .map(|sid| session_name_by_id.contains_key(sid))
+            .unwrap_or(false)
+    };
+
+    let mut added_facts = Vec::new();
+    let mut superseded_facts = Vec::new();
+    for edge in &edges {
+        if !in_scope_edge(edge) {
+            continue;
+        }
+
+        if edge.valid_at > req.from && edge.valid_at <= req.to {
+            added_facts.push(FactChange {
+                edge_id: edge.id,
+                fact: edge.fact.clone(),
+                label: edge.label.clone(),
+                source_entity: entity_name_by_id
+                    .get(&edge.source_entity_id)
+                    .cloned()
+                    .unwrap_or_else(|| edge.source_entity_id.to_string()),
+                target_entity: entity_name_by_id
+                    .get(&edge.target_entity_id)
+                    .cloned()
+                    .unwrap_or_else(|| edge.target_entity_id.to_string()),
+                confidence: edge.confidence,
+                occurred_at: edge.valid_at,
+            });
+        }
+
+        if let Some(invalid_at) = edge.invalid_at {
+            if invalid_at > req.from && invalid_at <= req.to {
+                superseded_facts.push(FactChange {
+                    edge_id: edge.id,
+                    fact: edge.fact.clone(),
+                    label: edge.label.clone(),
+                    source_entity: entity_name_by_id
+                        .get(&edge.source_entity_id)
+                        .cloned()
+                        .unwrap_or_else(|| edge.source_entity_id.to_string()),
+                    target_entity: entity_name_by_id
+                        .get(&edge.target_entity_id)
+                        .cloned()
+                        .unwrap_or_else(|| edge.target_entity_id.to_string()),
+                    confidence: edge.confidence,
+                    occurred_at: invalid_at,
+                });
+            }
+        }
+    }
+
+    let mut grouped: HashMap<(Uuid, Uuid, String), Vec<&Edge>> = HashMap::new();
+    for edge in &edges {
+        if !in_scope_edge(edge) {
+            continue;
+        }
+        grouped
+            .entry((
+                edge.source_entity_id,
+                edge.target_entity_id,
+                edge.label.clone(),
+            ))
+            .or_default()
+            .push(edge);
+    }
+
+    let mut confidence_deltas = Vec::new();
+    for ((src_id, tgt_id, label), mut group) in grouped {
+        group.sort_by(|a, b| a.valid_at.cmp(&b.valid_at));
+        for pair in group.windows(2) {
+            let previous = pair[0];
+            let current = pair[1];
+            if current.valid_at > req.from && current.valid_at <= req.to {
+                confidence_deltas.push(ConfidenceDelta {
+                    source_entity: entity_name_by_id
+                        .get(&src_id)
+                        .cloned()
+                        .unwrap_or_else(|| src_id.to_string()),
+                    target_entity: entity_name_by_id
+                        .get(&tgt_id)
+                        .cloned()
+                        .unwrap_or_else(|| tgt_id.to_string()),
+                    label: label.clone(),
+                    previous_confidence: previous.confidence,
+                    current_confidence: current.confidence,
+                    delta: current.confidence - previous.confidence,
+                    at: current.valid_at,
+                });
+            }
+        }
+    }
+
+    let summary = format!(
+        "{} added facts, {} superseded facts, {} confidence deltas, {} head changes, {} added episodes",
+        added_facts.len(),
+        superseded_facts.len(),
+        confidence_deltas.len(),
+        head_changes.len(),
+        added_episodes.len()
+    );
+
+    Ok(Json(MemoryChangesSinceResponse {
+        user_id: user.id,
+        from: req.from,
+        to: req.to,
+        session: req.session,
+        added_facts,
+        superseded_facts,
+        confidence_deltas,
+        head_changes,
+        added_episodes,
+        summary,
     }))
 }
 
@@ -1449,6 +1739,99 @@ fn dominant_session(episodes: &[Episode]) -> Option<Uuid> {
             a_count.cmp(b_count).then_with(|| a_id.cmp(b_id))
         })
         .map(|(session_id, _)| session_id)
+}
+
+async fn list_all_sessions_for_user(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<Vec<Session>, MnemoError> {
+    let mut out = Vec::new();
+    let mut after = None;
+    loop {
+        let page = state
+            .state_store
+            .list_sessions(
+                user_id,
+                ListSessionsParams {
+                    limit: 200,
+                    after,
+                    since: None,
+                },
+            )
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().map(|s| s.id);
+        out.extend(page);
+        if out.len() > 20_000 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+async fn list_all_episodes_for_session(
+    state: &AppState,
+    session_id: Uuid,
+) -> Result<Vec<Episode>, MnemoError> {
+    let mut out = Vec::new();
+    let mut after = None;
+    loop {
+        let page = state
+            .state_store
+            .list_episodes(
+                session_id,
+                ListEpisodesParams {
+                    limit: 500,
+                    after,
+                    status: None,
+                },
+            )
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().map(|e| e.id);
+        out.extend(page);
+        if out.len() > 50_000 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+async fn list_all_entities_for_user(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<Vec<Entity>, MnemoError> {
+    let mut out = Vec::new();
+    let mut after = None;
+    loop {
+        let page = state.state_store.list_entities(user_id, 500, after).await?;
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().map(|e| e.id);
+        out.extend(page);
+        if out.len() > 50_000 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+fn preview_text(content: &str, max_chars: usize) -> String {
+    let trimmed = content.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out = String::new();
+    for c in trimmed.chars().take(max_chars) {
+        out.push(c);
+    }
+    out.push_str("...");
+    out
 }
 
 async fn run_import_job(

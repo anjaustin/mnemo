@@ -50,6 +50,7 @@ It verifies:
 - async chat-history import pathway (`/api/v1/import/chat-history` + job polling)
 - import falsification checks for malformed rows, mixed timestamp quality, and idempotent replay
 - scientific retrieval provenance checks (episode citation coverage for current/historical queries)
+- memory diff checks (`/api/v1/memory/:user/changes_since`) for timeline windows and head movement
 
 ## 5) Importer stress harness (large real-world export)
 

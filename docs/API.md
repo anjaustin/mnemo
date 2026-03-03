@@ -125,6 +125,55 @@ If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to r
 }
 ```
 
+### `POST /api/v1/memory/:user/changes_since`
+
+Return what changed in memory between two points in time.
+
+```json
+// Request
+{
+  "from": "2025-02-01T00:00:00Z",
+  "to": "2025-04-01T00:00:00Z",
+  "session": "default"
+}
+```
+
+- `session` is optional and can be a session name or UUID.
+- Includes added/superseded facts, confidence deltas, head movement, and added episodes.
+
+```json
+// Response 200
+{
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "from": "2025-02-01T00:00:00Z",
+  "to": "2025-04-01T00:00:00Z",
+  "session": "default",
+  "added_facts": [],
+  "superseded_facts": [],
+  "confidence_deltas": [],
+  "head_changes": [
+    {
+      "session_id": "019513a4-8c1f-7000-8000-000000000002",
+      "session_name": "default",
+      "head_episode_id": "019513a4-9d3a-7000-8000-000000000003",
+      "head_version": 7,
+      "at": "2025-03-01T12:00:00Z"
+    }
+  ],
+  "added_episodes": [
+    {
+      "episode_id": "019513a4-9d3a-7000-8000-000000000003",
+      "session_id": "019513a4-8c1f-7000-8000-000000000002",
+      "session_name": "default",
+      "role": "user",
+      "created_at": "2025-03-01T12:00:00Z",
+      "preview": "I switched from Adidas to Nike..."
+    }
+  ],
+  "summary": "0 added facts, 0 superseded facts, 0 confidence deltas, 1 head changes, 1 added episodes"
+}
+```
+
 ---
 
 ## Import API

@@ -120,6 +120,11 @@ curl -X POST http://localhost:8080/api/v1/memory \
 curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
   -H "Content-Type: application/json" \
   -d '{"query":"What are my hobbies?"}'
+
+# Diff what changed between two points in time
+curl -X POST http://localhost:8080/api/v1/memory/kendra/changes_since \
+  -H "Content-Type: application/json" \
+  -d '{"from":"2025-02-01T00:00:00Z","to":"2025-04-01T00:00:00Z"}'
 ```
 
 ### Full workflow: Users, Sessions, Episodes
