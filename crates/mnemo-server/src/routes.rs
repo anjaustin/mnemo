@@ -684,6 +684,8 @@ struct MemoryContextRequest {
     #[serde(default)]
     mode: Option<MemoryContextMode>,
     #[serde(default)]
+    contract: Option<MemoryContract>,
+    #[serde(default)]
     filters: Option<MemoryContextFilters>,
 }
 
@@ -711,6 +713,15 @@ enum MemoryContextMode {
     Historical,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MemoryContract {
+    Default,
+    SupportSafe,
+    CurrentStrict,
+    HistoricalStrict,
+}
+
 #[derive(Serialize)]
 struct MemoryHeadInfo {
     session_id: Uuid,
@@ -726,6 +737,7 @@ struct MemoryContextResponse {
     #[serde(flatten)]
     context: ContextBlock,
     mode: MemoryContextMode,
+    contract_applied: MemoryContract,
     #[serde(skip_serializing_if = "Option::is_none")]
     head: Option<MemoryHeadInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -982,6 +994,12 @@ async fn get_memory_context(
         (!trimmed.is_empty()).then_some(trimmed)
     });
     let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
+    let contract = req.contract.unwrap_or(MemoryContract::Default);
+    if matches!(contract, MemoryContract::HistoricalStrict) && req.as_of.is_none() {
+        return Err(AppError(MnemoError::Validation(
+            "historical_strict contract requires as_of".into(),
+        )));
+    }
     let scoped_session =
         resolve_session_scope(&state, user.id, mode, requested_session_name).await?;
     let mut session_id = scoped_session.as_ref().map(|s| s.id);
@@ -1058,7 +1076,11 @@ async fn get_memory_context(
         };
 
     let max_tokens = req.max_tokens.unwrap_or(500);
-    let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
+    let temporal_intent = match contract {
+        MemoryContract::CurrentStrict => TemporalIntent::Current,
+        MemoryContract::HistoricalStrict => TemporalIntent::Historical,
+        _ => req.time_intent.unwrap_or(TemporalIntent::Auto),
+    };
     let context_req = ContextRequest {
         session_id,
         messages: vec![ContextMessage {
@@ -1092,6 +1114,8 @@ async fn get_memory_context(
             .retain(|episode| candidate_episode_ids.contains(&episode.id));
     }
 
+    apply_memory_contract(&mut context, contract);
+
     let head = scoped_session.as_ref().map(|session| MemoryHeadInfo {
         session_id: session.id,
         episode_id: session.head_episode_id,
@@ -1102,6 +1126,7 @@ async fn get_memory_context(
     Ok(Json(MemoryContextResponse {
         context,
         mode,
+        contract_applied: contract,
         head,
         metadata_filter_diagnostics,
     }))
@@ -2256,6 +2281,31 @@ fn normalized_terms(text: &str) -> std::collections::HashSet<String> {
             (!s.is_empty()).then_some(s)
         })
         .collect()
+}
+
+fn apply_memory_contract(context: &mut ContextBlock, contract: MemoryContract) {
+    match contract {
+        MemoryContract::Default => {}
+        MemoryContract::SupportSafe => {
+            context
+                .episodes
+                .retain(|episode| episode.role.as_deref() == Some("user"));
+            context.facts.retain(|fact| fact.invalid_at.is_none());
+        }
+        MemoryContract::CurrentStrict => {
+            context.facts.retain(|fact| fact.invalid_at.is_none());
+            context.episodes.retain(|episode| {
+                episode
+                    .role
+                    .as_deref()
+                    .map(|r| r == "user" || r == "assistant")
+                    .unwrap_or(true)
+            });
+        }
+        MemoryContract::HistoricalStrict => {
+            // Keep both valid and invalidated facts for historical analysis.
+        }
+    }
 }
 
 async fn run_import_job(

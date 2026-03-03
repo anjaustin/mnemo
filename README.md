@@ -119,7 +119,7 @@ curl -X POST http://localhost:8080/api/v1/memory \
 # Recall
 curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
   -H "Content-Type: application/json" \
-  -d '{"query":"What are my hobbies?"}'
+  -d '{"query":"What are my hobbies?","contract":"default"}'
 
 # Diff what changed between two points in time
 curl -X POST http://localhost:8080/api/v1/memory/kendra/changes_since \

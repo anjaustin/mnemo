@@ -232,6 +232,109 @@ async fn test_memory_api_validation_and_resolution() {
 }
 
 #[tokio::test]
+async fn test_memory_contract_historical_strict_requires_as_of() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "historical-contract-user",
+            "external_id": "historical-contract-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/historical-contract-user/context",
+        serde_json::json!({
+            "query": "what changed?",
+            "contract": "historical_strict"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_memory_contract_support_safe_filters_non_user_episodes() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "contract-user",
+            "external_id": "contract-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({"user_id": user_id, "name": "contract-session"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "I prefer Nike.",
+            "created_at": "2025-01-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "assistant",
+            "content": "Noted. You prefer Nike.",
+            "created_at": "2025-01-01T00:00:01Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/contract-user/context",
+        serde_json::json!({
+            "query": "What do I prefer?",
+            "session": "contract-session",
+            "contract": "support_safe"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["contract_applied"], "support_safe");
+    let episodes = body["episodes"].as_array().unwrap();
+    assert!(episodes.iter().all(|e| e["role"] == "user"));
+}
+
+#[tokio::test]
 async fn test_memory_changes_since_reports_episode_and_head_changes() {
     let app = build_test_app().await;
 
