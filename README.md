@@ -14,20 +14,31 @@
 
 ![Mnemosyne](img/mnemosyne.gif)
 
-**Memory that evolves. Context that matters.**
+**Memory infrastructure for production AI agents.**
 
-Mnemo is a free, open-source, self-hosted memory and context engine for AI agents. Built in Rust for raw performance, backed by Redis and Qdrant for sub-50ms retrieval latency.
+Mnemo is a free, open-source, self-hosted memory and context engine for agent systems. It is built in Rust, uses Redis and Qdrant, and focuses on temporal correctness, fast recall, and operational simplicity.
 
-> **Why Mnemo?** Zep deprecated their open-source Community Edition. Mem0 is SaaS-first. Letta isn't production-ready. Mnemo is the fully open-source, high-performance alternative the community needs.
+## Who Mnemo is for
 
-## Features
+- Teams shipping assistants or autonomous agents that need memory with auditability and temporal truth.
+- Builders who want self-hosted control, not a managed black box.
+- Engineering orgs that care about hard quality gates and reproducible evaluation.
 
-- **Temporal Knowledge Graph** — Entities and relationships extracted automatically, tracking how facts change over time
-- **Sub-50ms Retrieval** — Pre-assembled context blocks ready for LLM injection
-- **Bi-temporal Model** — Query what you knew at any point in time, not just what's current
-- **Multi-tenant** — Complete data isolation per user
-- **LLM Agnostic** — Anthropic, OpenAI, Ollama, Liquid AI, or no LLM at all
-- **Self-hosted First** — Docker Compose for dev, your data stays yours
+## Why teams choose Mnemo
+
+- **Temporal memory, not static notes**: facts can be superseded while preserving history for point-in-time recall (`docs/TEMPORAL_VECTORIZATION.md`).
+- **Fast context assembly**: hybrid retrieval and pre-assembled context blocks optimized for LLM prompts (`docs/ARCHITECTURE.md`).
+- **Agent identity controls**: identity core, experience weighting, versioning, audit, rollback, and promotion flow (`docs/AGENT_IDENTITY_SUBSTRATE.md`).
+- **Proof over claims**: benchmark harness plus falsification and CI gates are first-class (`docs/EVALUATION.md`, `docs/COMPETITIVE.md`, `.github/workflows/quality-gates.yml`).
+
+## Core Capabilities
+
+- **Temporal Knowledge Graph** - Automatically extracts entities and relationships and tracks how facts change over time.
+- **Bi-temporal Retrieval** - Answers both "what is true now" and "what was true then".
+- **Thread HEAD + Metadata Planner** - Improves relevance with deterministic head selection and metadata prefilter controls.
+- **Identity-aware Context** - Balances stable identity with recent experience signals.
+- **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
+- **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
 ## Quality Gates
 
@@ -42,27 +53,21 @@ Mnemo is a free, open-source, self-hosted memory and context engine for AI agent
 
 Reference CI gate: `.github/workflows/quality-gates.yml`.
 
-## Releases
+## Releases and Packages
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
   - `SHA256SUMS.txt`
-
-## Packages
-
 - Docker images are published to GHCR via `.github/workflows/package-ghcr.yml`.
 - Published image namespace: `ghcr.io/anjaustin/mnemo/mnemo-server`.
-- Main branch publishes rolling tags (`main`, `sha-*`, and `latest` on default branch).
-- Version tags publish immutable release tags (for example `v0.1.1`).
 
-## Why Mnemo (Measured)
+## Measured Performance and Evaluation
 
-- Temporal eval harness (`eval/temporal_eval.py`) currently shows better accuracy on time-sensitive recall than baseline mode in local runs.
-- Stale-fact rate is explicitly tracked and reported in `docs/EVALUATION.md`.
-- Memory API behavior is guarded by falsification tests in CI (`memory-falsification` workflow).
-- Competitive benchmarking publication format is defined in `docs/COMPETITIVE.md`.
+- Temporal eval harness: `eval/temporal_eval.py`
+- Evaluation playbook and metrics: `docs/EVALUATION.md`
+- Competitive methodology and scorecard format: `docs/COMPETITIVE.md`
 
 Quick benchmark commands:
 
@@ -93,7 +98,27 @@ For a Python-first flow, see [QUICKSTART.md](QUICKSTART.md).
 
 ## Usage
 
-All interaction is via REST API. Here's a complete workflow:
+All interaction is via REST API.
+
+### Start here: High-Level Memory API
+
+Use these two endpoints when you just want to remember and recall.
+
+```bash
+# Remember
+curl -X POST http://localhost:8080/api/v1/memory \
+  -H "Content-Type: application/json" \
+  -d '{"user":"kendra","text":"I love hiking in Colorado and my dog is named Bear"}'
+
+# Recall
+curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What are my hobbies?"}'
+```
+
+### Full workflow: Users, Sessions, Episodes
+
+Use this flow when you need explicit user/session lifecycle control.
 
 ```bash
 # 1. Create a user
@@ -118,22 +143,6 @@ curl -X POST http://localhost:8080/api/v1/users/USER_ID/context \
 ```
 
 Inject the returned `context` string into your agent's system prompt. That's it.
-
-### High-Level Memory API
-
-You can also use the streamlined memory endpoints:
-
-```bash
-# Remember
-curl -X POST http://localhost:8080/api/v1/memory \
-  -H "Content-Type: application/json" \
-  -d '{"user":"kendra","text":"I love hiking in Colorado and my dog is named Bear"}'
-
-# Recall
-curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
-  -H "Content-Type: application/json" \
-  -d '{"query":"What are my hobbies?"}'
-```
 
 ## Architecture
 
@@ -167,6 +176,15 @@ Feb 2025: "Adidas fell apart. Nike is my new favorite."
 ```
 
 Old facts aren't deleted. This enables point-in-time queries and change tracking.
+
+## Production Readiness Checklist
+
+- Enable API auth and provision keys before exposing Mnemo externally.
+- Run Redis and Qdrant with persistent volumes and backup policy.
+- Pin release versions (`v*.*.*`) for server binaries or container tags.
+- Run the full quality gate stack in CI on every merge.
+- Track evaluation drift with the temporal harness on a fixed dataset cadence.
+- Keep `docs/PHASE_2_PRD.md` and `CHANGELOG.md` updated with shipped behavior.
 
 ## Documentation
 
