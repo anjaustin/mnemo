@@ -6,7 +6,7 @@
 
 | Version | Release Date | License | Stars | Repo Size |
 | --- | --- | --- | --- | --- |
-| [![release-version](https://img.shields.io/github/v/release/anjaustin/mnemo?display_name=tag)](https://github.com/anjaustin/mnemo/releases) | [![release-date](https://img.shields.io/github/release-date/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/releases) | [![license](https://img.shields.io/github/license/anjaustin/mnemo)](LICENSE) | [![stars](https://img.shields.io/github/stars/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/stargazers) | [![repo-size](https://img.shields.io/github/repo-size/anjaustin/mnemo)](https://github.com/anjaustin/mnemo) |
+| [![version](https://img.shields.io/github/v/tag/anjaustin/mnemo?sort=semver&label=version)](https://github.com/anjaustin/mnemo/releases) | [![release-date](https://img.shields.io/github/release-date/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/releases) | [![license-apache](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) | [![stars](https://img.shields.io/github/stars/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/stargazers) | [![repo-size](https://img.shields.io/github/repo-size/anjaustin/mnemo)](https://github.com/anjaustin/mnemo) |
 
 ![Mnemosyne](img/mnemosyne.gif)
 
