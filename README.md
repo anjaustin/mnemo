@@ -37,6 +37,7 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - **Bi-temporal Retrieval** - Answers both "what is true now" and "what was true then".
 - **Thread HEAD + Metadata Planner** - Improves relevance with deterministic head selection and metadata prefilter controls.
 - **Identity-aware Context** - Balances stable identity with recent experience signals.
+- **Chat History Importer** - Migrates existing histories with async jobs, dry-run validation, and idempotent replay protection.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
@@ -188,7 +189,7 @@ Mnemo is a single Rust binary with Redis + Qdrant as backing services.
 
 ```
 Client message
-  -> /api/v1/memory or /api/v1/sessions/:id/episodes
+  -> /api/v1/memory or /api/v1/sessions/:id/episodes or /api/v1/import/chat-history
   -> episode persisted in Redis
   -> ingest worker extracts entities/edges
   -> graph updated in Redis + embeddings upserted to Qdrant
@@ -279,6 +280,7 @@ curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
 | [Phase 2 PRD](docs/PHASE_2_PRD.md) | Productization plan for temporal memory and proof gates |
 | [Evaluation Playbook](docs/EVALUATION.md) | Reproducible temporal quality and latency measurements |
 | [Competitive Plan](docs/COMPETITIVE.md) | Cross-system benchmark methodology and scorecard |
+| [Chat Import Guide](docs/IMPORTING_CHAT_HISTORY.md) | Import formats, idempotency, dry run, and migration examples |
 | [Domain Readiness Matrix](docs/DOMAIN_READINESS_MATRIX.md) | Domain-by-domain readiness and 30/60/90 roadmap |
 | [Agent Identity Substrate](docs/AGENT_IDENTITY_SUBSTRATE.md) | Implemented P0 design for stable identity + adaptive experience |
 | [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |

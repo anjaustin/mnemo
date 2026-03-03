@@ -118,7 +118,7 @@ For API or retrieval changes, also run the memory falsification suite:
 cargo test -p mnemo-server --test memory_api -- --test-threads=1
 ```
 
-This test hits the high-level memory endpoints and checks validation, identifier resolution, and immediate-recall fallback behavior.
+This test hits the high-level memory endpoints and checks validation, identifier resolution, immediate-recall fallback behavior, and chat-history import falsification cases.
 CI runs the same suite in `.github/workflows/memory-falsification.yml`.
 
 If you want an isolated local dependency stack for integration tests:

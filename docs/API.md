@@ -157,6 +157,7 @@ Start an import job.
 - `source` currently supports: `ndjson`, `chatgpt_export`
 - `dry_run=true` validates and counts importable rows without writing episodes.
 - `idempotency_key` replays a prior job for the same user/key pair without creating duplicate imports.
+- For format details and migration walkthroughs, see `docs/IMPORTING_CHAT_HISTORY.md`.
 
 ```json
 // Response 202
