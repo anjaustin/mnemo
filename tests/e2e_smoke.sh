@@ -64,21 +64,23 @@ assert_status 201 "$STATUS" "create session"
 SESSION_ID=$(extract "$BODY" "['id']")
 assert_non_empty "$SESSION_ID" "session id returned"
 
-bold "=== Append Episode ==="
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-    "$BASE_URL/api/v1/sessions/$SESSION_ID/episodes" \
-    -H "Content-Type: application/json" \
-    -d '{"type":"message","role":"user","name":"Smoke","content":"I like tea in the afternoon."}')
-assert_status 201 "$STATUS" "append episode"
-
-bold "=== Context API ==="
+bold "=== Remember Memory ==="
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-    "$BASE_URL/api/v1/users/$USER_ID/context" \
+    "$BASE_URL/api/v1/memory" \
     -H "Content-Type: application/json" \
-    -d '{"messages": [{"role": "user", "content": "What did I say about tea?"}], "max_tokens": 300}')
+    -d '{"user":"smoke_'$$'","session":"Smoke Session","text":"I like tea in the afternoon.","role":"user","name":"Smoke"}')
 BODY=$(echo "$RESPONSE" | python3 -c 'import sys; print("\n".join(sys.stdin.read().splitlines()[:-1]))')
 STATUS=$(echo "$RESPONSE" | python3 -c 'import sys; print(sys.stdin.read().splitlines()[-1])')
-assert_status 200 "$STATUS" "context endpoint"
+assert_status 201 "$STATUS" "remember memory endpoint"
+
+bold "=== Memory Context API ==="
+RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+    "$BASE_URL/api/v1/memory/smoke_'$$'/context" \
+    -H "Content-Type: application/json" \
+    -d '{"query": "What did I say about tea?", "max_tokens": 300}')
+BODY=$(echo "$RESPONSE" | python3 -c 'import sys; print("\n".join(sys.stdin.read().splitlines()[:-1]))')
+STATUS=$(echo "$RESPONSE" | python3 -c 'import sys; print(sys.stdin.read().splitlines()[-1])')
+assert_status 200 "$STATUS" "memory context endpoint"
 CONTEXT=$(extract "$BODY" "['context']" 2>/dev/null || true)
 assert_non_empty "$CONTEXT" "non-empty context"
 
