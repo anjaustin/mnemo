@@ -4,7 +4,7 @@
 # ============================================================================
 
 # ── Stage 1: Build ──────────────────────────────────────────────────
-FROM rust:stable-slim-bookworm AS builder
+FROM rust:slim-bookworm AS builder
 
 WORKDIR /build
 
