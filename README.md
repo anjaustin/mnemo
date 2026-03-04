@@ -135,38 +135,38 @@ Use these two endpoints when you just want to remember and recall.
 # Remember
 curl -X POST http://localhost:8080/api/v1/memory \
   -H "Content-Type: application/json" \
-  -d '{"user":"kendra","text":"I love hiking in Colorado and my dog is named Bear"}'
+  -d '{"user":"acct_mgr_jordan","text":"Acme Corp renewal is due on 2025-09-30 and procurement requires SOC 2 Type II before signature."}'
 
 # Recall
-curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
+curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
   -H "Content-Type: application/json" \
-  -d '{"query":"What are my hobbies?","contract":"default","retrieval_policy":"balanced"}'
+  -d '{"query":"What are the renewal blockers for Acme?","contract":"default","retrieval_policy":"balanced"}'
 
 # Diff what changed between two points in time
-curl -X POST http://localhost:8080/api/v1/memory/kendra/changes_since \
+curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/changes_since \
   -H "Content-Type: application/json" \
   -d '{"from":"2025-02-01T00:00:00Z","to":"2025-04-01T00:00:00Z"}'
 
 # Detect active contradiction clusters
-curl -X POST http://localhost:8080/api/v1/memory/kendra/conflict_radar \
+curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/conflict_radar \
   -H "Content-Type: application/json" \
   -d '{}'
 
 # Explain why memory was retrieved
-curl -X POST http://localhost:8080/api/v1/memory/kendra/causal_recall \
+curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/causal_recall \
   -H "Content-Type: application/json" \
-  -d '{"query":"What does Kendra prefer?"}'
+  -d '{"query":"Why do we think Acme has legal risk this quarter?"}'
 
 # Trace why an answer changed over time
-curl -X POST http://localhost:8080/api/v1/memory/kendra/time_travel/trace \
+curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/time_travel/trace \
   -H "Content-Type: application/json" \
-  -d '{"query":"What does Kendra prefer?","from":"2025-02-01T00:00:00Z","to":"2025-04-01T00:00:00Z","contract":"historical_strict"}'
+  -d '{"query":"How did Acme renewal risk evolve?","from":"2025-02-01T00:00:00Z","to":"2025-04-01T00:00:00Z","contract":"historical_strict"}'
 
 # Register a webhook for memory lifecycle events
 curl -X POST http://localhost:8080/api/v1/memory/webhooks \
   -H "Content-Type: application/json" \
   -d '{
-    "user":"kendra",
+    "user":"acct_mgr_jordan",
     "target_url":"https://example.com/hooks/memory",
     "signing_secret":"whsec_demo",
     "events":["head_advanced","conflict_detected"]
@@ -184,7 +184,7 @@ Use this flow when you need explicit user/session lifecycle control.
 # 1. Create a user
 curl -X POST http://localhost:8080/api/v1/users \
   -H "Content-Type: application/json" \
-  -d '{"name": "Kendra", "email": "kendra@example.com"}'
+  -d '{"name": "Jordan Lee", "email": "jordan.lee@acme-revenueops.com"}'
 
 # 2. Start a session
 curl -X POST http://localhost:8080/api/v1/sessions \
@@ -194,12 +194,12 @@ curl -X POST http://localhost:8080/api/v1/sessions \
 # 3. Add messages
 curl -X POST http://localhost:8080/api/v1/sessions/SESSION_ID/episodes \
   -H "Content-Type: application/json" \
-  -d '{"type":"message","role":"user","name":"Kendra","content":"I just switched from Adidas to Nike running shoes!"}'
+  -d '{"type":"message","role":"user","name":"Jordan Lee","content":"Acme legal approved redlines but procurement still needs SOC 2 evidence before renewal."}'
 
 # 4. Wait a moment for processing, then get context
 curl -X POST http://localhost:8080/api/v1/users/USER_ID/context \
   -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"What shoes does Kendra like?"}]}'
+  -d '{"messages":[{"role":"user","content":"What still blocks Acme renewal?"}]}'
 ```
 
 Inject the returned `context` string into your agent's system prompt. That's it.
@@ -215,14 +215,14 @@ Supported sources: `ndjson`, `chatgpt_export`, `gemini_export`.
 curl -X POST http://localhost:8080/api/v1/import/chat-history \
   -H "Content-Type: application/json" \
   -d '{
-    "user": "kendra",
+    "user": "acct_mgr_jordan",
     "source": "ndjson",
     "idempotency_key": "import-001",
     "dry_run": false,
     "default_session": "Imported History",
     "payload": [
-      {"role": "user", "content": "I switched to Nike.", "created_at": "2025-02-01T10:00:00Z"},
-      {"role": "assistant", "content": "Got it.", "created_at": "2025-02-01T10:00:05Z"}
+      {"role": "user", "content": "Acme procurement requested SOC 2 report by Friday.", "created_at": "2025-02-01T10:00:00Z"},
+      {"role": "assistant", "content": "Acknowledged. I will track this as a renewal blocker.", "created_at": "2025-02-01T10:00:05Z"}
     ]
   }'
 
@@ -284,25 +284,25 @@ Most memory systems overwrite facts. Mnemo keeps the timeline.
 
 ```text
 Before (flat memory)
-  "Kendra prefers Adidas"
-  "Kendra prefers Nike"
+  "Acme renewal status is green"
+  "Acme renewal status is at risk"
   -> no clear answer to "what was true in 2024?"
 
 After (temporal memory)
-  Aug 2024: Kendra -> prefers -> Adidas   (valid)
-  Feb 2025: Kendra -> prefers -> Adidas   (invalidated)
-  Feb 2025: Kendra -> prefers -> Nike     (valid)
+  Aug 2024: Acme -> renewal_status -> green    (valid)
+  Feb 2025: Acme -> renewal_status -> green    (invalidated)
+  Feb 2025: Acme -> renewal_status -> at_risk  (valid)
 ```
 
 Mnemo tracks *when* facts became true and *when* they were superseded:
 
 ```
-Aug 2024: "I love my Adidas shoes!"
-  → Kendra ──prefers──▶ Adidas  (valid_at: Aug 2024)
+Aug 2024: "Acme legal and procurement are aligned; renewal looks green."
+  → Acme ──renewal_status──▶ green  (valid_at: Aug 2024)
 
-Feb 2025: "Adidas fell apart. Nike is my new favorite."
-  → Kendra ──prefers──▶ Adidas  (invalid_at: Feb 2025)  ← superseded
-  → Kendra ──prefers──▶ Nike    (valid_at: Feb 2025)    ← current
+Feb 2025: "Procurement blocked signature pending SOC 2 report. Renewal is now at risk."
+  → Acme ──renewal_status──▶ green    (invalid_at: Feb 2025)  ← superseded
+  → Acme ──renewal_status──▶ at_risk  (valid_at: Feb 2025)    ← current
 ```
 
 Old facts aren't deleted. This enables point-in-time queries and change tracking.
@@ -313,22 +313,22 @@ Old facts aren't deleted. This enables point-in-time queries and change tracking
 # 1) Initial preference
 curl -X POST http://localhost:8080/api/v1/memory \
   -H "Content-Type: application/json" \
-  -d '{"user":"kendra","text":"I love my Adidas shoes."}'
+  -d '{"user":"acct_mgr_jordan","text":"Acme renewal status is green and legal has no open issues."}'
 
 # 2) Later correction
 curl -X POST http://localhost:8080/api/v1/memory \
   -H "Content-Type: application/json" \
-  -d '{"user":"kendra","text":"Adidas fell apart. Nike is my new favorite."}'
+  -d '{"user":"acct_mgr_jordan","text":"Acme renewal is now at risk because procurement requires SOC 2 evidence before signature."}'
 
 # 3) Ask for current truth
-curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
+curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
   -H "Content-Type: application/json" \
-  -d '{"query":"What shoes does Kendra prefer now?"}'
+  -d '{"query":"What is Acme renewal status now?"}'
 
 # 4) Ask for historical truth
-curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
+curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
   -H "Content-Type: application/json" \
-  -d '{"query":"What did Kendra prefer before switching to Nike?"}'
+  -d '{"query":"What was Acme renewal status before procurement blocked signature?"}'
 ```
 
 ## Production Readiness Checklist
