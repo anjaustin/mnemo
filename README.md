@@ -44,6 +44,7 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - **Governance Policies** - Per-user retention defaults, webhook domain allowlists, and audit trails for policy/destructive operations.
   - Policy preview and violation-window query endpoints for safer rollout dry-runs and incident triage.
   - Default contract/retrieval policy fallback and retention enforcement for episode writes.
+- **Operator Endpoints** - Dashboard summary, request-id trace lookup, and drill automation for dead-letter recovery, RCA, and governance workflows.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
@@ -363,7 +364,7 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 - Pin release versions (`v*.*.*`) for server binaries or container tags.
 - Run the full quality gate stack in CI on every merge.
 - Track evaluation drift with the temporal harness on a fixed dataset cadence.
-- Keep `docs/PHASE_2_PRD.md` and `CHANGELOG.md` updated with shipped behavior.
+- Keep `CHANGELOG.md`, `docs/PHASE_2_PRD.md`, and `docs/OPERATOR_UX_EXECUTION_BACKLOG.md` updated with shipped behavior.
 
 ## Documentation
 
@@ -432,15 +433,27 @@ Webhook outbound delivery defaults are configured in `config/default.toml` and c
 - full-text + hybrid retrieval
 - memory API + falsification CI gate
 
-**Phase 2 — Temporal Productization** 🚧 in progress
+**Phase 2 — Temporal Productization** ✅ complete
 
 - M1 Thread HEAD completion ✅
 - M2 Temporal retrieval v2 diagnostics ✅
 - M3 Metadata index layer ✅
-- M4 Competitive publication v1 🚧
+- M4 Competitive publication v1 ✅
 - M5 Agent Identity Substrate P0 ✅
 
-See `docs/PHASE_2_PRD.md` for current milestones.
+See `docs/PHASE_2_PRD.md` for milestones.
+
+**Phase 3 — Operator UX & Control Plane** 🚧 in progress
+
+- Governance policy APIs (retention, allowlists, audit) ✅
+- Read/write retention enforcement ✅
+- Operator hero-lane backend (summary, trace, preview, violations) ✅
+- Webhook ops endpoints (dead-letter, replay, retry, stats) ✅
+- Falsification suite: 56 integration tests including 4×4 contract/policy matrix ✅
+- Operator-facing frontend surfaces 🚧
+- p95 latency evidence capture 🚧
+
+See `docs/OPERATOR_UX_PRD.md` and `docs/OPERATOR_UX_EXECUTION_BACKLOG.md` for current scope.
 
 ## Contributing
 
