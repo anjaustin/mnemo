@@ -380,6 +380,8 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 | [P0 Ops Control Plane PRD](docs/P0_OPS_CONTROL_PLANE_PRD.md) | Cloud-grade ops goals, scope, falsification matrix, and rollout criteria |
 | [Operator UX PRD](docs/OPERATOR_UX_PRD.md) | Control-plane UX strategy, screens, metrics, and phased rollout |
 | [Operator UX Backlog](docs/OPERATOR_UX_EXECUTION_BACKLOG.md) | Ticketized execution plan for the two hero operator lanes |
+| [SDK Integrations PRD](docs/SDK_INTEGRATIONS_PRD.md) | Python SDK rebuild, LangChain adapter, LlamaIndex adapter |
+| [Operator Dashboard PRD](docs/OPERATOR_DASHBOARD_PRD.md) | Embedded zero-deployment operator dashboard |
 | [Domain Readiness Matrix](docs/DOMAIN_READINESS_MATRIX.md) | Domain-by-domain readiness and 30/60/90 roadmap |
 | [Agent Identity Substrate](docs/AGENT_IDENTITY_SUBSTRATE.md) | Implemented P0 design for stable identity + adaptive experience |
 | [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
@@ -450,10 +452,11 @@ See `docs/PHASE_2_PRD.md` for milestones.
 - Operator hero-lane backend (summary, trace, preview, violations) ✅
 - Webhook ops endpoints (dead-letter, replay, retry, stats) ✅
 - Falsification suite: 56 integration tests including 4×4 contract/policy matrix ✅
-- Operator-facing frontend surfaces 🚧
+- Operator-facing frontend surfaces 🚧 (`docs/OPERATOR_DASHBOARD_PRD.md`)
+- SDK integrations (LangChain + LlamaIndex) 🚧 (`docs/SDK_INTEGRATIONS_PRD.md`)
 - p95 latency evidence capture 🚧
 
-See `docs/OPERATOR_UX_PRD.md` and `docs/OPERATOR_UX_EXECUTION_BACKLOG.md` for current scope.
+See `docs/OPERATOR_UX_PRD.md`, `docs/SDK_INTEGRATIONS_PRD.md`, and `docs/OPERATOR_DASHBOARD_PRD.md` for current scope.
 
 ## Contributing
 

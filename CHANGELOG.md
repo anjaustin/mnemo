@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Read-path retention enforcement on context, `changes_since`, and `time_travel/trace` responses, filtering episodes past per-user retention windows.
 - Replay cursor pagination falsification test covering chronological ordering, sparse IDs, unknown cursor reset, filter interactions, and limit clamping.
 - Contract/retrieval policy combination consistency test: exhaustive 4×4 matrix (16 cases) verifying `retrieval_policy_diagnostics` resolution across all `MemoryContract` × `AdaptiveRetrievalPolicy` pairs.
+- SDK Integrations PRD (`docs/SDK_INTEGRATIONS_PRD.md`) — Python SDK rebuild, LangChain `MnemoChatMessageHistory`, LlamaIndex `MnemoChatStore`, Docker-based falsification.
+- Operator Dashboard PRD (`docs/OPERATOR_DASHBOARD_PRD.md`) — embedded zero-deployment dashboard with dead-letter recovery, RCA canvas, governance center, and graph explorer.
 
 ### Changed
 
