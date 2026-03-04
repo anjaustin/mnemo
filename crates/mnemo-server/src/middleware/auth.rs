@@ -87,7 +87,7 @@ where
         }
 
         let path = req.uri().path();
-        if path == "/health" || path == "/healthz" {
+        if path == "/health" || path == "/healthz" || path == "/metrics" {
             let mut inner = self.inner.clone();
             return Box::pin(async move { inner.call(req).await });
         }
@@ -140,6 +140,7 @@ mod tests {
         Router::new()
             .route("/private", get(|| async { StatusCode::OK }))
             .route("/health", get(|| async { StatusCode::OK }))
+            .route("/metrics", get(|| async { StatusCode::OK }))
             .layer(AuthLayer::new(config))
     }
 
@@ -160,6 +161,18 @@ mod tests {
         let app = test_app(AuthConfig::with_keys(vec!["secret".to_string()]));
         let req = Request::builder()
             .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn bypasses_metrics_without_api_key() {
+        let app = test_app(AuthConfig::with_keys(vec!["secret".to_string()]));
+        let req = Request::builder()
+            .uri("/metrics")
             .body(Body::empty())
             .unwrap();
 

@@ -132,6 +132,50 @@ jobs:
       - name: Run deterministic e2e smoke test
         run: bash tests/e2e_smoke.sh http://127.0.0.1:8080
 
+      - name: Run temporal quality budget gate
+        run: |
+          python3 - <<'PY'
+          import re
+          import subprocess
+
+          cmd = [
+              "python3",
+              "eval/temporal_eval.py",
+              "--target",
+              "mnemo",
+              "--mnemo-base-url",
+              "http://127.0.0.1:8080",
+          ]
+          output = subprocess.check_output(cmd, text=True)
+          print(output)
+
+          temporal_line = None
+          for line in output.splitlines():
+              if line.startswith("| mnemo | temporal |"):
+                  temporal_line = line
+                  break
+
+          if temporal_line is None:
+              raise SystemExit("Could not find temporal profile row in eval output")
+
+          cols = [c.strip() for c in temporal_line.strip().strip("|").split("|")]
+          # columns: System, Profile, Accuracy, Stale Fact Rate, Errors, p50 Latency (ms), p95 Latency (ms)
+          accuracy = float(cols[2].rstrip("%")) / 100.0
+          stale = float(cols[3].rstrip("%")) / 100.0
+          p95 = float(cols[6])
+
+          if accuracy < 0.95:
+              raise SystemExit(f"Temporal accuracy budget failed: {accuracy:.3f} < 0.95")
+          if stale > 0.05:
+              raise SystemExit(f"Temporal stale rate budget failed: {stale:.3f} > 0.05")
+          if p95 > 300.0:
+              raise SystemExit(f"Temporal p95 latency budget failed: {p95:.1f}ms > 300ms")
+
+          print(
+              f"Quality budgets passed: accuracy={accuracy:.3f}, stale={stale:.3f}, p95={p95:.1f}ms"
+          )
+          PY
+
       - name: Stop Mnemo server
         if: always()
         run: |

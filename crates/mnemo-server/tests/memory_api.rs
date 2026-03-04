@@ -5,6 +5,7 @@ use std::time::Duration;
 use axum::body::{to_bytes, Body};
 use axum::extract::State;
 use axum::http::{HeaderMap, Request, StatusCode};
+use axum::middleware::from_fn_with_state;
 use axum::routing::post;
 use axum::Router;
 use chrono::Utc;
@@ -22,8 +23,11 @@ use mnemo_core::traits::storage::{EdgeStore, EntityStore};
 use mnemo_graph::GraphEngine;
 use mnemo_llm::OpenAiCompatibleEmbedder;
 use mnemo_retrieval::RetrievalEngine;
+use mnemo_server::middleware::{request_context_middleware, REQUEST_ID_HEADER};
 use mnemo_server::routes::build_router;
-use mnemo_server::state::{AppState, MetadataPrefilterConfig, WebhookDeliveryConfig};
+use mnemo_server::state::{
+    AppState, MetadataPrefilterConfig, ServerMetrics, WebhookDeliveryConfig,
+};
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
 async fn build_test_app() -> axum::Router {
@@ -110,7 +114,7 @@ async fn build_test_harness_with_prefilter_and_webhooks(
     ));
     let graph = Arc::new(GraphEngine::new(state_store.clone()));
 
-    let app = build_router(AppState {
+    let state = AppState {
         state_store: state_store.clone(),
         vector_store,
         retrieval,
@@ -126,7 +130,11 @@ async fn build_test_harness_with_prefilter_and_webhooks(
         webhook_http: Arc::new(reqwest::Client::new()),
         webhook_redis: None,
         webhook_redis_prefix: "mnemo_test:webhooks".to_string(),
-    });
+        metrics: Arc::new(ServerMetrics::default()),
+    };
+
+    let app =
+        build_router(state.clone()).layer(from_fn_with_state(state, request_context_middleware));
 
     (app, state_store.clone())
 }
@@ -299,6 +307,54 @@ async fn wait_for_dead_letter_event(app: &axum::Router, webhook_id: &str) -> Val
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     panic!("webhook event was not dead-lettered");
+}
+
+#[tokio::test]
+async fn test_request_id_header_is_set_and_propagated() {
+    let app = build_test_app().await;
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/health")
+        .header(REQUEST_ID_HEADER, "req-test-123")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let echoed = response
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(echoed, "req-test-123");
+}
+
+#[tokio::test]
+async fn test_metrics_endpoint_exposes_prometheus_text() {
+    let app = build_test_app().await;
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/metrics")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.contains("text/plain"));
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("mnemo_http_requests_total"));
+    assert!(text.contains("mnemo_webhook_deliveries_success_total"));
 }
 
 #[tokio::test]

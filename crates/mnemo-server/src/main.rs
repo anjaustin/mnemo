@@ -1,14 +1,17 @@
 use std::sync::Arc;
 
+use axum::middleware::from_fn_with_state;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 use mnemo_server::config::MnemoConfig;
-use mnemo_server::middleware::{AuthConfig, AuthLayer};
+use mnemo_server::middleware::{request_context_middleware, AuthConfig, AuthLayer};
 use mnemo_server::routes::{build_router, restore_webhook_state};
-use mnemo_server::state::{AppState, MetadataPrefilterConfig, WebhookDeliveryConfig};
+use mnemo_server::state::{
+    AppState, MetadataPrefilterConfig, ServerMetrics, WebhookDeliveryConfig,
+};
 
 use mnemo_graph::GraphEngine;
 use mnemo_ingest::{IngestConfig, IngestWorker};
@@ -165,13 +168,18 @@ async fn main() -> anyhow::Result<()> {
             "{}:{}",
             config.redis.prefix, config.webhooks.persistence_prefix
         ),
+        metrics: Arc::new(ServerMetrics::default()),
     };
 
     if let Err(err) = restore_webhook_state(&app_state).await {
         tracing::warn!(error = %err, "failed to restore persisted webhook state");
     }
 
-    let app = build_router(app_state)
+    let app = build_router(app_state.clone())
+        .layer(from_fn_with_state(
+            app_state.clone(),
+            request_context_middleware,
+        ))
         .layer(AuthLayer::new(auth_config))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());

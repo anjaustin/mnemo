@@ -63,6 +63,7 @@ Mnemo includes these headers on outbound webhook requests:
 
 - `content-type: application/json`
 - `x-mnemo-event-id`
+- `x-mnemo-delivery-id`
 - `x-mnemo-event-type`
 - `x-mnemo-timestamp`
 - `x-mnemo-signature` (only when `signing_secret` is configured)

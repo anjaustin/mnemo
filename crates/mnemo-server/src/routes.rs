@@ -5,6 +5,7 @@ use axum::routing::{delete, get, post, put};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -451,6 +452,14 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                 }),
             )
             .await;
+            state
+                .metrics
+                .webhook_deliveries_failure_total
+                .fetch_add(1, Ordering::Relaxed);
+            state
+                .metrics
+                .webhook_dead_letter_total
+                .fetch_add(1, Ordering::Relaxed);
             record_webhook_delivery_failure(&state, webhook_id).await;
             persist_webhook_state(&state).await;
             return;
@@ -473,6 +482,10 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                 Some(err),
             )
             .await;
+            state
+                .metrics
+                .webhook_deliveries_failure_total
+                .fetch_add(1, Ordering::Relaxed);
             record_webhook_delivery_failure(&state, webhook_id).await;
             if dead_letter {
                 append_webhook_audit(
@@ -485,6 +498,10 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                     }),
                 )
                 .await;
+                state
+                    .metrics
+                    .webhook_dead_letter_total
+                    .fetch_add(1, Ordering::Relaxed);
                 persist_webhook_state(&state).await;
                 return;
             }
@@ -500,6 +517,7 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
         }
 
         let timestamp = chrono::Utc::now().timestamp().to_string();
+        let delivery_id = Uuid::now_v7().to_string();
         let signature_header = webhook
             .signing_secret
             .as_ref()
@@ -510,6 +528,7 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
             .post(&webhook.target_url)
             .header("content-type", "application/json")
             .header("x-mnemo-event-id", event.id.to_string())
+            .header("x-mnemo-delivery-id", delivery_id)
             .header(
                 "x-mnemo-event-type",
                 webhook_event_type_str(event.event_type),
@@ -528,6 +547,10 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                     &state, webhook_id, event_id, attempt, true, false, None,
                 )
                 .await;
+                state
+                    .metrics
+                    .webhook_deliveries_success_total
+                    .fetch_add(1, Ordering::Relaxed);
                 record_webhook_delivery_success(&state, webhook_id).await;
                 persist_webhook_state(&state).await;
                 return;
@@ -545,6 +568,10 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                     Some(err.clone()),
                 )
                 .await;
+                state
+                    .metrics
+                    .webhook_deliveries_failure_total
+                    .fetch_add(1, Ordering::Relaxed);
                 record_webhook_delivery_failure(&state, webhook_id).await;
                 if dead_letter {
                     append_webhook_audit(
@@ -557,6 +584,10 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                         }),
                     )
                     .await;
+                    state
+                        .metrics
+                        .webhook_dead_letter_total
+                        .fetch_add(1, Ordering::Relaxed);
                     persist_webhook_state(&state).await;
                     return;
                 }
@@ -583,6 +614,10 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                     Some(err.to_string()),
                 )
                 .await;
+                state
+                    .metrics
+                    .webhook_deliveries_failure_total
+                    .fetch_add(1, Ordering::Relaxed);
                 record_webhook_delivery_failure(&state, webhook_id).await;
                 if dead_letter {
                     append_webhook_audit(
@@ -595,6 +630,10 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                         }),
                     )
                     .await;
+                    state
+                        .metrics
+                        .webhook_dead_letter_total
+                        .fetch_add(1, Ordering::Relaxed);
                     persist_webhook_state(&state).await;
                     return;
                 }
@@ -658,6 +697,7 @@ pub fn build_router(state: AppState) -> Router {
         // Health
         .route("/health", get(health))
         .route("/healthz", get(health))
+        .route("/metrics", get(metrics))
         // Users
         .route("/api/v1/users", post(create_user))
         .route("/api/v1/users", get(list_users))
@@ -795,6 +835,110 @@ async fn health() -> Json<HealthResponse> {
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     })
+}
+
+async fn metrics(
+    State(state): State<AppState>,
+) -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    let http_requests_total = state.metrics.http_requests_total.load(Ordering::Relaxed);
+    let http_responses_2xx = state.metrics.http_responses_2xx.load(Ordering::Relaxed);
+    let http_responses_4xx = state.metrics.http_responses_4xx.load(Ordering::Relaxed);
+    let http_responses_5xx = state.metrics.http_responses_5xx.load(Ordering::Relaxed);
+    let webhook_deliveries_success_total = state
+        .metrics
+        .webhook_deliveries_success_total
+        .load(Ordering::Relaxed);
+    let webhook_deliveries_failure_total = state
+        .metrics
+        .webhook_deliveries_failure_total
+        .load(Ordering::Relaxed);
+    let webhook_dead_letter_total = state
+        .metrics
+        .webhook_dead_letter_total
+        .load(Ordering::Relaxed);
+    let webhook_retry_queued_total = state
+        .metrics
+        .webhook_retry_queued_total
+        .load(Ordering::Relaxed);
+    let webhook_replay_requests_total = state
+        .metrics
+        .webhook_replay_requests_total
+        .load(Ordering::Relaxed);
+
+    let (webhook_events_total, webhook_events_pending, webhook_events_dead_letter) = {
+        let events_map = state.memory_webhook_events.read().await;
+        let total: usize = events_map.values().map(|rows| rows.len()).sum();
+        let pending: usize = events_map
+            .values()
+            .map(|rows| {
+                rows.iter()
+                    .filter(|e| !e.delivered && !e.dead_letter)
+                    .count()
+            })
+            .sum();
+        let dead: usize = events_map
+            .values()
+            .map(|rows| rows.iter().filter(|e| e.dead_letter).count())
+            .sum();
+        (total, pending, dead)
+    };
+
+    let body = format!(
+        "# HELP mnemo_http_requests_total Total HTTP requests observed\n\
+# TYPE mnemo_http_requests_total counter\n\
+mnemo_http_requests_total {}\n\
+# HELP mnemo_http_responses_2xx Total 2xx HTTP responses\n\
+# TYPE mnemo_http_responses_2xx counter\n\
+mnemo_http_responses_2xx {}\n\
+# HELP mnemo_http_responses_4xx Total 4xx HTTP responses\n\
+# TYPE mnemo_http_responses_4xx counter\n\
+mnemo_http_responses_4xx {}\n\
+# HELP mnemo_http_responses_5xx Total 5xx HTTP responses\n\
+# TYPE mnemo_http_responses_5xx counter\n\
+mnemo_http_responses_5xx {}\n\
+# HELP mnemo_webhook_deliveries_success_total Successful webhook deliveries\n\
+# TYPE mnemo_webhook_deliveries_success_total counter\n\
+mnemo_webhook_deliveries_success_total {}\n\
+# HELP mnemo_webhook_deliveries_failure_total Failed webhook delivery attempts\n\
+# TYPE mnemo_webhook_deliveries_failure_total counter\n\
+mnemo_webhook_deliveries_failure_total {}\n\
+# HELP mnemo_webhook_dead_letter_total Webhook events moved to dead-letter\n\
+# TYPE mnemo_webhook_dead_letter_total counter\n\
+mnemo_webhook_dead_letter_total {}\n\
+# HELP mnemo_webhook_retry_queued_total Manual webhook retries queued\n\
+# TYPE mnemo_webhook_retry_queued_total counter\n\
+mnemo_webhook_retry_queued_total {}\n\
+# HELP mnemo_webhook_replay_requests_total Webhook replay API requests\n\
+# TYPE mnemo_webhook_replay_requests_total counter\n\
+mnemo_webhook_replay_requests_total {}\n\
+# HELP mnemo_webhook_events_total Retained webhook event rows\n\
+# TYPE mnemo_webhook_events_total gauge\n\
+mnemo_webhook_events_total {}\n\
+# HELP mnemo_webhook_events_pending Retained pending webhook events\n\
+# TYPE mnemo_webhook_events_pending gauge\n\
+mnemo_webhook_events_pending {}\n\
+# HELP mnemo_webhook_events_dead_letter Retained dead-letter webhook events\n\
+# TYPE mnemo_webhook_events_dead_letter gauge\n\
+mnemo_webhook_events_dead_letter {}\n",
+        http_requests_total,
+        http_responses_2xx,
+        http_responses_4xx,
+        http_responses_5xx,
+        webhook_deliveries_success_total,
+        webhook_deliveries_failure_total,
+        webhook_dead_letter_total,
+        webhook_retry_queued_total,
+        webhook_replay_requests_total,
+        webhook_events_total,
+        webhook_events_pending,
+        webhook_events_dead_letter,
+    );
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4")],
+        body,
+    )
 }
 
 // ─── User routes ───────────────────────────────────────────────────
@@ -3067,6 +3211,11 @@ async fn replay_memory_webhook_events(
     Path(id): Path<Uuid>,
     Query(query): Query<ReplayWebhookEventsQuery>,
 ) -> Result<Json<ReplayWebhookEventsResponse>, AppError> {
+    state
+        .metrics
+        .webhook_replay_requests_total
+        .fetch_add(1, Ordering::Relaxed);
+
     {
         let hooks = state.memory_webhooks.read().await;
         if !hooks.contains_key(&id) {
@@ -3183,6 +3332,10 @@ async fn retry_memory_webhook_event(
     .await;
 
     let state_clone = state.clone();
+    state
+        .metrics
+        .webhook_retry_queued_total
+        .fetch_add(1, Ordering::Relaxed);
     tokio::spawn(async move {
         deliver_memory_webhook_event(state_clone, webhook_id, event_id).await;
     });

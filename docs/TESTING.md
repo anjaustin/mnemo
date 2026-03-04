@@ -57,6 +57,7 @@ It verifies:
 - memory contract checks (`support_safe`, `current_strict`, `historical_strict`) for policy-scoped context behavior
 - adaptive retrieval policy checks (`balanced`, `precision`, `recall`, `stability`) for effective threshold diagnostics
 - memory webhook checks (`/api/v1/memory/webhooks`) for event capture, replay cursors, manual retry flows, delivery telemetry, retry/backoff, dead-letter transitions, stats endpoint, audit rows, and signature correctness
+- observability checks (`/metrics`, `x-mnemo-request-id`) for telemetry exposure and request correlation propagation
 
 ## 5) Importer stress harness (large real-world export)
 

@@ -4,6 +4,8 @@ Base URL: `http://localhost:8080`
 
 All request and response bodies are JSON. IDs are UUIDv7 strings.
 
+All responses include `x-mnemo-request-id`. Clients may also provide `x-mnemo-request-id` and Mnemo will propagate it.
+
 ---
 
 ## Health
@@ -19,6 +21,16 @@ Returns server status and version.
   "version": "0.2.0"
 }
 ```
+
+### `GET /metrics`
+
+Returns Prometheus-compatible plaintext metrics (`text/plain; version=0.0.4`).
+
+Included counters/gauges cover:
+- HTTP request and response class totals
+- Webhook delivery success/failure/dead-letter totals
+- Webhook replay and manual retry totals
+- Current retained webhook event backlog gauges
 
 ---
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use mnemo_graph::GraphEngine;
@@ -112,6 +113,19 @@ pub struct WebhookRuntimeState {
     pub circuit_open_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+#[derive(Default)]
+pub struct ServerMetrics {
+    pub http_requests_total: AtomicU64,
+    pub http_responses_2xx: AtomicU64,
+    pub http_responses_4xx: AtomicU64,
+    pub http_responses_5xx: AtomicU64,
+    pub webhook_deliveries_success_total: AtomicU64,
+    pub webhook_deliveries_failure_total: AtomicU64,
+    pub webhook_dead_letter_total: AtomicU64,
+    pub webhook_retry_queued_total: AtomicU64,
+    pub webhook_replay_requests_total: AtomicU64,
+}
+
 /// Shared application state passed to all Axum route handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -131,4 +145,5 @@ pub struct AppState {
     pub webhook_http: Arc<reqwest::Client>,
     pub webhook_redis: Option<redis::aio::ConnectionManager>,
     pub webhook_redis_prefix: String,
+    pub metrics: Arc<ServerMetrics>,
 }

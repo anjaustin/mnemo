@@ -24,6 +24,9 @@ The next step-change is operational trust at production scale: predictable deliv
 - Manual event retry endpoint for dead-letter recovery.
 - Webhook operational audit log endpoint.
 - Redis persistence for webhook subscriptions, events, and audit rows.
+- Request correlation propagation via `x-mnemo-request-id`.
+- Prometheus-compatible `/metrics` endpoint for HTTP and webhook delivery telemetry.
+- CI temporal quality budget gate in `.github/workflows/quality-gates.yml`.
 
 ### Planned next in P0
 

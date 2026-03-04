@@ -12,11 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Webhook operational endpoints: dead-letter event listing and delivery stats (`/api/v1/memory/webhooks/:id/events/dead-letter`, `/api/v1/memory/webhooks/:id/stats`).
 - Webhook replay, manual retry, and audit endpoints (`/api/v1/memory/webhooks/:id/events/replay`, `/api/v1/memory/webhooks/:id/events/:event_id/retry`, `/api/v1/memory/webhooks/:id/audit`).
 - P0 Ops Control Plane PRD (`docs/P0_OPS_CONTROL_PLANE_PRD.md`) with scope, rollout, and falsification gates.
+- Prometheus-compatible metrics endpoint (`/metrics`) for HTTP/webhook delivery telemetry.
+- Request correlation propagation with `x-mnemo-request-id` response header support.
 
 ### Changed
 
 - Webhook delivery now supports dead-letter marking, per-webhook rate limiting, and circuit breaker cooldown behavior.
 - Webhook subscriptions and delivery event rows are now persisted to Redis and restored on server startup.
+- CI quality gates now include a temporal quality budget check (accuracy, stale rate, p95 latency).
 
 ## [0.2.0] — 2026-03-03
 
