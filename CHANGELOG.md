@@ -8,15 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- User policy APIs for retention defaults, webhook domain allowlists, and governance audit (`/api/v1/policies/:user`, `/api/v1/policies/:user/audit`).
+- Operator endpoints for dashboard and trace explorer (`/api/v1/ops/summary`, `/api/v1/traces/:request_id`).
 - Policy preview endpoint (`/api/v1/policies/:user/preview`) for retention/governance impact estimation before apply.
 - Policy violation window query endpoint (`/api/v1/policies/:user/violations`) for operator triage over bounded time ranges.
 - Time travel summary endpoint (`/api/v1/memory/:user/time_travel/summary`) for lightweight snapshot delta counts and fast RCA-first rendering.
 - Operator drill runner script (`tests/operator_p0_drills.sh`) to exercise dead-letter, RCA, and governance workflow suites.
+- Operator UX PRD and execution backlog (`docs/OPERATOR_UX_PRD.md`, `docs/OPERATOR_UX_EXECUTION_BACKLOG.md`).
+- Read-path retention enforcement on context, `changes_since`, and `time_travel/trace` responses, filtering episodes past per-user retention windows.
 
 ### Changed
 
+- Policy defaults now auto-apply to memory context/trace requests when callers omit contract or retrieval policy fields.
+- Episode write APIs now enforce per-user retention windows (`retention_days_message`, `retention_days_text`, `retention_days_json`).
 - Manual webhook retry response now includes an optional event snapshot envelope for immediate operator confirmation (`/api/v1/memory/webhooks/:id/events/:event_id/retry`).
 - Trace lookup endpoint now supports bounded windows and source filters for faster incident-time joins (`/api/v1/traces/:request_id`).
+
+### Fixed
+
+- `delete_entity` and `delete_edge` handlers now emit governance audit events (`entity_deleted`, `edge_deleted`), closing a gap where destructive entity/edge operations were untracked.
 
 ## [0.3.0] — 2026-03-04
 
@@ -30,16 +40,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Request correlation propagation with `x-mnemo-request-id` response header support.
 - Webhook event and audit records now retain originating request IDs for end-to-end trace joins.
 - Episode writes now persist request IDs into metadata, enabling trace joins in `changes_since`, `time_travel/trace`, ingest logs, and webhook delivery.
-- User policy APIs for retention defaults, webhook domain allowlists, and governance audit (`/api/v1/policies/:user`, `/api/v1/policies/:user/audit`).
-- Operator endpoints for dashboard and trace explorer (`/api/v1/ops/summary`, `/api/v1/traces/:request_id`).
 
 ### Changed
 
 - Webhook delivery now supports dead-letter marking, per-webhook rate limiting, and circuit breaker cooldown behavior.
 - Webhook subscriptions and delivery event rows are now persisted to Redis and restored on server startup.
 - CI quality gates now include a temporal quality budget check (accuracy, stale rate, p95 latency).
-- Policy defaults now auto-apply to memory context/trace requests when callers omit contract or retrieval policy fields.
-- Episode write APIs now enforce per-user retention windows (`retention_days_message`, `retention_days_text`, `retention_days_json`).
 
 ## [0.2.0] — 2026-03-03
 

@@ -6,7 +6,7 @@ Updated: 2026-03-04
 
 ## P0 Completion Tracker (Strict)
 
-- Backend/API foundations: 8/8 complete.
+- Backend/API foundations: 6/6 complete (2 dead-letter recovery + 2 RCA + 2 governance).
 - Operator drill automation: 1/1 complete (`tests/operator_p0_drills.sh`).
 - UX surfaces in this repository: 0/12 complete (no frontend package present in current workspace).
 - Cross-cutting acceptance gates: 2/4 complete (quality/falsification gates + audit action coverage); latency SLO drill capture pending.
@@ -84,7 +84,7 @@ Updated: 2026-03-04
 
 - [ ] p95 <= 200ms for summary views.
 - [ ] p95 <= 500ms for drilldown joins (or progressive render fallback).
-- [x] No operator action without audit event.
+- [x] No operator action without audit event (including entity/edge deletes as of v0.3.1).
 - [x] Workspace gates + integration + smoke + eval pass on every major increment.
 
 ## Demo Milestones

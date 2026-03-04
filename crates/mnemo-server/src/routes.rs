@@ -1950,9 +1950,20 @@ async fn get_entity(
 
 async fn delete_entity(
     State(state): State<AppState>,
+    ctx: Option<Extension<RequestContext>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
+    let entity = state.state_store.get_entity(id).await?;
     state.state_store.delete_entity(id).await?;
+    append_governance_audit(
+        &state,
+        entity.user_id,
+        "entity_deleted",
+        request_id,
+        serde_json::json!({ "entity_id": id, "entity_name": entity.name }),
+    )
+    .await;
     Ok(Json(DeleteResponse { deleted: true }))
 }
 
@@ -1976,9 +1987,20 @@ async fn get_edge(
 
 async fn delete_edge(
     State(state): State<AppState>,
+    ctx: Option<Extension<RequestContext>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
+    let edge = state.state_store.get_edge(id).await?;
     state.state_store.delete_edge(id).await?;
+    append_governance_audit(
+        &state,
+        edge.user_id,
+        "edge_deleted",
+        request_id,
+        serde_json::json!({ "edge_id": id, "edge_label": edge.label }),
+    )
+    .await;
     Ok(Json(DeleteResponse { deleted: true }))
 }
 

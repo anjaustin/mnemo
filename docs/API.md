@@ -12,7 +12,7 @@ All responses include `x-mnemo-request-id`. Clients may also provide `x-mnemo-re
 
 ### `GET /health`
 
-Returns server status and version.
+Returns server status and version. Also available at `/healthz` for Kubernetes-style liveness probes.
 
 ```json
 // Response 200
@@ -349,10 +349,14 @@ Trace how memory-backed answers evolve across a time window.
   "from": "2025-02-01T00:00:00Z",
   "to": "2025-04-01T00:00:00Z",
   "session": "default",
+  "max_tokens": 500,
+  "min_relevance": 0.3,
   "contract": "historical_strict",
   "retrieval_policy": "balanced"
 }
 ```
+
+`session`, `max_tokens`, `min_relevance`, `contract`, and `retrieval_policy` are optional.
 
 ```json
 // Response 200
@@ -364,15 +368,27 @@ Trace how memory-backed answers evolve across a time window.
   "session": "default",
   "contract_applied": "historical_strict",
   "retrieval_policy_applied": "balanced",
+  "retrieval_policy_diagnostics": {
+    "effective_max_tokens": 500,
+    "effective_min_relevance": 0.3,
+    "effective_temporal_intent": "auto",
+    "effective_temporal_weight": null
+  },
   "snapshot_from": {
     "as_of": "2025-02-01T00:00:00Z",
+    "token_count": 120,
     "fact_count": 1,
-    "episode_count": 1
+    "episode_count": 1,
+    "top_facts": [],
+    "top_episodes": []
   },
   "snapshot_to": {
     "as_of": "2025-04-01T00:00:00Z",
+    "token_count": 230,
     "fact_count": 1,
-    "episode_count": 2
+    "episode_count": 2,
+    "top_facts": [],
+    "top_episodes": []
   },
   "gained_facts": [
     {
@@ -398,6 +414,8 @@ Trace how memory-backed answers evolve across a time window.
       "relevance": 0.81
     }
   ],
+  "gained_episodes": [],
+  "lost_episodes": [],
   "timeline": [
     {
       "at": "2025-02-20T00:00:00Z",
@@ -413,6 +431,8 @@ Trace how memory-backed answers evolve across a time window.
   "summary": "4 timeline events; 1 gained facts, 1 lost facts; 1 gained episodes, 0 lost episodes"
 }
 ```
+
+Response fields include `retrieval_policy_diagnostics` (effective resolved policy values), `gained_episodes` / `lost_episodes` (episode-level diffs mirroring `gained_facts` / `lost_facts`), and enriched snapshot objects with `token_count`, `top_facts`, and `top_episodes`.
 
 ### `POST /api/v1/memory/:user/time_travel/summary`
 
@@ -574,6 +594,10 @@ List webhook operational audit records (`webhook_registered`, `retry_queued`, `d
 ### `GET /api/v1/memory/webhooks/:id/stats`
 
 Get webhook delivery telemetry counters (pending, delivered, dead-letter, recent failures, circuit state).
+
+| Query Param | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `window_seconds` | int | `300` | Rolling window for failure rate calculation (1–86400) |
 
 ### `GET /api/v1/memory/webhooks/:id`
 
@@ -1073,8 +1097,8 @@ This is the endpoint your agent calls on every turn. It retrieves relevant knowl
 | `time_intent` | enum | `auto` | `auto`, `current`, `recent`, `historical` |
 | `temporal_weight` | float | null | Override temporal influence (0.0–1.0) |
 | `filters` | object | null | Metadata prefilter for episode candidates |
-| `temporal_diagnostics` | object | null | Resolved temporal intent and scored result counts |
-| `metadata_filter_diagnostics` | object | null | Candidate counts before/after metadata filtering |
+
+> **Note:** `temporal_diagnostics` and `metadata_filter_diagnostics` are **response-only** fields (not request parameters). They appear in the 200 response with resolved temporal intent/scored result counts and candidate counts before/after metadata filtering, respectively.
 
 ```json
 // Response 200
