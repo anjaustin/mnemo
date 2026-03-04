@@ -18,6 +18,20 @@ bash tests/e2e_smoke.sh http://localhost:8080
 
 This smoke test is designed to pass without external LLM credentials.
 
+## 2.5) Operator P0 workflow drills
+
+Runs targeted deterministic integration tests that mirror the three operator milestone loops.
+
+```bash
+bash tests/operator_p0_drills.sh
+```
+
+This drill script exercises the three operator milestone loops:
+
+- dead-letter recovery (fail -> dead-letter -> retry -> delivered)
+- why-changed RCA (`time_travel/summary` + trace lookup evidence)
+- governance misconfig detection (`policy_violation_*` capture + time-window query)
+
 ## 3) Full end-to-end script (LLM-dependent)
 
 Assumes the server is already running on `http://localhost:8080`.

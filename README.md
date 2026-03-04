@@ -57,6 +57,7 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - `cargo test -p mnemo-ingest --test ingest -- --test-threads=1`
 - `cargo test -p mnemo-server --test memory_api -- --test-threads=1`
 - `bash tests/e2e_smoke.sh http://localhost:8080` (server running)
+- `bash tests/operator_p0_drills.sh`
 
 Reference CI gate: `.github/workflows/quality-gates.yml`.
 

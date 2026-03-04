@@ -34,10 +34,9 @@ The next step-change is operational trust at production scale: predictable deliv
 
 ### Planned next in P0
 
-- Prometheus metrics endpoint and latency/error counters.
-- Request correlation IDs across ingest/retrieval/webhook delivery.
-- Tenant policy/audit surfacing for auth + retention controls.
-- CI quality budgets (latency ceilings + stale-fact regression thresholds).
+- Capture and publish repeatable latency evidence for operator endpoints (`ops/summary`, trace lookup, governance queries).
+- Expand replay cursor falsification against sparse IDs and larger pagination windows.
+- Add operator UI layer that consumes this control-plane API surface directly.
 
 ## API surface (P0)
 

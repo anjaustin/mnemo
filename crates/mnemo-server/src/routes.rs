@@ -1354,6 +1354,7 @@ async fn get_ops_summary(
 async fn get_trace_by_request_id(
     State(state): State<AppState>,
     Path(request_id): Path<String>,
+    Query(query): Query<TraceLookupQuery>,
 ) -> Result<Json<TraceLookupResponse>, AppError> {
     let request_id = request_id.trim().to_string();
     if request_id.is_empty() {
@@ -1362,67 +1363,129 @@ async fn get_trace_by_request_id(
         )));
     }
 
+    if query.to <= query.from {
+        return Err(AppError(MnemoError::Validation(
+            "'to' must be after 'from'".to_string(),
+        )));
+    }
+
+    let max_matches = query.limit.clamp(1, 500) as usize;
+    let user_filter = query
+        .user
+        .as_ref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+
     let users = state.state_store.list_users(10_000, None).await?;
 
     let mut matched_episodes = Vec::new();
-    for user in users {
-        let sessions = list_all_sessions_for_user(&state, user.id).await?;
-        for session in sessions {
-            let episodes = list_all_episodes_for_session(&state, session.id).await?;
-            for episode in episodes {
-                if extract_request_id_from_metadata(&episode.metadata)
+    if query.include_episodes {
+        for user in users {
+            if let Some(filter) = user_filter.as_deref() {
+                let external_id = user
+                    .external_id
                     .as_deref()
-                    .is_some_and(|rid| rid == request_id)
-                {
-                    matched_episodes.push(TraceEpisodeRef {
-                        user_id: user.id,
-                        session_id: session.id,
-                        episode_id: episode.id,
-                        created_at: episode.created_at,
-                        preview: preview_text(&episode.content, 140),
-                    });
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let user_id = user.id.to_string();
+                if user_id != filter && external_id != filter {
+                    continue;
+                }
+            }
+
+            let sessions = list_all_sessions_for_user(&state, user.id).await?;
+            for session in sessions {
+                let episodes = list_all_episodes_for_session(&state, session.id).await?;
+                for episode in episodes {
+                    if episode.created_at < query.from || episode.created_at > query.to {
+                        continue;
+                    }
+                    if extract_request_id_from_metadata(&episode.metadata)
+                        .as_deref()
+                        .is_some_and(|rid| rid == request_id)
+                    {
+                        matched_episodes.push(TraceEpisodeRef {
+                            user_id: user.id,
+                            session_id: session.id,
+                            episode_id: episode.id,
+                            created_at: episode.created_at,
+                            preview: preview_text(&episode.content, 140),
+                        });
+                    }
                 }
             }
         }
+        matched_episodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        matched_episodes.truncate(max_matches);
     }
 
     let matched_webhook_events: Vec<MemoryWebhookEventRecord> = {
-        let event_map = state.memory_webhook_events.read().await;
-        event_map
-            .values()
-            .flat_map(|rows| rows.iter().cloned())
-            .filter(|row| {
-                row.request_id
-                    .as_deref()
-                    .is_some_and(|rid| rid == request_id)
-            })
-            .collect()
+        if !query.include_webhook_events {
+            Vec::new()
+        } else {
+            let mut rows: Vec<MemoryWebhookEventRecord> = {
+                let event_map = state.memory_webhook_events.read().await;
+                event_map
+                    .values()
+                    .flat_map(|items| items.iter().cloned())
+                    .filter(|row| {
+                        row.request_id
+                            .as_deref()
+                            .is_some_and(|rid| rid == request_id)
+                    })
+                    .filter(|row| row.created_at >= query.from && row.created_at <= query.to)
+                    .collect()
+            };
+            rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            rows.truncate(max_matches);
+            rows
+        }
     };
 
     let matched_webhook_audit: Vec<MemoryWebhookAuditRecord> = {
-        let audit_map = state.memory_webhook_audit.read().await;
-        audit_map
-            .values()
-            .flat_map(|rows| rows.iter().cloned())
-            .filter(|row| {
-                row.request_id
-                    .as_deref()
-                    .is_some_and(|rid| rid == request_id)
-            })
-            .collect()
+        if !query.include_webhook_audit {
+            Vec::new()
+        } else {
+            let mut rows: Vec<MemoryWebhookAuditRecord> = {
+                let audit_map = state.memory_webhook_audit.read().await;
+                audit_map
+                    .values()
+                    .flat_map(|items| items.iter().cloned())
+                    .filter(|row| {
+                        row.request_id
+                            .as_deref()
+                            .is_some_and(|rid| rid == request_id)
+                    })
+                    .filter(|row| row.at >= query.from && row.at <= query.to)
+                    .collect()
+            };
+            rows.sort_by(|a, b| b.at.cmp(&a.at));
+            rows.truncate(max_matches);
+            rows
+        }
     };
 
     let matched_governance_audit: Vec<GovernanceAuditRecord> = {
-        let audit_map = state.governance_audit.read().await;
-        audit_map
-            .values()
-            .flat_map(|rows| rows.iter().cloned())
-            .filter(|row| {
-                row.request_id
-                    .as_deref()
-                    .is_some_and(|rid| rid == request_id)
-            })
-            .collect()
+        if !query.include_governance_audit {
+            Vec::new()
+        } else {
+            let mut rows: Vec<GovernanceAuditRecord> = {
+                let audit_map = state.governance_audit.read().await;
+                audit_map
+                    .values()
+                    .flat_map(|items| items.iter().cloned())
+                    .filter(|row| {
+                        row.request_id
+                            .as_deref()
+                            .is_some_and(|rid| rid == request_id)
+                    })
+                    .filter(|row| row.at >= query.from && row.at <= query.to)
+                    .collect()
+            };
+            rows.sort_by(|a, b| b.at.cmp(&a.at));
+            rows.truncate(max_matches);
+            rows
+        }
     };
 
     let summary = serde_json::json!({
@@ -1430,6 +1493,16 @@ async fn get_trace_by_request_id(
         "webhook_event_matches": matched_webhook_events.len(),
         "webhook_audit_matches": matched_webhook_audit.len(),
         "governance_audit_matches": matched_governance_audit.len(),
+        "filters": {
+            "from": query.from,
+            "to": query.to,
+            "limit": max_matches,
+            "include_episodes": query.include_episodes,
+            "include_webhook_events": query.include_webhook_events,
+            "include_webhook_audit": query.include_webhook_audit,
+            "include_governance_audit": query.include_governance_audit,
+            "user": query.user,
+        }
     });
 
     Ok(Json(TraceLookupResponse {
@@ -2230,6 +2303,38 @@ struct TraceLookupResponse {
     matched_webhook_audit: Vec<MemoryWebhookAuditRecord>,
     matched_governance_audit: Vec<GovernanceAuditRecord>,
     summary: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct TraceLookupQuery {
+    #[serde(default = "default_trace_lookup_from")]
+    from: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_trace_lookup_to")]
+    to: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_trace_lookup_limit")]
+    limit: u32,
+    #[serde(default = "default_true")]
+    include_episodes: bool,
+    #[serde(default = "default_true")]
+    include_webhook_events: bool,
+    #[serde(default = "default_true")]
+    include_webhook_audit: bool,
+    #[serde(default = "default_true")]
+    include_governance_audit: bool,
+    #[serde(default)]
+    user: Option<String>,
+}
+
+fn default_trace_lookup_from() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() - chrono::Duration::days(30)
+}
+
+fn default_trace_lookup_to() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+}
+
+fn default_trace_lookup_limit() -> u32 {
+    100
 }
 
 #[derive(Debug, Serialize)]

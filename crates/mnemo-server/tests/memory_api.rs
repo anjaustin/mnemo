@@ -3734,3 +3734,83 @@ async fn test_trace_lookup_joins_episode_webhook_and_governance_records() {
             >= 1
     );
 }
+
+#[tokio::test]
+async fn test_trace_lookup_supports_source_filters_and_limits() {
+    let app = build_test_app().await;
+    let req_id = "trace-filter-req-42";
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "trace-filter-user",
+            "external_id": "trace-filter-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "PUT",
+        "/api/v1/policies/trace-filter-user",
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({ "webhook_domain_allowlist": [] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({
+            "user": "trace-filter-user",
+            "session": "default",
+            "text": "trace filter payload"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, trace) = json_request(
+        &app,
+        "GET",
+        &format!(
+            "/api/v1/traces/{req_id}?include_episodes=false&include_webhook_events=false&limit=1"
+        ),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(trace["summary"]["episode_matches"], 0);
+    assert_eq!(trace["summary"]["webhook_event_matches"], 0);
+    assert!(
+        trace["summary"]["governance_audit_matches"]
+            .as_u64()
+            .unwrap_or(0)
+            <= 1
+    );
+    assert_eq!(trace["matched_episodes"].as_array().unwrap().len(), 0);
+    assert_eq!(trace["matched_webhook_events"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_trace_lookup_rejects_invalid_window() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "GET",
+        "/api/v1/traces/req-123?from=2026-03-05T00:00:00Z&to=2026-03-04T00:00:00Z",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

@@ -45,6 +45,18 @@ Returns HTTP/webhook/policy counters plus active backlog gauges and recent audit
 
 Cross-pipeline trace lookup by request correlation ID.
 
+Query params:
+- `from` (optional, default now-30d, RFC3339 timestamp)
+- `to` (optional, default now, RFC3339 timestamp)
+- `limit` (optional, default `100`, max `500`, per-source cap)
+- `include_episodes` (optional, default `true`)
+- `include_webhook_events` (optional, default `true`)
+- `include_webhook_audit` (optional, default `true`)
+- `include_governance_audit` (optional, default `true`)
+- `user` (optional, user UUID or external_id filter for episode scan)
+
+If `to <= from`, the API returns `400` validation error.
+
 Returns matched artifacts across:
 - episode metadata writes
 - webhook event rows

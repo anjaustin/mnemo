@@ -3,7 +3,7 @@
 Status: P0 active
 Owner: Platform / Product
 Priority: P0
-Last updated: 2026-03-04
+Last updated: 2026-03-04 (backend foundations complete)
 
 ## 1) Executive Summary
 
@@ -222,7 +222,11 @@ Existing APIs powering v1 UX:
 Likely backend additions for UX polish:
 
 - pre-aggregated incident summaries endpoint.
-- richer request_id lookup filtering for faster cross-index joins.
+
+Backend API mapping status:
+
+- Hero-lane backend primitives are now present in this repository.
+- Remaining PRD scope is primarily operator-facing UX surfaces and latency evidence capture.
 
 ## 12) Proposed Data Contracts for UI
 
