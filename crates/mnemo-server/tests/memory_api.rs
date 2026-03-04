@@ -3155,13 +3155,16 @@ async fn test_memory_webhook_replay_retry_and_audit_endpoints() {
 
     let dead = wait_for_dead_letter_event(&app, &webhook_id).await;
     let event_id = dead["id"].as_str().unwrap().to_string();
+    let req_id = "trace-ops-req-123";
 
-    let (status, replay) = json_request(
+    let (status, replay) = json_request_with_header(
         &app,
         "GET",
         &format!(
             "/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=1&include_delivered=false&include_dead_letter=true"
         ),
+        REQUEST_ID_HEADER,
+        req_id,
         serde_json::json!({}),
     )
     .await;
@@ -3169,10 +3172,12 @@ async fn test_memory_webhook_replay_retry_and_audit_endpoints() {
     assert_eq!(replay["count"], 1);
     assert_eq!(replay["events"][0]["id"], event_id);
 
-    let (status, retried) = json_request(
+    let (status, retried) = json_request_with_header(
         &app,
         "POST",
         &format!("/api/v1/memory/webhooks/{webhook_id}/events/{event_id}/retry"),
+        REQUEST_ID_HEADER,
+        req_id,
         serde_json::json!({}),
     )
     .await;
@@ -3207,4 +3212,10 @@ async fn test_memory_webhook_replay_retry_and_audit_endpoints() {
     assert!(!rows.is_empty());
     assert!(rows.iter().any(|row| row["action"] == "webhook_registered"));
     assert!(rows.iter().any(|row| row["action"] == "retry_queued"));
+    assert!(rows
+        .iter()
+        .any(|row| row["action"] == "retry_queued" && row["request_id"] == req_id));
+    assert!(rows
+        .iter()
+        .any(|row| row["action"] == "replay_requested" && row["request_id"] == req_id));
 }

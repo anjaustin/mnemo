@@ -23,6 +23,15 @@ use mnemo_core::traits::storage::{
     EdgeStore, EntityStore, EpisodeStore, StorageResult, VectorStore,
 };
 
+fn episode_request_id(episode: &Episode) -> Option<&str> {
+    episode
+        .metadata
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+}
+
 /// Configuration for the ingestion pipeline.
 pub struct IngestConfig {
     /// How often to poll for pending episodes (ms).
@@ -132,6 +141,7 @@ where
                 // Transient failure — schedule retry
                 tracing::warn!(
                     episode_id = %ep.id,
+                    request_id = ?episode_request_id(&ep),
                     retry = ep.retry_count,
                     delay_ms = delay_ms,
                     error = %error,
@@ -149,6 +159,7 @@ where
                 // Max retries exceeded — permanent failure
                 tracing::error!(
                     episode_id = %ep.id,
+                    request_id = ?episode_request_id(&ep),
                     retries = ep.retry_count,
                     error = %error,
                     "Episode permanently failed after max retries"
@@ -160,6 +171,7 @@ where
 
     /// Process a single episode through the full pipeline.
     async fn process_episode(&self, episode: &Episode) -> StorageResult<()> {
+        tracing::debug!(episode_id = %episode.id, request_id = ?episode_request_id(episode), "Processing episode");
         // 1. Get existing entities for dedup hints
         let existing = self
             .state_store
@@ -275,6 +287,7 @@ where
         let mut done = episode.clone();
         done.mark_completed(new_entity_ids, new_edge_ids);
         self.state_store.update_episode(&done).await?;
+        tracing::debug!(episode_id = %episode.id, request_id = ?episode_request_id(episode), "Episode completed");
         Ok(())
     }
 }

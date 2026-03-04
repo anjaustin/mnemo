@@ -164,6 +164,7 @@ Return what changed in memory between two points in time.
 
 - `session` is optional and can be a session name or UUID.
 - Includes added/superseded facts, confidence deltas, head movement, and added episodes.
+- `added_episodes` may include `request_id` when source writes had correlation IDs.
 
 ```json
 // Response 200
@@ -307,6 +308,8 @@ Explain why memory was retrieved by returning fact-to-episode lineage chains.
 ### `POST /api/v1/memory/:user/time_travel/trace`
 
 Trace how memory-backed answers evolve across a time window.
+
+`timeline` events may include `request_id` for joins across API calls, ingest processing, and webhook delivery.
 
 ```json
 // Request

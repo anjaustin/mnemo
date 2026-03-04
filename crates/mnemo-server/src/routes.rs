@@ -129,6 +129,37 @@ fn request_id_from_extension(ctx: Option<Extension<RequestContext>>) -> Option<S
     ctx.map(|Extension(ctx)| ctx.request_id)
 }
 
+fn extract_request_id_from_metadata(metadata: &serde_json::Value) -> Option<String> {
+    metadata
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn metadata_with_request_id(
+    metadata: serde_json::Value,
+    request_id: Option<&str>,
+) -> serde_json::Value {
+    let Some(request_id) = request_id else {
+        return metadata;
+    };
+
+    match metadata {
+        serde_json::Value::Object(mut map) => {
+            map.insert(
+                "request_id".to_string(),
+                serde_json::Value::String(request_id.to_string()),
+            );
+            serde_json::Value::Object(map)
+        }
+        other => serde_json::json!({
+            "request_id": request_id,
+            "_raw_metadata": other
+        }),
+    }
+}
+
 fn webhook_subscriptions_key(state: &AppState) -> String {
     format!("{}:subscriptions", state.webhook_redis_prefix)
 }
@@ -1078,6 +1109,10 @@ async fn add_episode(
 ) -> Result<(StatusCode, Json<Episode>), AppError> {
     let request_id = request_id_from_extension(ctx);
     let session = state.state_store.get_session(session_id).await?;
+    let req = CreateEpisodeRequest {
+        metadata: metadata_with_request_id(req.metadata, request_id.as_deref()),
+        ..req
+    };
     let episode = state
         .state_store
         .create_episode(req, session_id, session.user_id)
@@ -1108,9 +1143,17 @@ async fn add_episodes_batch(
 ) -> Result<(StatusCode, Json<ListResponse<Episode>>), AppError> {
     let request_id = request_id_from_extension(ctx);
     let session = state.state_store.get_session(session_id).await?;
+    let episodes_req: Vec<CreateEpisodeRequest> = req
+        .episodes
+        .into_iter()
+        .map(|ep| CreateEpisodeRequest {
+            metadata: metadata_with_request_id(ep.metadata, request_id.as_deref()),
+            ..ep
+        })
+        .collect();
     let episodes = state
         .state_store
-        .create_episodes_batch(req.episodes, session_id, session.user_id)
+        .create_episodes_batch(episodes_req, session_id, session.user_id)
         .await?;
 
     if let Some(last) = episodes.last() {
@@ -1459,6 +1502,8 @@ struct TimeTravelTimelineEvent {
     episode_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     edge_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1519,6 +1564,8 @@ struct EpisodeChange {
     role: Option<MessageRole>,
     created_at: chrono::DateTime<chrono::Utc>,
     preview: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1832,7 +1879,7 @@ async fn remember_memory(
         content: req.text,
         role: Some(req.role.unwrap_or(MessageRole::User)),
         name: Some(user.name.clone()),
-        metadata: serde_json::json!({}),
+        metadata: metadata_with_request_id(serde_json::json!({}), request_id.as_deref()),
         created_at: None,
     };
 
@@ -2235,6 +2282,7 @@ async fn memory_changes_since(
                     role: episode.role,
                     created_at: episode.created_at,
                     preview: preview_text(&episode.content, 140),
+                    request_id: extract_request_id_from_metadata(&episode.metadata),
                 });
             }
         }
@@ -2616,12 +2664,17 @@ async fn time_travel_trace(
 
     let mut session_name_by_id: HashMap<Uuid, Option<String>> = HashMap::new();
     let mut episode_session_by_id: HashMap<Uuid, Uuid> = HashMap::new();
+    let mut episode_request_id_by_id: HashMap<Uuid, Option<String>> = HashMap::new();
     let mut timeline: Vec<TimeTravelTimelineEvent> = Vec::new();
     for session in &scoped_sessions {
         session_name_by_id.insert(session.id, session.name.clone());
         let episodes = list_all_episodes_for_session(&state, session.id).await?;
         for episode in episodes {
             episode_session_by_id.insert(episode.id, episode.session_id);
+            episode_request_id_by_id.insert(
+                episode.id,
+                extract_request_id_from_metadata(&episode.metadata),
+            );
             if episode.created_at > req.from && episode.created_at <= req.to {
                 timeline.push(TimeTravelTimelineEvent {
                     at: episode.created_at,
@@ -2633,6 +2686,7 @@ async fn time_travel_trace(
                     session_id: Some(session.id),
                     episode_id: Some(episode.id),
                     edge_id: None,
+                    request_id: extract_request_id_from_metadata(&episode.metadata),
                 });
             }
         }
@@ -2650,6 +2704,9 @@ async fn time_travel_trace(
                     session_id: Some(session.id),
                     episode_id: session.head_episode_id,
                     edge_id: None,
+                    request_id: session.head_episode_id.and_then(|episode_id| {
+                        episode_request_id_by_id.get(&episode_id).cloned().flatten()
+                    }),
                 });
             }
         }
@@ -2701,6 +2758,10 @@ async fn time_travel_trace(
                 session_id: episode_session_by_id.get(&edge.source_episode_id).copied(),
                 episode_id: Some(edge.source_episode_id),
                 edge_id: Some(edge.id),
+                request_id: episode_request_id_by_id
+                    .get(&edge.source_episode_id)
+                    .cloned()
+                    .flatten(),
             });
         }
         if let Some(invalid_at) = edge.invalid_at {
@@ -2715,6 +2776,10 @@ async fn time_travel_trace(
                     session_id: episode_session_by_id.get(&edge.source_episode_id).copied(),
                     episode_id: Some(edge.source_episode_id),
                     edge_id: Some(edge.id),
+                    request_id: episode_request_id_by_id
+                        .get(&edge.source_episode_id)
+                        .cloned()
+                        .flatten(),
                 });
             }
         }
