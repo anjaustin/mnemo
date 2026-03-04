@@ -292,6 +292,82 @@ Explain why memory was retrieved by returning fact-to-episode lineage chains.
 }
 ```
 
+### `POST /api/v1/memory/webhooks`
+
+Register a per-user webhook subscription for memory lifecycle events.
+
+```json
+// Request
+{
+  "user": "kendra",
+  "target_url": "https://example.com/hooks/memory",
+  "signing_secret": "whsec_abc123",
+  "events": ["head_advanced", "conflict_detected"],
+  "enabled": true
+}
+```
+
+- `events` is optional; defaults to all event types: `fact_added`, `fact_superseded`, `head_advanced`, `conflict_detected`.
+- `signing_secret` is optional; when present, Mnemo signs each delivery using HMAC-SHA256 and sends `x-mnemo-signature` as `t=<unix>,v1=<hex>` over `"<timestamp>.<raw_body>"`.
+- Deliveries use retry with exponential backoff (default 3 attempts).
+
+```json
+// Response 201
+{
+  "ok": true,
+  "webhook": {
+    "id": "019513a4-9d3a-7000-8000-000000000444",
+    "user_id": "019513a4-7e2b-7000-8000-000000000001",
+    "user_identifier": "kendra",
+    "target_url": "https://example.com/hooks/memory",
+    "events": ["head_advanced", "conflict_detected"],
+    "enabled": true,
+    "created_at": "2026-03-03T12:00:00Z",
+    "updated_at": "2026-03-03T12:00:00Z"
+  }
+}
+```
+
+### `GET /api/v1/memory/webhooks/:id/events`
+
+List recent events captured for a webhook subscription.
+
+Query params:
+- `limit` (optional, default `100`, max `1000`)
+- `event_type` (optional filter)
+
+```json
+// Response 200
+{
+  "webhook_id": "019513a4-9d3a-7000-8000-000000000444",
+  "count": 1,
+  "events": [
+    {
+      "id": "019513a4-9d3a-7000-8000-000000000555",
+      "webhook_id": "019513a4-9d3a-7000-8000-000000000444",
+      "event_type": "head_advanced",
+      "user_id": "019513a4-7e2b-7000-8000-000000000001",
+      "payload": {
+        "session_id": "019513a4-8c1f-7000-8000-000000000002",
+        "head_episode_id": "019513a4-9d3a-7000-8000-000000000003"
+      },
+      "created_at": "2026-03-03T12:01:00Z",
+      "attempts": 1,
+      "delivered": true,
+      "delivered_at": "2026-03-03T12:01:00Z"
+    }
+  ]
+}
+```
+
+### `GET /api/v1/memory/webhooks/:id`
+
+Fetch webhook configuration by ID.
+
+### `DELETE /api/v1/memory/webhooks/:id`
+
+Delete webhook configuration and retained in-memory event records.
+
 ---
 
 ## Import API

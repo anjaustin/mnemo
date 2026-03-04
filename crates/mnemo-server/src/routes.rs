@@ -5,7 +5,11 @@ use axum::routing::{delete, get, post, put};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 use uuid::Uuid;
+
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
@@ -31,7 +35,10 @@ use mnemo_core::traits::storage::{
     AgentStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, UserStore, VectorStore,
 };
 
-use crate::state::{AppState, ImportJobRecord, ImportJobStatus};
+use crate::state::{
+    AppState, ImportJobRecord, ImportJobStatus, MemoryWebhookEventRecord, MemoryWebhookEventType,
+    MemoryWebhookSubscription,
+};
 
 // ─── Error handling ────────────────────────────────────────────────
 
@@ -87,6 +94,251 @@ fn default_limit() -> u32 {
     20
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_webhook_events() -> Vec<MemoryWebhookEventType> {
+    vec![
+        MemoryWebhookEventType::FactAdded,
+        MemoryWebhookEventType::FactSuperseded,
+        MemoryWebhookEventType::HeadAdvanced,
+        MemoryWebhookEventType::ConflictDetected,
+    ]
+}
+
+fn webhook_event_type_str(event_type: MemoryWebhookEventType) -> &'static str {
+    match event_type {
+        MemoryWebhookEventType::FactAdded => "fact_added",
+        MemoryWebhookEventType::FactSuperseded => "fact_superseded",
+        MemoryWebhookEventType::HeadAdvanced => "head_advanced",
+        MemoryWebhookEventType::ConflictDetected => "conflict_detected",
+    }
+}
+
+fn is_http_url(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+async fn emit_memory_webhook_event(
+    state: &AppState,
+    user_id: Uuid,
+    event_type: MemoryWebhookEventType,
+    payload: serde_json::Value,
+) {
+    const MAX_EVENTS_PER_WEBHOOK: usize = 1000;
+
+    let subscribed_hooks: Vec<MemoryWebhookSubscription> = {
+        let hooks = state.memory_webhooks.read().await;
+        hooks
+            .values()
+            .filter(|hook| hook.enabled)
+            .filter(|hook| hook.user_id == user_id)
+            .filter(|hook| hook.events.contains(&event_type))
+            .cloned()
+            .collect()
+    };
+
+    if subscribed_hooks.is_empty() {
+        return;
+    }
+
+    let now = chrono::Utc::now();
+    let mut queued_deliveries: Vec<(Uuid, Uuid)> = Vec::new();
+    let mut event_map = state.memory_webhook_events.write().await;
+    for webhook in subscribed_hooks {
+        let row = MemoryWebhookEventRecord {
+            id: Uuid::now_v7(),
+            webhook_id: webhook.id,
+            event_type,
+            user_id,
+            payload: payload.clone(),
+            created_at: now,
+            attempts: 0,
+            delivered: false,
+            delivered_at: None,
+            last_error: None,
+        };
+        let event_id = row.id;
+        let rows = event_map.entry(webhook.id).or_default();
+        rows.push(row);
+        if rows.len() > MAX_EVENTS_PER_WEBHOOK {
+            let overflow = rows.len() - MAX_EVENTS_PER_WEBHOOK;
+            rows.drain(0..overflow);
+        }
+        queued_deliveries.push((webhook.id, event_id));
+    }
+
+    if !state.webhook_delivery.enabled {
+        return;
+    }
+
+    for (webhook_id, event_id) in queued_deliveries {
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            deliver_memory_webhook_event(state_clone, webhook_id, event_id).await;
+        });
+    }
+}
+
+async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_id: Uuid) {
+    let webhook = {
+        let hooks = state.memory_webhooks.read().await;
+        hooks.get(&webhook_id).cloned()
+    };
+    let Some(webhook) = webhook else {
+        return;
+    };
+
+    let event = {
+        let events = state.memory_webhook_events.read().await;
+        events
+            .get(&webhook_id)
+            .and_then(|rows| rows.iter().find(|row| row.id == event_id))
+            .cloned()
+    };
+    let Some(event) = event else {
+        return;
+    };
+
+    let body = serde_json::json!({
+        "event_id": event.id,
+        "event_type": event.event_type,
+        "user_id": event.user_id,
+        "payload": event.payload,
+        "created_at": event.created_at
+    });
+
+    let serialized = match serde_json::to_string(&body) {
+        Ok(value) => value,
+        Err(err) => {
+            update_webhook_delivery_status(
+                &state,
+                webhook_id,
+                event_id,
+                1,
+                false,
+                Some(format!("serialize failure: {err}")),
+            )
+            .await;
+            return;
+        }
+    };
+
+    let max_attempts = state.webhook_delivery.max_attempts.max(1);
+    let timeout = Duration::from_millis(state.webhook_delivery.request_timeout_ms.max(1));
+
+    for attempt in 1..=max_attempts {
+        let timestamp = chrono::Utc::now().timestamp().to_string();
+        let signature_header = webhook
+            .signing_secret
+            .as_ref()
+            .map(|secret| build_webhook_signature(secret, &timestamp, &serialized));
+
+        let mut request = state
+            .webhook_http
+            .post(&webhook.target_url)
+            .header("content-type", "application/json")
+            .header("x-mnemo-event-id", event.id.to_string())
+            .header(
+                "x-mnemo-event-type",
+                webhook_event_type_str(event.event_type),
+            )
+            .header("x-mnemo-timestamp", timestamp)
+            .timeout(timeout)
+            .body(serialized.clone());
+
+        if let Some(sig) = signature_header {
+            request = request.header("x-mnemo-signature", sig);
+        }
+
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                update_webhook_delivery_status(&state, webhook_id, event_id, attempt, true, None)
+                    .await;
+                return;
+            }
+            Ok(response) => {
+                let err = format!("http status {}", response.status());
+                update_webhook_delivery_status(
+                    &state,
+                    webhook_id,
+                    event_id,
+                    attempt,
+                    false,
+                    Some(err.clone()),
+                )
+                .await;
+                if attempt < max_attempts {
+                    let shift = (attempt - 1).min(10);
+                    let factor = 1u64 << shift;
+                    let delay_ms = state
+                        .webhook_delivery
+                        .base_backoff_ms
+                        .saturating_mul(factor)
+                        .max(1);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+            Err(err) => {
+                update_webhook_delivery_status(
+                    &state,
+                    webhook_id,
+                    event_id,
+                    attempt,
+                    false,
+                    Some(err.to_string()),
+                )
+                .await;
+                if attempt < max_attempts {
+                    let shift = (attempt - 1).min(10);
+                    let factor = 1u64 << shift;
+                    let delay_ms = state
+                        .webhook_delivery
+                        .base_backoff_ms
+                        .saturating_mul(factor)
+                        .max(1);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+    }
+}
+
+fn build_webhook_signature(secret: &str, timestamp: &str, body: &str) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+        .expect("hmac key initialization should not fail");
+    let signed = format!("{}.{}", timestamp, body);
+    mac.update(signed.as_bytes());
+    let digest = hex::encode(mac.finalize().into_bytes());
+    format!("t={timestamp},v1={digest}")
+}
+
+async fn update_webhook_delivery_status(
+    state: &AppState,
+    webhook_id: Uuid,
+    event_id: Uuid,
+    attempts: u32,
+    delivered: bool,
+    error: Option<String>,
+) {
+    let mut events = state.memory_webhook_events.write().await;
+    if let Some(rows) = events.get_mut(&webhook_id) {
+        if let Some(event) = rows.iter_mut().find(|row| row.id == event_id) {
+            event.attempts = attempts;
+            if delivered {
+                event.delivered = true;
+                event.delivered_at = Some(chrono::Utc::now());
+                event.last_error = None;
+            } else {
+                event.last_error = error;
+            }
+        }
+    }
+}
+
 // ─── Router builder ────────────────────────────────────────────────
 
 pub fn build_router(state: AppState) -> Router {
@@ -139,6 +391,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/memory/:user/causal_recall",
             post(causal_recall_chains),
+        )
+        .route("/api/v1/memory/webhooks", post(register_memory_webhook))
+        .route(
+            "/api/v1/memory/webhooks/:id",
+            get(get_memory_webhook).delete(delete_memory_webhook),
+        )
+        .route(
+            "/api/v1/memory/webhooks/:id/events",
+            get(list_memory_webhook_events),
         )
         // Import API
         .route("/api/v1/import/chat-history", post(import_chat_history))
@@ -321,6 +582,20 @@ async fn add_episode(
         .state_store
         .create_episode(req, session_id, session.user_id)
         .await?;
+
+    emit_memory_webhook_event(
+        &state,
+        session.user_id,
+        MemoryWebhookEventType::HeadAdvanced,
+        serde_json::json!({
+            "session_id": session.id,
+            "session_name": session.name,
+            "head_episode_id": episode.id,
+            "head_version": session.head_version.saturating_add(1)
+        }),
+    )
+    .await;
+
     Ok((StatusCode::CREATED, Json(episode)))
 }
 
@@ -334,6 +609,22 @@ async fn add_episodes_batch(
         .state_store
         .create_episodes_batch(req.episodes, session_id, session.user_id)
         .await?;
+
+    if let Some(last) = episodes.last() {
+        emit_memory_webhook_event(
+            &state,
+            session.user_id,
+            MemoryWebhookEventType::HeadAdvanced,
+            serde_json::json!({
+                "session_id": session.id,
+                "session_name": session.name,
+                "head_episode_id": last.id,
+                "head_version": session.head_version.saturating_add(episodes.len() as u64)
+            }),
+        )
+        .await;
+    }
+
     Ok((StatusCode::CREATED, Json(ListResponse::new(episodes))))
 }
 
@@ -489,6 +780,44 @@ struct ImportChatHistoryResponse {
     ok: bool,
     job_id: Uuid,
     status: ImportJobStatus,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterMemoryWebhookRequest {
+    user: String,
+    target_url: String,
+    #[serde(default)]
+    signing_secret: Option<String>,
+    #[serde(default)]
+    events: Option<Vec<MemoryWebhookEventType>>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RegisterMemoryWebhookResponse {
+    ok: bool,
+    webhook: MemoryWebhookSubscription,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteMemoryWebhookResponse {
+    deleted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListWebhookEventsQuery {
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    event_type: Option<MemoryWebhookEventType>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListWebhookEventsResponse {
+    webhook_id: Uuid,
+    count: usize,
+    events: Vec<MemoryWebhookEventRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -876,6 +1205,19 @@ async fn remember_memory(
         .state_store
         .create_episode(episode_req, session.id, user.id)
         .await?;
+
+    emit_memory_webhook_event(
+        &state,
+        user.id,
+        MemoryWebhookEventType::HeadAdvanced,
+        serde_json::json!({
+            "session_id": session.id,
+            "session_name": session.name,
+            "head_episode_id": episode.id,
+            "head_version": session.head_version.saturating_add(1)
+        }),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -1397,6 +1739,36 @@ async fn memory_changes_since(
         added_episodes.len()
     );
 
+    if !added_facts.is_empty() {
+        emit_memory_webhook_event(
+            &state,
+            user.id,
+            MemoryWebhookEventType::FactAdded,
+            serde_json::json!({
+                "from": req.from,
+                "to": req.to,
+                "session": req.session.clone(),
+                "count": added_facts.len()
+            }),
+        )
+        .await;
+    }
+
+    if !superseded_facts.is_empty() {
+        emit_memory_webhook_event(
+            &state,
+            user.id,
+            MemoryWebhookEventType::FactSuperseded,
+            serde_json::json!({
+                "from": req.from,
+                "to": req.to,
+                "session": req.session.clone(),
+                "count": superseded_facts.len()
+            }),
+        )
+        .await;
+    }
+
     Ok(Json(MemoryChangesSinceResponse {
         user_id: user.id,
         from: req.from,
@@ -1531,6 +1903,28 @@ async fn conflict_radar(
         needs_resolution: conflicts.iter().filter(|c| c.needs_resolution).count(),
         high_severity: conflicts.iter().filter(|c| c.severity >= 0.8).count(),
     };
+
+    if summary.needs_resolution > 0 {
+        let top = conflicts.first();
+        emit_memory_webhook_event(
+            &state,
+            user.id,
+            MemoryWebhookEventType::ConflictDetected,
+            serde_json::json!({
+                "as_of": as_of,
+                "clusters": summary.clusters,
+                "needs_resolution": summary.needs_resolution,
+                "high_severity": summary.high_severity,
+                "top_cluster": top.map(|cluster| serde_json::json!({
+                    "source_entity": cluster.source_entity,
+                    "label": cluster.label,
+                    "severity": cluster.severity,
+                    "reason": cluster.reason
+                }))
+            }),
+        )
+        .await;
+    }
 
     Ok(Json(ConflictRadarResponse {
         user_id: user.id,
@@ -1711,6 +2105,121 @@ async fn causal_recall_chains(
         retrieval_sources: context.sources.clone(),
         chains,
         summary,
+    }))
+}
+
+async fn register_memory_webhook(
+    State(state): State<AppState>,
+    Json(req): Json<RegisterMemoryWebhookRequest>,
+) -> Result<(StatusCode, Json<RegisterMemoryWebhookResponse>), AppError> {
+    if req.user.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("user is required".into())));
+    }
+    if req.target_url.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "target_url is required".into(),
+        )));
+    }
+    if !is_http_url(req.target_url.trim()) {
+        return Err(AppError(MnemoError::Validation(
+            "target_url must start with http:// or https://".into(),
+        )));
+    }
+
+    let user = find_user_by_identifier(&state, req.user.trim()).await?;
+    let now = chrono::Utc::now();
+    let signing_secret = req
+        .signing_secret
+        .map(|secret| secret.trim().to_string())
+        .filter(|secret| !secret.is_empty());
+    let events = req
+        .events
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(default_webhook_events);
+
+    let webhook = MemoryWebhookSubscription {
+        id: Uuid::now_v7(),
+        user_id: user.id,
+        user_identifier: req.user.trim().to_string(),
+        target_url: req.target_url.trim().to_string(),
+        signing_secret,
+        events,
+        enabled: req.enabled,
+        created_at: now,
+        updated_at: now,
+    };
+
+    {
+        let mut hooks = state.memory_webhooks.write().await;
+        hooks.insert(webhook.id, webhook.clone());
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RegisterMemoryWebhookResponse { ok: true, webhook }),
+    ))
+}
+
+async fn get_memory_webhook(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<MemoryWebhookSubscription>, AppError> {
+    let hooks = state.memory_webhooks.read().await;
+    let webhook = hooks.get(&id).cloned().ok_or_else(|| {
+        AppError(MnemoError::NotFound {
+            resource_type: "MemoryWebhook".into(),
+            id: id.to_string(),
+        })
+    })?;
+    Ok(Json(webhook))
+}
+
+async fn delete_memory_webhook(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DeleteMemoryWebhookResponse>, AppError> {
+    let removed = {
+        let mut hooks = state.memory_webhooks.write().await;
+        hooks.remove(&id).is_some()
+    };
+    {
+        let mut events = state.memory_webhook_events.write().await;
+        events.remove(&id);
+    }
+    Ok(Json(DeleteMemoryWebhookResponse { deleted: removed }))
+}
+
+async fn list_memory_webhook_events(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ListWebhookEventsQuery>,
+) -> Result<Json<ListWebhookEventsResponse>, AppError> {
+    {
+        let hooks = state.memory_webhooks.read().await;
+        if !hooks.contains_key(&id) {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: id.to_string(),
+            }));
+        }
+    }
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000) as usize;
+    let mut events = {
+        let event_map = state.memory_webhook_events.read().await;
+        event_map.get(&id).cloned().unwrap_or_default()
+    };
+
+    if let Some(event_type) = query.event_type {
+        events.retain(|event| event.event_type == event_type);
+    }
+    events.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    events.truncate(limit);
+
+    Ok(Json(ListWebhookEventsResponse {
+        webhook_id: id,
+        count: events.len(),
+        events,
     }))
 }
 
@@ -2501,6 +3010,21 @@ async fn run_import_job(
         errors,
     )
     .await;
+
+    if imported_messages > 0 {
+        emit_memory_webhook_event(
+            &state,
+            user.id,
+            MemoryWebhookEventType::HeadAdvanced,
+            serde_json::json!({
+                "job_id": job_id,
+                "imported_messages": imported_messages,
+                "failed_messages": failed_messages,
+                "sessions_touched": sessions.len()
+            }),
+        )
+        .await;
+    }
 }
 
 fn parse_import_messages(

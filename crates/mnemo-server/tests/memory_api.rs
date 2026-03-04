@@ -1,9 +1,16 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
-use axum::http::{Request, StatusCode};
+use axum::extract::State;
+use axum::http::{HeaderMap, Request, StatusCode};
+use axum::routing::post;
+use axum::Router;
 use chrono::Utc;
+use hmac::{Hmac, Mac};
 use serde_json::Value;
+use sha2::Sha256;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -16,7 +23,7 @@ use mnemo_graph::GraphEngine;
 use mnemo_llm::OpenAiCompatibleEmbedder;
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_server::routes::build_router;
-use mnemo_server::state::{AppState, MetadataPrefilterConfig};
+use mnemo_server::state::{AppState, MetadataPrefilterConfig, WebhookDeliveryConfig};
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
 async fn build_test_app() -> axum::Router {
@@ -35,6 +42,22 @@ async fn build_test_app_with_prefilter(prefilter: MetadataPrefilterConfig) -> ax
 
 async fn build_test_harness_with_prefilter(
     prefilter: MetadataPrefilterConfig,
+) -> (axum::Router, Arc<RedisStateStore>) {
+    build_test_harness_with_prefilter_and_webhooks(
+        prefilter,
+        WebhookDeliveryConfig {
+            enabled: false,
+            max_attempts: 3,
+            base_backoff_ms: 20,
+            request_timeout_ms: 150,
+        },
+    )
+    .await
+}
+
+async fn build_test_harness_with_prefilter_and_webhooks(
+    prefilter: MetadataPrefilterConfig,
+    webhook_delivery: WebhookDeliveryConfig,
 ) -> (axum::Router, Arc<RedisStateStore>) {
     let redis_url = std::env::var("MNEMO_TEST_REDIS_URL")
         .unwrap_or_else(|_| "redis://localhost:6379".to_string());
@@ -90,6 +113,10 @@ async fn build_test_harness_with_prefilter(
         metadata_prefilter: prefilter,
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        webhook_delivery,
+        webhook_http: Arc::new(reqwest::Client::new()),
     });
 
     (app, state_store.clone())
@@ -137,6 +164,114 @@ async fn wait_for_import_job(app: &axum::Router, job_id: &str) -> Value {
     }
 
     panic!("import job {job_id} did not reach terminal state in time");
+}
+
+#[derive(Clone)]
+struct DeliveryCapture {
+    attempts: Arc<AtomicUsize>,
+    fail_first: usize,
+    deliveries: Arc<tokio::sync::Mutex<Vec<(HeaderMap, String)>>>,
+}
+
+async fn webhook_sink_handler(
+    State(capture): State<DeliveryCapture>,
+    headers: HeaderMap,
+    body: String,
+) -> impl axum::response::IntoResponse {
+    let attempt = capture.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+    if attempt <= capture.fail_first {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    {
+        let mut rows = capture.deliveries.lock().await;
+        rows.push((headers, body));
+    }
+
+    StatusCode::OK
+}
+
+async fn start_webhook_sink_server(
+    fail_first: usize,
+) -> (
+    String,
+    Arc<AtomicUsize>,
+    Arc<tokio::sync::Mutex<Vec<(HeaderMap, String)>>>,
+) {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let deliveries = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let capture = DeliveryCapture {
+        attempts: attempts.clone(),
+        fail_first,
+        deliveries: deliveries.clone(),
+    };
+
+    let app = Router::new()
+        .route("/hook", post(webhook_sink_handler))
+        .with_state(capture);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    (format!("http://{addr}/hook"), attempts, deliveries)
+}
+
+fn compute_expected_signature(secret: &str, timestamp: &str, body: &str) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+    let signed = format!("{timestamp}.{body}");
+    mac.update(signed.as_bytes());
+    let digest = hex::encode(mac.finalize().into_bytes());
+    format!("t={timestamp},v1={digest}")
+}
+
+async fn wait_for_webhook_delivery(
+    app: &axum::Router,
+    webhook_id: &str,
+    expected_delivered: bool,
+) -> Value {
+    for _ in 0..60 {
+        let (status, body) = json_request(
+            app,
+            "GET",
+            &format!("/api/v1/memory/webhooks/{webhook_id}/events?limit=1"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        if body["count"].as_u64().unwrap_or(0) > 0 {
+            let first = body["events"][0].clone();
+            if first["delivered"].as_bool().unwrap_or(false) == expected_delivered {
+                return first;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    panic!("webhook delivery status did not reach expected state");
+}
+
+async fn wait_for_webhook_event(app: &axum::Router, webhook_id: &str) -> Value {
+    for _ in 0..60 {
+        let (status, body) = json_request(
+            app,
+            "GET",
+            &format!("/api/v1/memory/webhooks/{webhook_id}/events?limit=1"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        if body["count"].as_u64().unwrap_or(0) > 0 {
+            return body["events"][0].clone();
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("webhook event was not recorded");
 }
 
 #[tokio::test]
@@ -504,11 +639,19 @@ async fn test_memory_changes_since_rejects_invalid_window() {
 
 #[tokio::test]
 async fn test_conflict_radar_detects_active_fact_conflict() {
-    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
-        enabled: true,
-        scan_limit: 400,
-        relax_if_empty: false,
-    })
+    let (app, state_store) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 5,
+            base_backoff_ms: 10,
+            request_timeout_ms: 500,
+        },
+    )
     .await;
 
     let (status, user) = json_request(
@@ -2241,4 +2384,287 @@ async fn test_agent_identity_drift_resistance_blocks_repeated_adversarial_mutati
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(identity_after["version"], 1);
+}
+
+#[tokio::test]
+async fn test_memory_webhooks_capture_head_advanced_event_after_remember() {
+    let (sink_url, _, deliveries) = start_webhook_sink_server(0).await;
+    let (app, _) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 3,
+            base_backoff_ms: 10,
+            request_timeout_ms: 500,
+        },
+    )
+    .await;
+    let signing_secret = "whsec_head_test";
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "webhook-head-user",
+            "session": "default",
+            "text": "Seed memory for webhook capture"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "webhook-head-user",
+            "target_url": sink_url,
+            "signing_secret": signing_secret,
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "webhook-head-user",
+            "session": "default",
+            "text": "This should advance head"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let row = wait_for_webhook_delivery(&app, &webhook_id, true).await;
+    assert_eq!(row["event_type"], "head_advanced");
+    assert!(row["delivered"].as_bool().unwrap_or(false));
+    assert!(row["attempts"].as_u64().unwrap_or(0) >= 1);
+
+    let captured = {
+        let rows = deliveries.lock().await;
+        rows.last().cloned()
+    };
+    let (headers, body) = captured.expect("expected webhook sink capture");
+    let timestamp = headers
+        .get("x-mnemo-timestamp")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let signature = headers
+        .get("x-mnemo-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let expected = compute_expected_signature(signing_secret, &timestamp, &body);
+    assert_eq!(signature, expected);
+}
+
+#[tokio::test]
+async fn test_memory_webhooks_capture_conflict_detected_event() {
+    let (sink_url, _, _) = start_webhook_sink_server(0).await;
+    let (app, state_store) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 3,
+            base_backoff_ms: 10,
+            request_timeout_ms: 500,
+        },
+    )
+    .await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "webhook-conflict-user",
+            "external_id": "webhook-conflict-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = Uuid::parse_str(user["id"].as_str().unwrap()).unwrap();
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "webhook-conflict-user",
+            "target_url": sink_url,
+            "events": ["conflict_detected"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+
+    let episode_id = Uuid::now_v7();
+    let src = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Kendra".to_string(),
+                entity_type: EntityType::Person,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let adidas = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Adidas".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let nike = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Nike".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Adidas".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Adidas".to_string(),
+                confidence: 0.8,
+                valid_at: Some(now - chrono::Duration::days(2)),
+            },
+            user_id,
+            src.id,
+            adidas.id,
+            episode_id,
+            now,
+        ))
+        .await
+        .unwrap();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Nike".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Nike".to_string(),
+                confidence: 0.82,
+                valid_at: Some(now - chrono::Duration::days(1)),
+            },
+            user_id,
+            src.id,
+            nike.id,
+            episode_id,
+            now,
+        ))
+        .await
+        .unwrap();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhook-conflict-user/conflict_radar",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let row = wait_for_webhook_event(&app, &webhook_id).await;
+    assert_eq!(row["event_type"], "conflict_detected");
+}
+
+#[tokio::test]
+async fn test_memory_webhooks_retry_backoff_eventually_delivers() {
+    let (sink_url, attempts, _) = start_webhook_sink_server(2).await;
+    let (app, _) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 5,
+            base_backoff_ms: 10,
+            request_timeout_ms: 500,
+        },
+    )
+    .await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "webhook-retry-user",
+            "session": "default",
+            "text": "seed"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "webhook-retry-user",
+            "target_url": sink_url,
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "webhook-retry-user",
+            "session": "default",
+            "text": "trigger retries"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let final_row = wait_for_webhook_delivery(&app, &webhook_id, true).await;
+    assert_eq!(final_row["event_type"], "head_advanced");
+    assert!(final_row["attempts"].as_u64().unwrap_or(0) >= 3);
+    assert!(attempts.load(Ordering::SeqCst) >= 3);
 }

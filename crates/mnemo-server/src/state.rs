@@ -5,7 +5,7 @@ use mnemo_graph::GraphEngine;
 use mnemo_llm::OpenAiCompatibleEmbedder;
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -42,6 +42,53 @@ pub struct MetadataPrefilterConfig {
     pub relax_if_empty: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryWebhookEventType {
+    FactAdded,
+    FactSuperseded,
+    HeadAdvanced,
+    ConflictDetected,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryWebhookSubscription {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub user_identifier: String,
+    pub target_url: String,
+    #[serde(skip_serializing)]
+    pub signing_secret: Option<String>,
+    pub events: Vec<MemoryWebhookEventType>,
+    pub enabled: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryWebhookEventRecord {
+    pub id: Uuid,
+    pub webhook_id: Uuid,
+    pub event_type: MemoryWebhookEventType,
+    pub user_id: Uuid,
+    pub payload: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub attempts: u32,
+    pub delivered: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivered_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub struct WebhookDeliveryConfig {
+    pub enabled: bool,
+    pub max_attempts: u32,
+    pub base_backoff_ms: u64,
+    pub request_timeout_ms: u64,
+}
+
 /// Shared application state passed to all Axum route handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -53,4 +100,8 @@ pub struct AppState {
     pub metadata_prefilter: MetadataPrefilterConfig,
     pub import_jobs: Arc<RwLock<HashMap<Uuid, ImportJobRecord>>>,
     pub import_idempotency: Arc<RwLock<HashMap<String, Uuid>>>,
+    pub memory_webhooks: Arc<RwLock<HashMap<Uuid, MemoryWebhookSubscription>>>,
+    pub memory_webhook_events: Arc<RwLock<HashMap<Uuid, Vec<MemoryWebhookEventRecord>>>>,
+    pub webhook_delivery: WebhookDeliveryConfig,
+    pub webhook_http: Arc<reqwest::Client>,
 }

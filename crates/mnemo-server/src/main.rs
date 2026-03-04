@@ -8,7 +8,7 @@ use tracing_subscriber::EnvFilter;
 use mnemo_server::config::MnemoConfig;
 use mnemo_server::middleware::{AuthConfig, AuthLayer};
 use mnemo_server::routes::build_router;
-use mnemo_server::state::{AppState, MetadataPrefilterConfig};
+use mnemo_server::state::{AppState, MetadataPrefilterConfig, WebhookDeliveryConfig};
 
 use mnemo_graph::GraphEngine;
 use mnemo_ingest::{IngestConfig, IngestWorker};
@@ -126,6 +126,15 @@ async fn main() -> anyhow::Result<()> {
         },
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        webhook_delivery: WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 3,
+            base_backoff_ms: 200,
+            request_timeout_ms: 3000,
+        },
+        webhook_http: Arc::new(reqwest::Client::new()),
     };
     let app = build_router(app_state)
         .layer(AuthLayer::new(auth_config))
