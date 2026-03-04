@@ -664,6 +664,206 @@ async fn test_memory_changes_since_rejects_invalid_window() {
 }
 
 #[tokio::test]
+async fn test_time_travel_trace_reports_fact_shift_and_timeline() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "trace-user",
+            "external_id": "trace-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = Uuid::parse_str(user["id"].as_str().unwrap()).unwrap();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "trace-session" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, e1) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Kendra preferred Adidas before February",
+            "created_at": "2025-01-10T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let episode_1 = Uuid::parse_str(e1["id"].as_str().unwrap()).unwrap();
+
+    let (status, e2) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Kendra now prefers Nike",
+            "created_at": "2025-03-10T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let episode_2 = Uuid::parse_str(e2["id"].as_str().unwrap()).unwrap();
+
+    let src = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Kendra".to_string(),
+                entity_type: EntityType::Person,
+                summary: None,
+            },
+            user_id,
+            episode_1,
+        ))
+        .await
+        .unwrap();
+    let adidas = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Adidas".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_1,
+        ))
+        .await
+        .unwrap();
+    let nike = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Nike".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_2,
+        ))
+        .await
+        .unwrap();
+
+    let jan = chrono::DateTime::parse_from_rfc3339("2025-01-10T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let feb = chrono::DateTime::parse_from_rfc3339("2025-02-20T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mar = chrono::DateTime::parse_from_rfc3339("2025-03-10T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+
+    let mut old_edge = state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Adidas".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Adidas".to_string(),
+                confidence: 0.85,
+                valid_at: Some(jan),
+            },
+            user_id,
+            src.id,
+            adidas.id,
+            episode_1,
+            jan,
+        ))
+        .await
+        .unwrap();
+    old_edge.invalid_at = Some(feb);
+    state_store.update_edge(&old_edge).await.unwrap();
+
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Nike".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Nike".to_string(),
+                confidence: 0.87,
+                valid_at: Some(mar),
+            },
+            user_id,
+            src.id,
+            nike.id,
+            episode_2,
+            mar,
+        ))
+        .await
+        .unwrap();
+
+    let (status, trace) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/trace-user/time_travel/trace",
+        serde_json::json!({
+            "query": "What does Kendra prefer?",
+            "session": "trace-session",
+            "from": "2025-02-01T00:00:00Z",
+            "to": "2025-04-01T00:00:00Z",
+            "contract": "historical_strict",
+            "retrieval_policy": "balanced",
+            "min_relevance": 0.0
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(trace["contract_applied"], "historical_strict");
+    assert_eq!(trace["retrieval_policy_applied"], "balanced");
+    assert!(!trace["timeline"].as_array().unwrap().is_empty());
+    assert!(trace["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["event_type"] == "fact_superseded"));
+    assert!(trace["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["event_type"] == "fact_added"));
+    assert!(trace["gained_facts"].as_array().unwrap().len() <= 8);
+}
+
+#[tokio::test]
+async fn test_time_travel_trace_rejects_invalid_window() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/nope/time_travel/trace",
+        serde_json::json!({
+            "query": "what changed",
+            "from": "2025-04-01T00:00:00Z",
+            "to": "2025-01-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_conflict_radar_detects_active_fact_conflict() {
     let (app, state_store) = build_test_harness_with_prefilter_and_webhooks(
         MetadataPrefilterConfig {

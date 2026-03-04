@@ -292,6 +292,82 @@ Explain why memory was retrieved by returning fact-to-episode lineage chains.
 }
 ```
 
+### `POST /api/v1/memory/:user/time_travel/trace`
+
+Trace how memory-backed answers evolve across a time window.
+
+```json
+// Request
+{
+  "query": "What does Kendra prefer?",
+  "from": "2025-02-01T00:00:00Z",
+  "to": "2025-04-01T00:00:00Z",
+  "session": "default",
+  "contract": "historical_strict",
+  "retrieval_policy": "balanced"
+}
+```
+
+```json
+// Response 200
+{
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "query": "What does Kendra prefer?",
+  "from": "2025-02-01T00:00:00Z",
+  "to": "2025-04-01T00:00:00Z",
+  "session": "default",
+  "contract_applied": "historical_strict",
+  "retrieval_policy_applied": "balanced",
+  "snapshot_from": {
+    "as_of": "2025-02-01T00:00:00Z",
+    "fact_count": 1,
+    "episode_count": 1
+  },
+  "snapshot_to": {
+    "as_of": "2025-04-01T00:00:00Z",
+    "fact_count": 1,
+    "episode_count": 2
+  },
+  "gained_facts": [
+    {
+      "id": "019513a4-9d3a-7000-8000-000000000777",
+      "source_entity": "Kendra",
+      "target_entity": "Nike",
+      "label": "prefers",
+      "fact": "Kendra prefers Nike",
+      "valid_at": "2025-03-10T00:00:00Z",
+      "invalid_at": null,
+      "relevance": 0.88
+    }
+  ],
+  "lost_facts": [
+    {
+      "id": "019513a4-9d3a-7000-8000-000000000666",
+      "source_entity": "Kendra",
+      "target_entity": "Adidas",
+      "label": "prefers",
+      "fact": "Kendra prefers Adidas",
+      "valid_at": "2025-01-10T00:00:00Z",
+      "invalid_at": "2025-02-20T00:00:00Z",
+      "relevance": 0.81
+    }
+  ],
+  "timeline": [
+    {
+      "at": "2025-02-20T00:00:00Z",
+      "event_type": "fact_superseded",
+      "description": "Superseded: Kendra prefers Adidas"
+    },
+    {
+      "at": "2025-03-10T00:00:00Z",
+      "event_type": "fact_added",
+      "description": "Kendra prefers Nike"
+    }
+  ],
+  "summary": "4 timeline events; 1 gained facts, 1 lost facts; 1 gained episodes, 0 lost episodes"
+}
+```
+
 ### `POST /api/v1/memory/webhooks`
 
 Register a per-user webhook subscription for memory lifecycle events.

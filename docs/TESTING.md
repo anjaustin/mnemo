@@ -53,6 +53,7 @@ It verifies:
 - memory diff checks (`/api/v1/memory/:user/changes_since`) for timeline windows and head movement
 - conflict radar checks (`/api/v1/memory/:user/conflict_radar`) for active contradiction cluster detection
 - causal recall chain checks (`/api/v1/memory/:user/causal_recall`) for fact-to-episode lineage output
+- time travel trace checks (`/api/v1/memory/:user/time_travel/trace`) for snapshot diffs and timeline evidence
 - memory contract checks (`support_safe`, `current_strict`, `historical_strict`) for policy-scoped context behavior
 - adaptive retrieval policy checks (`balanced`, `precision`, `recall`, `stability`) for effective threshold diagnostics
 - memory webhook checks (`/api/v1/memory/webhooks`) for event capture, delivery telemetry, retry/backoff, dead-letter transitions, stats endpoint, and signature correctness

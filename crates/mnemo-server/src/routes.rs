@@ -21,7 +21,7 @@ use mnemo_core::models::{
         PromotionProposal, PromotionStatus, UpdateAgentIdentityRequest,
     },
     context::{
-        estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary,
+        estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary, FactSummary,
         RetrievalSource, TemporalIntent,
     },
     edge::{Edge, EdgeFilter},
@@ -604,6 +604,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/memory/:user/causal_recall",
             post(causal_recall_chains),
         )
+        .route(
+            "/api/v1/memory/:user/time_travel/trace",
+            post(time_travel_trace),
+        )
         .route("/api/v1/memory/webhooks", post(register_memory_webhook))
         .route(
             "/api/v1/memory/webhooks/:id",
@@ -1066,6 +1070,67 @@ struct MemoryChangesSinceRequest {
     to: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     session: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimeTravelTraceRequest {
+    query: String,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
+    #[serde(default)]
+    min_relevance: Option<f32>,
+    #[serde(default)]
+    contract: Option<MemoryContract>,
+    #[serde(default)]
+    retrieval_policy: Option<AdaptiveRetrievalPolicy>,
+}
+
+#[derive(Debug, Serialize)]
+struct TimeTravelTraceResponse {
+    user_id: Uuid,
+    query: String,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
+    contract_applied: MemoryContract,
+    retrieval_policy_applied: AdaptiveRetrievalPolicy,
+    retrieval_policy_diagnostics: RetrievalPolicyDiagnostics,
+    snapshot_from: TimeTravelSnapshot,
+    snapshot_to: TimeTravelSnapshot,
+    gained_facts: Vec<FactSummary>,
+    lost_facts: Vec<FactSummary>,
+    gained_episodes: Vec<EpisodeSummary>,
+    lost_episodes: Vec<EpisodeSummary>,
+    timeline: Vec<TimeTravelTimelineEvent>,
+    summary: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TimeTravelSnapshot {
+    as_of: chrono::DateTime<chrono::Utc>,
+    token_count: u32,
+    fact_count: usize,
+    episode_count: usize,
+    top_facts: Vec<FactSummary>,
+    top_episodes: Vec<EpisodeSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct TimeTravelTimelineEvent {
+    at: chrono::DateTime<chrono::Utc>,
+    event_type: String,
+    description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    episode_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edge_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2019,6 +2084,359 @@ async fn memory_changes_since(
         confidence_deltas,
         head_changes,
         added_episodes,
+        summary,
+    }))
+}
+
+async fn time_travel_trace(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<TimeTravelTraceRequest>,
+) -> Result<Json<TimeTravelTraceResponse>, AppError> {
+    if req.query.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("query is required".into())));
+    }
+    if req.to <= req.from {
+        return Err(AppError(MnemoError::Validation(
+            "'to' must be after 'from'".to_string(),
+        )));
+    }
+
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let contract = req.contract.unwrap_or(MemoryContract::Default);
+    let retrieval_policy = req
+        .retrieval_policy
+        .unwrap_or(AdaptiveRetrievalPolicy::Balanced);
+    let requested_session_name = req
+        .session
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let scoped_session = resolve_session_scope(
+        &state,
+        user.id,
+        MemoryContextMode::Hybrid,
+        requested_session_name,
+    )
+    .await?;
+    let session_id = scoped_session.as_ref().map(|s| s.id);
+
+    let default_max_tokens = match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => 500,
+        AdaptiveRetrievalPolicy::Precision => 400,
+        AdaptiveRetrievalPolicy::Recall => 700,
+        AdaptiveRetrievalPolicy::Stability => 500,
+    };
+    let max_tokens = req.max_tokens.unwrap_or(default_max_tokens);
+
+    let base_temporal_intent = match contract {
+        MemoryContract::CurrentStrict => TemporalIntent::Current,
+        MemoryContract::HistoricalStrict => TemporalIntent::Historical,
+        _ => TemporalIntent::Historical,
+    };
+    let temporal_intent = if matches!(retrieval_policy, AdaptiveRetrievalPolicy::Stability)
+        && !matches!(contract, MemoryContract::HistoricalStrict)
+    {
+        TemporalIntent::Current
+    } else {
+        base_temporal_intent
+    };
+
+    let temporal_weight = match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => None,
+        AdaptiveRetrievalPolicy::Precision => Some(0.35),
+        AdaptiveRetrievalPolicy::Recall => Some(0.2),
+        AdaptiveRetrievalPolicy::Stability => Some(0.8),
+    };
+
+    let min_relevance = req.min_relevance.unwrap_or(match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => 0.3,
+        AdaptiveRetrievalPolicy::Precision => 0.55,
+        AdaptiveRetrievalPolicy::Recall => 0.15,
+        AdaptiveRetrievalPolicy::Stability => 0.4,
+    });
+
+    let make_context_req = |as_of: chrono::DateTime<chrono::Utc>| ContextRequest {
+        session_id,
+        messages: vec![ContextMessage {
+            role: "user".to_string(),
+            content: req.query.clone(),
+        }],
+        max_tokens,
+        search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
+        temporal_filter: Some(as_of),
+        as_of: Some(as_of),
+        time_intent: temporal_intent,
+        temporal_weight,
+        min_relevance,
+    };
+
+    let mut context_from = state
+        .retrieval
+        .get_context(user.id, &make_context_req(req.from))
+        .await?;
+    maybe_attach_recent_episode_fallback(
+        &state,
+        user.id,
+        session_id,
+        max_tokens,
+        temporal_intent,
+        Some(req.from),
+        &mut context_from,
+    )
+    .await?;
+    apply_memory_contract(&mut context_from, contract);
+
+    let mut context_to = state
+        .retrieval
+        .get_context(user.id, &make_context_req(req.to))
+        .await?;
+    maybe_attach_recent_episode_fallback(
+        &state,
+        user.id,
+        session_id,
+        max_tokens,
+        temporal_intent,
+        Some(req.to),
+        &mut context_to,
+    )
+    .await?;
+    apply_memory_contract(&mut context_to, contract);
+
+    let from_facts: HashMap<Uuid, FactSummary> = context_from
+        .facts
+        .iter()
+        .cloned()
+        .map(|f| (f.id, f))
+        .collect();
+    let to_facts: HashMap<Uuid, FactSummary> = context_to
+        .facts
+        .iter()
+        .cloned()
+        .map(|f| (f.id, f))
+        .collect();
+    let gained_facts: Vec<FactSummary> = to_facts
+        .iter()
+        .filter(|(id, _)| !from_facts.contains_key(id))
+        .map(|(_, fact)| fact.clone())
+        .collect();
+    let lost_facts: Vec<FactSummary> = from_facts
+        .iter()
+        .filter(|(id, _)| !to_facts.contains_key(id))
+        .map(|(_, fact)| fact.clone())
+        .collect();
+
+    let from_episodes: HashMap<Uuid, EpisodeSummary> = context_from
+        .episodes
+        .iter()
+        .cloned()
+        .map(|e| (e.id, e))
+        .collect();
+    let to_episodes: HashMap<Uuid, EpisodeSummary> = context_to
+        .episodes
+        .iter()
+        .cloned()
+        .map(|e| (e.id, e))
+        .collect();
+    let gained_episodes: Vec<EpisodeSummary> = to_episodes
+        .iter()
+        .filter(|(id, _)| !from_episodes.contains_key(id))
+        .map(|(_, episode)| episode.clone())
+        .collect();
+    let lost_episodes: Vec<EpisodeSummary> = from_episodes
+        .iter()
+        .filter(|(id, _)| !to_episodes.contains_key(id))
+        .map(|(_, episode)| episode.clone())
+        .collect();
+
+    let sessions = list_all_sessions_for_user(&state, user.id).await?;
+    let scoped_sessions: Vec<Session> = if let Some(session_scope) = req
+        .session
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        let matched: Vec<Session> = sessions
+            .iter()
+            .filter(|session| {
+                session.id.to_string() == session_scope
+                    || session
+                        .name
+                        .as_ref()
+                        .map(|n| n == &session_scope)
+                        .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        if matched.is_empty() {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "Session".into(),
+                id: session_scope,
+            }));
+        }
+        matched
+    } else {
+        sessions.clone()
+    };
+
+    let mut session_name_by_id: HashMap<Uuid, Option<String>> = HashMap::new();
+    let mut episode_session_by_id: HashMap<Uuid, Uuid> = HashMap::new();
+    let mut timeline: Vec<TimeTravelTimelineEvent> = Vec::new();
+    for session in &scoped_sessions {
+        session_name_by_id.insert(session.id, session.name.clone());
+        let episodes = list_all_episodes_for_session(&state, session.id).await?;
+        for episode in episodes {
+            episode_session_by_id.insert(episode.id, episode.session_id);
+            if episode.created_at > req.from && episode.created_at <= req.to {
+                timeline.push(TimeTravelTimelineEvent {
+                    at: episode.created_at,
+                    event_type: "episode_added".to_string(),
+                    description: format!(
+                        "Episode added in session '{}'",
+                        session.name.as_deref().unwrap_or("unknown")
+                    ),
+                    session_id: Some(session.id),
+                    episode_id: Some(episode.id),
+                    edge_id: None,
+                });
+            }
+        }
+
+        if let Some(at) = session.head_updated_at {
+            if at > req.from && at <= req.to {
+                timeline.push(TimeTravelTimelineEvent {
+                    at,
+                    event_type: "head_advanced".to_string(),
+                    description: format!(
+                        "Session '{}' head moved to version {}",
+                        session.name.as_deref().unwrap_or("unknown"),
+                        session.head_version
+                    ),
+                    session_id: Some(session.id),
+                    episode_id: session.head_episode_id,
+                    edge_id: None,
+                });
+            }
+        }
+    }
+
+    let edges = state
+        .state_store
+        .query_edges(
+            user.id,
+            EdgeFilter {
+                include_invalidated: true,
+                limit: 10_000,
+                ..EdgeFilter::default()
+            },
+        )
+        .await?;
+    let entities = list_all_entities_for_user(&state, user.id).await?;
+    let entity_name_by_id: HashMap<Uuid, String> =
+        entities.into_iter().map(|e| (e.id, e.name)).collect();
+
+    let in_scope_edge = |edge: &Edge| {
+        if req.session.is_none() {
+            return true;
+        }
+        episode_session_by_id
+            .get(&edge.source_episode_id)
+            .map(|sid| session_name_by_id.contains_key(sid))
+            .unwrap_or(false)
+    };
+
+    for edge in &edges {
+        if !in_scope_edge(edge) {
+            continue;
+        }
+        let source_entity = entity_name_by_id
+            .get(&edge.source_entity_id)
+            .cloned()
+            .unwrap_or_else(|| edge.source_entity_id.to_string());
+        let target_entity = entity_name_by_id
+            .get(&edge.target_entity_id)
+            .cloned()
+            .unwrap_or_else(|| edge.target_entity_id.to_string());
+
+        if edge.valid_at > req.from && edge.valid_at <= req.to {
+            timeline.push(TimeTravelTimelineEvent {
+                at: edge.valid_at,
+                event_type: "fact_added".to_string(),
+                description: format!("{} {} {}", source_entity, edge.label, target_entity),
+                session_id: episode_session_by_id.get(&edge.source_episode_id).copied(),
+                episode_id: Some(edge.source_episode_id),
+                edge_id: Some(edge.id),
+            });
+        }
+        if let Some(invalid_at) = edge.invalid_at {
+            if invalid_at > req.from && invalid_at <= req.to {
+                timeline.push(TimeTravelTimelineEvent {
+                    at: invalid_at,
+                    event_type: "fact_superseded".to_string(),
+                    description: format!(
+                        "Superseded: {} {} {}",
+                        source_entity, edge.label, target_entity
+                    ),
+                    session_id: episode_session_by_id.get(&edge.source_episode_id).copied(),
+                    episode_id: Some(edge.source_episode_id),
+                    edge_id: Some(edge.id),
+                });
+            }
+        }
+    }
+
+    timeline.sort_by(|a, b| {
+        a.at.cmp(&b.at)
+            .then_with(|| a.event_type.cmp(&b.event_type))
+    });
+
+    let snapshot_from = TimeTravelSnapshot {
+        as_of: req.from,
+        token_count: context_from.token_count,
+        fact_count: context_from.facts.len(),
+        episode_count: context_from.episodes.len(),
+        top_facts: context_from.facts.iter().take(8).cloned().collect(),
+        top_episodes: context_from.episodes.iter().take(8).cloned().collect(),
+    };
+    let snapshot_to = TimeTravelSnapshot {
+        as_of: req.to,
+        token_count: context_to.token_count,
+        fact_count: context_to.facts.len(),
+        episode_count: context_to.episodes.len(),
+        top_facts: context_to.facts.iter().take(8).cloned().collect(),
+        top_episodes: context_to.episodes.iter().take(8).cloned().collect(),
+    };
+
+    let summary = format!(
+        "{} timeline events; {} gained facts, {} lost facts; {} gained episodes, {} lost episodes",
+        timeline.len(),
+        gained_facts.len(),
+        lost_facts.len(),
+        gained_episodes.len(),
+        lost_episodes.len()
+    );
+
+    Ok(Json(TimeTravelTraceResponse {
+        user_id: user.id,
+        query: req.query,
+        from: req.from,
+        to: req.to,
+        session: req.session,
+        contract_applied: contract,
+        retrieval_policy_applied: retrieval_policy,
+        retrieval_policy_diagnostics: RetrievalPolicyDiagnostics {
+            effective_max_tokens: max_tokens,
+            effective_min_relevance: min_relevance,
+            effective_temporal_intent: temporal_intent,
+            effective_temporal_weight: temporal_weight,
+        },
+        snapshot_from,
+        snapshot_to,
+        gained_facts,
+        lost_facts,
+        gained_episodes,
+        lost_episodes,
+        timeline,
         summary,
     }))
 }

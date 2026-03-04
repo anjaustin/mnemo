@@ -39,6 +39,7 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - **Identity-aware Context** - Balances stable identity with recent experience signals.
 - **Chat History Importer** - Migrates existing histories with async jobs, dry-run validation, and idempotent replay protection.
 - **Memory Lifecycle Webhooks** - Emits `head_advanced`, `fact_added`, `fact_superseded`, and `conflict_detected` events with retry/backoff delivery and optional HMAC signatures.
+- **Time Travel Trace** - Compares memory snapshots across two points in time and returns timeline-level "why it changed" evidence.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
@@ -155,6 +156,11 @@ curl -X POST http://localhost:8080/api/v1/memory/kendra/conflict_radar \
 curl -X POST http://localhost:8080/api/v1/memory/kendra/causal_recall \
   -H "Content-Type: application/json" \
   -d '{"query":"What does Kendra prefer?"}'
+
+# Trace why an answer changed over time
+curl -X POST http://localhost:8080/api/v1/memory/kendra/time_travel/trace \
+  -H "Content-Type: application/json" \
+  -d '{"query":"What does Kendra prefer?","from":"2025-02-01T00:00:00Z","to":"2025-04-01T00:00:00Z","contract":"historical_strict"}'
 
 # Register a webhook for memory lifecycle events
 curl -X POST http://localhost:8080/api/v1/memory/webhooks \
