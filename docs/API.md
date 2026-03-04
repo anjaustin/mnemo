@@ -441,6 +441,7 @@ Query params:
         "head_episode_id": "019513a4-9d3a-7000-8000-000000000003"
       },
       "created_at": "2026-03-03T12:01:00Z",
+      "request_id": "req_01hxy...",
       "attempts": 1,
       "delivered": true,
       "dead_letter": false,

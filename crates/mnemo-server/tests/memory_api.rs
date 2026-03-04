@@ -163,6 +163,33 @@ async fn json_request(
     (status, parsed)
 }
 
+async fn json_request_with_header(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    header_name: &str,
+    header_value: &str,
+    payload: Value,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header(header_name, header_value)
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed = if body.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_slice::<Value>(&body).unwrap()
+    };
+    (status, parsed)
+}
+
 async fn wait_for_import_job(app: &axum::Router, job_id: &str) -> Value {
     for _ in 0..80 {
         let (status, job) = json_request(
@@ -2726,10 +2753,13 @@ async fn test_memory_webhooks_capture_head_advanced_event_after_remember() {
     assert_eq!(status, StatusCode::CREATED);
     let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
 
-    let (status, _) = json_request(
+    let req_id = "trace-head-req-001";
+    let (status, _) = json_request_with_header(
         &app,
         "POST",
         "/api/v1/memory",
+        REQUEST_ID_HEADER,
+        req_id,
         serde_json::json!({
             "user": "webhook-head-user",
             "session": "default",
@@ -2743,6 +2773,7 @@ async fn test_memory_webhooks_capture_head_advanced_event_after_remember() {
     assert_eq!(row["event_type"], "head_advanced");
     assert!(row["delivered"].as_bool().unwrap_or(false));
     assert!(row["attempts"].as_u64().unwrap_or(0) >= 1);
+    assert_eq!(row["request_id"], req_id);
 
     let captured = {
         let rows = deliveries.lock().await;
@@ -2759,6 +2790,12 @@ async fn test_memory_webhooks_capture_head_advanced_event_after_remember() {
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
+    let delivered_req_id = headers
+        .get(REQUEST_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(delivered_req_id, req_id);
     let expected = compute_expected_signature(signing_secret, &timestamp, &body);
     assert_eq!(signature, expected);
 }

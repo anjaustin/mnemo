@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - P0 Ops Control Plane PRD (`docs/P0_OPS_CONTROL_PLANE_PRD.md`) with scope, rollout, and falsification gates.
 - Prometheus-compatible metrics endpoint (`/metrics`) for HTTP/webhook delivery telemetry.
 - Request correlation propagation with `x-mnemo-request-id` response header support.
+- Webhook event and audit records now retain originating request IDs for end-to-end trace joins.
 
 ### Changed
 

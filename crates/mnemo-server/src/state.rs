@@ -78,6 +78,8 @@ pub struct MemoryWebhookEventRecord {
     pub delivered: bool,
     pub dead_letter: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delivered_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
@@ -88,6 +90,8 @@ pub struct MemoryWebhookAuditRecord {
     pub id: Uuid,
     pub webhook_id: Uuid,
     pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub details: serde_json::Value,
     pub at: chrono::DateTime<chrono::Utc>,
 }

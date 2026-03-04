@@ -66,6 +66,7 @@ Mnemo includes these headers on outbound webhook requests:
 - `x-mnemo-delivery-id`
 - `x-mnemo-event-type`
 - `x-mnemo-timestamp`
+- `x-mnemo-request-id` (when source request had correlation id)
 - `x-mnemo-signature` (only when `signing_secret` is configured)
 
 Signature format:
