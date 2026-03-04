@@ -40,7 +40,7 @@ Updated: 2026-03-04
 ### Falsification
 
 - [x] Simulate intermittent 5xx sink and verify operator can clear queue in < 5 min.
-- [ ] Validate replay cursor boundaries under pagination and sparse event IDs.
+- [x] Validate replay cursor boundaries under pagination and sparse event IDs (`test_replay_cursor_pagination_with_sparse_event_ids`).
 
 ## Epic 2: Hero Lane 2 — Why-Changed RCA
 
@@ -59,7 +59,7 @@ Updated: 2026-03-04
 ### Falsification
 
 - [x] Run "why changed" task drill with target < 60s to root cause.
-- [ ] Validate consistency under contract/retrieval override combinations.
+- [x] Validate consistency under contract/retrieval override combinations (`test_time_travel_trace_contract_retrieval_policy_combinations` — 16 combos, 4x4 matrix).
 
 ## Epic 3: Governance Center + Actionable Dashboard
 

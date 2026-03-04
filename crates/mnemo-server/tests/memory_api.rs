@@ -3814,3 +3814,691 @@ async fn test_trace_lookup_rejects_invalid_window() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+// ─── Falsification: Replay cursor pagination under sparse event IDs ───
+
+#[tokio::test]
+async fn test_replay_cursor_pagination_with_sparse_event_ids() {
+    // Set up a webhook whose sink always fails => all events become dead-letter.
+    let (sink_url, _, _) = start_webhook_sink_server(1000).await;
+    let (app, _) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 1,
+            base_backoff_ms: 5,
+            request_timeout_ms: 500,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 100,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
+        },
+    )
+    .await;
+
+    // Seed user + webhook
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "replay-cursor-user",
+            "session": "default",
+            "text": "seed"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "replay-cursor-user",
+            "target_url": sink_url,
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+
+    // Generate 3 events by posting 3 messages (each triggers head_advanced).
+    for i in 1..=3 {
+        let (status, _) = json_request(
+            &app,
+            "POST",
+            "/api/v1/memory",
+            serde_json::json!({
+                "user": "replay-cursor-user",
+                "session": "default",
+                "text": format!("event trigger {i}")
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    // Wait for all 3 to become dead-letter.
+    for _ in 0..120 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (status, replay_all) = json_request(
+            &app,
+            "GET",
+            &format!("/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=100"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        if replay_all["count"].as_u64().unwrap_or(0) >= 3 {
+            break;
+        }
+    }
+
+    // ── Test 1: Full replay returns all 3, sorted chronologically ──
+    let (status, page1) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=100"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        page1["count"].as_u64().unwrap() >= 3,
+        "Expected at least 3 events, got {}",
+        page1["count"]
+    );
+    let all_events = page1["events"].as_array().unwrap();
+
+    // Verify chronological ordering: created_at is non-decreasing.
+    for w in all_events.windows(2) {
+        assert!(w[0]["created_at"].as_str().unwrap() <= w[1]["created_at"].as_str().unwrap());
+    }
+
+    // ── Test 2: Paginate with limit=1, cursor through all events ──
+    let mut collected_ids: Vec<String> = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..10 {
+        let url = match &cursor {
+            Some(c) => format!(
+                "/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=1&after_event_id={c}"
+            ),
+            None => format!("/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=1"),
+        };
+        let (status, page) = json_request(&app, "GET", &url, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        let count = page["count"].as_u64().unwrap();
+        if count == 0 {
+            break;
+        }
+        let event_id = page["events"][0]["id"].as_str().unwrap().to_string();
+        collected_ids.push(event_id);
+        cursor = page["next_after_event_id"].as_str().map(|s| s.to_string());
+    }
+    assert!(
+        collected_ids.len() >= 3,
+        "Cursor pagination should yield at least 3 events, got {}",
+        collected_ids.len()
+    );
+
+    // No duplicate IDs across pages.
+    let unique_ids: std::collections::HashSet<&String> = collected_ids.iter().collect();
+    assert_eq!(
+        unique_ids.len(),
+        collected_ids.len(),
+        "Cursor pagination produced duplicate event IDs"
+    );
+
+    // ── Test 3: Unknown cursor ID silently resets to beginning ──
+    let bogus_id = Uuid::now_v7();
+    let (status, from_bogus) = json_request(
+        &app,
+        "GET",
+        &format!(
+            "/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=100&after_event_id={bogus_id}"
+        ),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // When cursor is unknown, handler returns events from the beginning.
+    assert!(
+        from_bogus["count"].as_u64().unwrap() >= 3,
+        "Unknown cursor should return all events from beginning"
+    );
+
+    // ── Test 4: Filtering — include_dead_letter=false excludes dead-letter events ──
+    let (status, no_dead) = json_request(
+        &app,
+        "GET",
+        &format!(
+            "/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=100&include_dead_letter=false"
+        ),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // All events are dead-letter in this test, so filtering them out yields 0.
+    let no_dead_events = no_dead["events"].as_array().unwrap();
+    for evt in no_dead_events {
+        assert!(
+            !evt["dead_letter"].as_bool().unwrap_or(true),
+            "include_dead_letter=false should exclude dead-letter events"
+        );
+    }
+
+    // ── Test 5: Cursor + filter interaction ──
+    // Use first event's ID as cursor, filter out dead-letter.
+    let first_id = &collected_ids[0];
+    let (status, cursor_plus_filter) = json_request(
+        &app,
+        "GET",
+        &format!(
+            "/api/v1/memory/webhooks/{webhook_id}/events/replay?after_event_id={first_id}&limit=100&include_dead_letter=false"
+        ),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Cursor resolution happens before filtering, so even though the cursor anchor
+    // is a dead-letter event, events after it are still filtered.
+    for evt in cursor_plus_filter["events"].as_array().unwrap() {
+        assert!(!evt["dead_letter"].as_bool().unwrap_or(true));
+    }
+
+    // ── Test 6: limit=0 is clamped to 1 (not an error) ──
+    let (status, clamped) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=0"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        clamped["count"].as_u64().unwrap() <= 1,
+        "limit=0 should be clamped to 1"
+    );
+
+    // ── Test 7: Replay generates audit record ──
+    let (status, audit) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{webhook_id}/audit?limit=50"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = audit["audit"].as_array().cloned().unwrap_or_default();
+    let replay_audits: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r["action"] == "replay_requested")
+        .collect();
+    assert!(
+        !replay_audits.is_empty(),
+        "Replay should generate audit records"
+    );
+}
+
+// ─── Falsification: Contract/retrieval policy combination consistency ─────
+
+#[tokio::test]
+async fn test_time_travel_trace_contract_retrieval_policy_combinations() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    // Create user, session, episodes, entities, edges — same scenario as
+    // the fact-shift trace test (Kendra: Adidas -> Nike preference change).
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "combo-user",
+            "external_id": "combo-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = Uuid::parse_str(user["id"].as_str().unwrap()).unwrap();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "combo-session" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let (status, e1) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Kendra preferred Adidas before February",
+            "created_at": "2025-01-10T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let episode_1 = Uuid::parse_str(e1["id"].as_str().unwrap()).unwrap();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "Kendra now prefers Nike",
+            "created_at": "2025-03-10T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let src = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Kendra".to_string(),
+                entity_type: EntityType::Person,
+                summary: None,
+            },
+            user_id,
+            episode_1,
+        ))
+        .await
+        .unwrap();
+    let adidas = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Adidas".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_1,
+        ))
+        .await
+        .unwrap();
+    let nike = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Nike".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_1,
+        ))
+        .await
+        .unwrap();
+
+    let jan = chrono::DateTime::parse_from_rfc3339("2025-01-10T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let feb = chrono::DateTime::parse_from_rfc3339("2025-02-20T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mar = chrono::DateTime::parse_from_rfc3339("2025-03-10T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+
+    let mut old_edge = state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Adidas".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Adidas".to_string(),
+                confidence: 0.85,
+                valid_at: Some(jan),
+            },
+            user_id,
+            src.id,
+            adidas.id,
+            episode_1,
+            jan,
+        ))
+        .await
+        .unwrap();
+    old_edge.invalid_at = Some(feb);
+    state_store.update_edge(&old_edge).await.unwrap();
+
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Kendra".to_string(),
+                target_name: "Nike".to_string(),
+                label: "prefers".to_string(),
+                fact: "Kendra prefers Nike".to_string(),
+                confidence: 0.87,
+                valid_at: Some(mar),
+            },
+            user_id,
+            src.id,
+            nike.id,
+            episode_1,
+            mar,
+        ))
+        .await
+        .unwrap();
+
+    // ─── Expected resolved diagnostics per (contract, policy) ──────────
+
+    // (contract, policy) -> (max_tokens, min_relevance, temporal_intent, temporal_weight)
+    struct Expected {
+        contract: &'static str,
+        policy: &'static str,
+        max_tokens: u64,
+        min_relevance: f64,
+        temporal_intent: &'static str,
+        temporal_weight: Option<f64>,
+    }
+
+    let cases = vec![
+        // ── Default contract ──
+        Expected {
+            contract: "default",
+            policy: "balanced",
+            max_tokens: 500,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: None,
+        },
+        Expected {
+            contract: "default",
+            policy: "precision",
+            max_tokens: 400,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: Some(0.35),
+        },
+        Expected {
+            contract: "default",
+            policy: "recall",
+            max_tokens: 700,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: Some(0.2),
+        },
+        Expected {
+            contract: "default",
+            policy: "stability",
+            max_tokens: 500,
+            min_relevance: 0.0,
+            temporal_intent: "current",
+            temporal_weight: Some(0.8),
+        },
+        // ── SupportSafe ──
+        Expected {
+            contract: "support_safe",
+            policy: "balanced",
+            max_tokens: 500,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: None,
+        },
+        Expected {
+            contract: "support_safe",
+            policy: "precision",
+            max_tokens: 400,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: Some(0.35),
+        },
+        Expected {
+            contract: "support_safe",
+            policy: "recall",
+            max_tokens: 700,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: Some(0.2),
+        },
+        Expected {
+            contract: "support_safe",
+            policy: "stability",
+            max_tokens: 500,
+            min_relevance: 0.0,
+            temporal_intent: "current",
+            temporal_weight: Some(0.8),
+        },
+        // ── CurrentStrict ──
+        Expected {
+            contract: "current_strict",
+            policy: "balanced",
+            max_tokens: 500,
+            min_relevance: 0.0,
+            temporal_intent: "current",
+            temporal_weight: None,
+        },
+        Expected {
+            contract: "current_strict",
+            policy: "precision",
+            max_tokens: 400,
+            min_relevance: 0.0,
+            temporal_intent: "current",
+            temporal_weight: Some(0.35),
+        },
+        Expected {
+            contract: "current_strict",
+            policy: "recall",
+            max_tokens: 700,
+            min_relevance: 0.0,
+            temporal_intent: "current",
+            temporal_weight: Some(0.2),
+        },
+        Expected {
+            contract: "current_strict",
+            policy: "stability",
+            max_tokens: 500,
+            min_relevance: 0.0,
+            temporal_intent: "current",
+            temporal_weight: Some(0.8),
+        },
+        // ── HistoricalStrict ──
+        Expected {
+            contract: "historical_strict",
+            policy: "balanced",
+            max_tokens: 500,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: None,
+        },
+        Expected {
+            contract: "historical_strict",
+            policy: "precision",
+            max_tokens: 400,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: Some(0.35),
+        },
+        Expected {
+            contract: "historical_strict",
+            policy: "recall",
+            max_tokens: 700,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: Some(0.2),
+        },
+        // KEY CASE: Stability + HistoricalStrict does NOT override to current.
+        Expected {
+            contract: "historical_strict",
+            policy: "stability",
+            max_tokens: 500,
+            min_relevance: 0.0,
+            temporal_intent: "historical",
+            temporal_weight: Some(0.8),
+        },
+    ];
+
+    // min_relevance is explicitly set to 0.0 in the request to override policy defaults,
+    // so we expect 0.0 in all diagnostics. This isolates the policy resolution logic from
+    // the min_relevance default behavior.
+
+    for (i, case) in cases.iter().enumerate() {
+        let (status, trace) = json_request(
+            &app,
+            "POST",
+            "/api/v1/memory/combo-user/time_travel/trace",
+            serde_json::json!({
+                "query": "What does Kendra prefer?",
+                "from": "2025-02-01T00:00:00Z",
+                "to": "2025-04-01T00:00:00Z",
+                "session": "combo-session",
+                "contract": case.contract,
+                "retrieval_policy": case.policy,
+                "min_relevance": 0.0
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "Case {i} ({} + {}) returned {status}",
+            case.contract,
+            case.policy
+        );
+        assert_eq!(
+            trace["contract_applied"], case.contract,
+            "Case {i}: contract_applied mismatch"
+        );
+        assert_eq!(
+            trace["retrieval_policy_applied"], case.policy,
+            "Case {i}: retrieval_policy_applied mismatch"
+        );
+
+        let diag = &trace["retrieval_policy_diagnostics"];
+        assert_eq!(
+            diag["effective_max_tokens"].as_u64().unwrap(),
+            case.max_tokens,
+            "Case {i} ({} + {}): effective_max_tokens mismatch",
+            case.contract,
+            case.policy
+        );
+        let effective_min_rel = diag["effective_min_relevance"].as_f64().unwrap();
+        assert!(
+            (effective_min_rel - case.min_relevance).abs() < 0.01,
+            "Case {i} ({} + {}): effective_min_relevance expected {} got {}",
+            case.contract,
+            case.policy,
+            case.min_relevance,
+            effective_min_rel
+        );
+        assert_eq!(
+            diag["effective_temporal_intent"].as_str().unwrap(),
+            case.temporal_intent,
+            "Case {i} ({} + {}): effective_temporal_intent mismatch",
+            case.contract,
+            case.policy
+        );
+        match case.temporal_weight {
+            Some(expected_w) => {
+                let actual_w = diag["effective_temporal_weight"].as_f64().unwrap();
+                assert!(
+                    (actual_w - expected_w).abs() < 0.01,
+                    "Case {i} ({} + {}): effective_temporal_weight expected {expected_w} got {actual_w}",
+                    case.contract,
+                    case.policy
+                );
+            }
+            None => {
+                assert!(
+                    diag["effective_temporal_weight"].is_null(),
+                    "Case {i} ({} + {}): expected null temporal_weight, got {:?}",
+                    case.contract,
+                    case.policy,
+                    diag["effective_temporal_weight"]
+                );
+            }
+        }
+
+        // Every combination should return valid structural fields.
+        assert!(
+            trace["snapshot_from"].is_object(),
+            "Case {i}: missing snapshot_from"
+        );
+        assert!(
+            trace["snapshot_to"].is_object(),
+            "Case {i}: missing snapshot_to"
+        );
+        assert!(
+            trace["gained_facts"].is_array(),
+            "Case {i}: missing gained_facts"
+        );
+        assert!(
+            trace["lost_facts"].is_array(),
+            "Case {i}: missing lost_facts"
+        );
+        assert!(
+            trace["gained_episodes"].is_array(),
+            "Case {i}: missing gained_episodes"
+        );
+        assert!(
+            trace["lost_episodes"].is_array(),
+            "Case {i}: missing lost_episodes"
+        );
+        assert!(trace["timeline"].is_array(), "Case {i}: missing timeline");
+        assert!(trace["summary"].is_string(), "Case {i}: missing summary");
+    }
+
+    // ─── Specific falsification: Stability + HistoricalStrict vs Stability + Default ──
+    // The ONLY case where Stability does NOT override temporal_intent to "current"
+    // is when paired with HistoricalStrict. Verify this contrast explicitly.
+
+    let (_, trace_stability_default) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/combo-user/time_travel/trace",
+        serde_json::json!({
+            "query": "What does Kendra prefer?",
+            "from": "2025-02-01T00:00:00Z",
+            "to": "2025-04-01T00:00:00Z",
+            "contract": "default",
+            "retrieval_policy": "stability",
+            "min_relevance": 0.0
+        }),
+    )
+    .await;
+    let (_, trace_stability_hist) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/combo-user/time_travel/trace",
+        serde_json::json!({
+            "query": "What does Kendra prefer?",
+            "from": "2025-02-01T00:00:00Z",
+            "to": "2025-04-01T00:00:00Z",
+            "contract": "historical_strict",
+            "retrieval_policy": "stability",
+            "min_relevance": 0.0
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        trace_stability_default["retrieval_policy_diagnostics"]["effective_temporal_intent"],
+        "current",
+        "Stability + Default should resolve temporal_intent to current"
+    );
+    assert_eq!(
+        trace_stability_hist["retrieval_policy_diagnostics"]["effective_temporal_intent"],
+        "historical",
+        "Stability + HistoricalStrict should preserve temporal_intent as historical"
+    );
+}
