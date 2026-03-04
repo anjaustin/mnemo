@@ -268,6 +268,25 @@ fn retention_days_for_episode_type(policy: &UserPolicyRecord, episode_type: Epis
     }
 }
 
+fn retention_cutoff(
+    policy: &UserPolicyRecord,
+    episode_type: EpisodeType,
+) -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+        - chrono::Duration::days(retention_days_for_episode_type(policy, episode_type) as i64)
+}
+
+fn is_episode_within_retention(policy: &UserPolicyRecord, episode: &Episode) -> bool {
+    episode.created_at >= retention_cutoff(policy, episode.episode_type)
+}
+
+fn is_episode_summary_within_retention(
+    policy: &UserPolicyRecord,
+    episode: &EpisodeSummary,
+) -> bool {
+    episode.created_at >= retention_cutoff(policy, EpisodeType::Message)
+}
+
 fn validate_episode_retention(
     policy: &UserPolicyRecord,
     req: &CreateEpisodeRequest,
@@ -1248,9 +1267,9 @@ async fn get_user_policy(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
 ) -> Result<Json<UserPolicyResponse>, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
-    let policy =
-        get_or_create_user_policy(&state, user.id, user_identifier.trim().to_string()).await;
+    let user_identifier_trimmed = user_identifier.trim().to_string();
+    let user = find_user_by_identifier(&state, user_identifier_trimmed.as_str()).await?;
+    let policy = get_or_create_user_policy(&state, user.id, user_identifier_trimmed).await;
     Ok(Json(UserPolicyResponse { policy }))
 }
 
@@ -2418,9 +2437,11 @@ async fn get_import_job(
 
 async fn get_memory_context(
     State(state): State<AppState>,
+    ctx: Option<Extension<RequestContext>>,
     Path(user): Path<String>,
     Json(req): Json<MemoryContextRequest>,
 ) -> Result<Json<MemoryContextResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
@@ -2440,6 +2461,24 @@ async fn get_memory_context(
     let retrieval_policy = req
         .retrieval_policy
         .unwrap_or_else(|| parse_retrieval_policy_default(&policy.default_retrieval_policy));
+
+    if req.contract.is_some() || req.retrieval_policy.is_some() {
+        append_governance_audit(
+            &state,
+            user.id,
+            "policy_override_memory_context",
+            request_id,
+            serde_json::json!({
+                "requested_contract": req.contract,
+                "requested_retrieval_policy": req.retrieval_policy,
+                "effective_contract": contract,
+                "effective_retrieval_policy": retrieval_policy,
+                "default_contract": policy.default_memory_contract,
+                "default_retrieval_policy": policy.default_retrieval_policy
+            }),
+        )
+        .await;
+    }
     if matches!(contract, MemoryContract::HistoricalStrict) && req.as_of.is_none() {
         return Err(AppError(MnemoError::Validation(
             "historical_strict contract requires as_of".into(),
@@ -2589,6 +2628,9 @@ async fn get_memory_context(
     }
 
     apply_memory_contract(&mut context, contract);
+    context
+        .episodes
+        .retain(|episode| is_episode_summary_within_retention(&policy, episode));
 
     let head = scoped_session.as_ref().map(|session| MemoryHeadInfo {
         session_id: session.id,
@@ -2626,7 +2668,9 @@ async fn memory_changes_since(
         )));
     }
 
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let user_identifier_trimmed = user_identifier.trim().to_string();
+    let user = find_user_by_identifier(&state, user_identifier_trimmed.as_str()).await?;
+    let policy = get_or_create_user_policy(&state, user.id, user_identifier_trimmed).await;
     let sessions = list_all_sessions_for_user(&state, user.id).await?;
 
     let scoped_sessions: Vec<Session> = if let Some(session_scope) = req
@@ -2670,6 +2714,9 @@ async fn memory_changes_since(
         for episode in episodes {
             episode_session_by_id.insert(episode.id, episode.session_id);
             if episode.created_at > req.from && episode.created_at <= req.to {
+                if !is_episode_within_retention(&policy, &episode) {
+                    continue;
+                }
                 added_episodes.push(EpisodeChange {
                     episode_id: episode.id,
                     session_id: episode.session_id,
@@ -2868,9 +2915,11 @@ async fn memory_changes_since(
 
 async fn time_travel_trace(
     State(state): State<AppState>,
+    ctx: Option<Extension<RequestContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<TimeTravelTraceRequest>,
 ) -> Result<Json<TimeTravelTraceResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
@@ -2889,6 +2938,23 @@ async fn time_travel_trace(
     let retrieval_policy = req
         .retrieval_policy
         .unwrap_or_else(|| parse_retrieval_policy_default(&policy.default_retrieval_policy));
+    if req.contract.is_some() || req.retrieval_policy.is_some() {
+        append_governance_audit(
+            &state,
+            user.id,
+            "policy_override_time_travel",
+            request_id,
+            serde_json::json!({
+                "requested_contract": req.contract,
+                "requested_retrieval_policy": req.retrieval_policy,
+                "effective_contract": contract,
+                "effective_retrieval_policy": retrieval_policy,
+                "default_contract": policy.default_memory_contract,
+                "default_retrieval_policy": policy.default_retrieval_policy
+            }),
+        )
+        .await;
+    }
     let requested_session_name = req
         .session
         .as_ref()
@@ -2968,6 +3034,9 @@ async fn time_travel_trace(
     )
     .await?;
     apply_memory_contract(&mut context_from, contract);
+    context_from
+        .episodes
+        .retain(|episode| is_episode_summary_within_retention(&policy, episode));
 
     let mut context_to = state
         .retrieval
@@ -2984,6 +3053,9 @@ async fn time_travel_trace(
     )
     .await?;
     apply_memory_contract(&mut context_to, contract);
+    context_to
+        .episodes
+        .retain(|episode| is_episode_summary_within_retention(&policy, episode));
 
     let from_facts: HashMap<Uuid, FactSummary> = context_from
         .facts
@@ -3024,11 +3096,13 @@ async fn time_travel_trace(
         .iter()
         .filter(|(id, _)| !from_episodes.contains_key(id))
         .map(|(_, episode)| episode.clone())
+        .filter(|episode| is_episode_summary_within_retention(&policy, episode))
         .collect();
     let lost_episodes: Vec<EpisodeSummary> = from_episodes
         .iter()
         .filter(|(id, _)| !to_episodes.contains_key(id))
         .map(|(_, episode)| episode.clone())
+        .filter(|episode| is_episode_summary_within_retention(&policy, episode))
         .collect();
 
     let sessions = list_all_sessions_for_user(&state, user.id).await?;
@@ -3064,6 +3138,7 @@ async fn time_travel_trace(
     let mut session_name_by_id: HashMap<Uuid, Option<String>> = HashMap::new();
     let mut episode_session_by_id: HashMap<Uuid, Uuid> = HashMap::new();
     let mut episode_request_id_by_id: HashMap<Uuid, Option<String>> = HashMap::new();
+    let mut episode_retained_by_id: HashMap<Uuid, bool> = HashMap::new();
     let mut timeline: Vec<TimeTravelTimelineEvent> = Vec::new();
     for session in &scoped_sessions {
         session_name_by_id.insert(session.id, session.name.clone());
@@ -3074,7 +3149,12 @@ async fn time_travel_trace(
                 episode.id,
                 extract_request_id_from_metadata(&episode.metadata),
             );
+            episode_retained_by_id
+                .insert(episode.id, is_episode_within_retention(&policy, &episode));
             if episode.created_at > req.from && episode.created_at <= req.to {
+                if !is_episode_within_retention(&policy, &episode) {
+                    continue;
+                }
                 timeline.push(TimeTravelTimelineEvent {
                     at: episode.created_at,
                     event_type: "episode_added".to_string(),
@@ -3092,6 +3172,15 @@ async fn time_travel_trace(
 
         if let Some(at) = session.head_updated_at {
             if at > req.from && at <= req.to {
+                if let Some(head_episode_id) = session.head_episode_id {
+                    if !episode_retained_by_id
+                        .get(&head_episode_id)
+                        .copied()
+                        .unwrap_or(true)
+                    {
+                        continue;
+                    }
+                }
                 timeline.push(TimeTravelTimelineEvent {
                     at,
                     event_type: "head_advanced".to_string(),
@@ -3150,6 +3239,13 @@ async fn time_travel_trace(
             .unwrap_or_else(|| edge.target_entity_id.to_string());
 
         if edge.valid_at > req.from && edge.valid_at <= req.to {
+            if !episode_retained_by_id
+                .get(&edge.source_episode_id)
+                .copied()
+                .unwrap_or(true)
+            {
+                continue;
+            }
             timeline.push(TimeTravelTimelineEvent {
                 at: edge.valid_at,
                 event_type: "fact_added".to_string(),
@@ -3165,6 +3261,13 @@ async fn time_travel_trace(
         }
         if let Some(invalid_at) = edge.invalid_at {
             if invalid_at > req.from && invalid_at <= req.to {
+                if !episode_retained_by_id
+                    .get(&edge.source_episode_id)
+                    .copied()
+                    .unwrap_or(true)
+                {
+                    continue;
+                }
                 timeline.push(TimeTravelTimelineEvent {
                     at: invalid_at,
                     event_type: "fact_superseded".to_string(),
