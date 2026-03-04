@@ -38,6 +38,7 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - **Thread HEAD + Metadata Planner** - Improves relevance with deterministic head selection and metadata prefilter controls.
 - **Identity-aware Context** - Balances stable identity with recent experience signals.
 - **Chat History Importer** - Migrates existing histories with async jobs, dry-run validation, and idempotent replay protection.
+- **Memory Lifecycle Webhooks** - Emits `head_advanced`, `fact_added`, `fact_superseded`, and `conflict_detected` events with retry/backoff delivery and optional HMAC signatures.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
@@ -135,6 +136,19 @@ curl -X POST http://localhost:8080/api/v1/memory/kendra/conflict_radar \
 curl -X POST http://localhost:8080/api/v1/memory/kendra/causal_recall \
   -H "Content-Type: application/json" \
   -d '{"query":"What does Kendra prefer?"}'
+
+# Register a webhook for memory lifecycle events
+curl -X POST http://localhost:8080/api/v1/memory/webhooks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user":"kendra",
+    "target_url":"https://example.com/hooks/memory",
+    "signing_secret":"whsec_demo",
+    "events":["head_advanced","conflict_detected"]
+  }'
+
+# Inspect retained event delivery status
+curl http://localhost:8080/api/v1/memory/webhooks/WEBHOOK_ID/events?limit=10
 ```
 
 ### Full workflow: Users, Sessions, Episodes
@@ -225,6 +239,16 @@ Client query
   -> token-budgeted context assembled for the agent prompt
 ```
 
+### Event Path
+
+```text
+Memory lifecycle event
+  -> webhook subscription match (user + event_type)
+  -> async outbound POST to target_url
+  -> exponential retry/backoff on non-2xx
+  -> delivery telemetry retained in /api/v1/memory/webhooks/:id/events
+```
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full deep dive.
 
 ## How Temporal Memory Works
@@ -301,6 +325,7 @@ curl -X POST http://localhost:8080/api/v1/memory/kendra/context \
 | [Evaluation Playbook](docs/EVALUATION.md) | Reproducible temporal quality and latency measurements |
 | [Competitive Plan](docs/COMPETITIVE.md) | Cross-system benchmark methodology and scorecard |
 | [Chat Import Guide](docs/IMPORTING_CHAT_HISTORY.md) | Import formats, idempotency, dry run, and migration examples |
+| [Webhook Delivery Guide](docs/WEBHOOKS.md) | Event types, retry semantics, and signature verification examples |
 | [Domain Readiness Matrix](docs/DOMAIN_READINESS_MATRIX.md) | Domain-by-domain readiness and 30/60/90 roadmap |
 | [Agent Identity Substrate](docs/AGENT_IDENTITY_SUBSTRATE.md) | Implemented P0 design for stable identity + adaptive experience |
 | [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
@@ -320,9 +345,20 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_LLM_PROVIDER` | `openai`, `anthropic`, `ollama`, `liquid` | `openai` |
 | `MNEMO_LLM_MODEL` | Model for extraction | `gpt-4o-mini` |
 | `MNEMO_EMBEDDING_API_KEY` | Embedding API key | (none) |
+| `MNEMO_AUTH_ENABLED` | Require API key auth (`true`/`false`) | `false` |
+| `MNEMO_AUTH_API_KEYS` | Comma-separated accepted API keys | (none) |
 | `MNEMO_REDIS_URL` | Redis connection | `redis://localhost:6379` |
 | `MNEMO_QDRANT_URL` | Qdrant connection | `http://localhost:6334` |
+| `MNEMO_METADATA_PREFILTER_ENABLED` | Enable metadata prefilter planner | `true` |
+| `MNEMO_METADATA_SCAN_LIMIT` | Candidate scan limit for prefilter planner | `400` |
+| `MNEMO_METADATA_RELAX_IF_EMPTY` | Relax strict metadata filters when empty | `false` |
 | `MNEMO_SERVER_PORT` | Server port | `8080` |
+
+Webhook outbound delivery defaults are currently runtime defaults in `crates/mnemo-server/src/main.rs`:
+
+- `max_attempts=3`
+- `base_backoff_ms=200`
+- `request_timeout_ms=3000`
 
 ## Project Status
 

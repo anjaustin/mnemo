@@ -86,18 +86,18 @@ Expected output format:
 
 ## Latest local snapshot
 
-From a local run on 2026-03-02 (`python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080`):
+From a local run on 2026-03-03 (`python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080`):
 
 | Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
 |---|---:|---:|---:|---:|
-| temporal | 100.0% | 0.0% | 84 | 84 |
-| baseline | 66.7% | 33.3% | 80 | 80 |
+| temporal | 100.0% | 0.0% | 103 | 103 |
+| baseline | 66.7% | 33.3% | 71 | 71 |
 
 Interpretation: temporal controls improved correctness and reduced stale recall in this dataset with a small latency tradeoff.
 
 ## Latest scientific pack snapshot
 
-From local runs on 2026-03-02:
+From local runs on 2026-03-03:
 
 `python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases.json --mnemo-base-url http://localhost:8080`
 
@@ -114,8 +114,8 @@ From local runs on 2026-03-02:
 
 | Profile | Accuracy | Stale Fact Rate | p50 Latency (ms) | p95 Latency (ms) |
 |---|---:|---:|---:|---:|
-| temporal | 100.0% | 0.0% | 78 | 106 |
-| baseline | 50.0% | 40.0% | 75 | 105 |
+| temporal | 100.0% | 0.0% | 84 | 102 |
+| baseline | 50.0% | 40.0% | 75 | 107 |
 
 Interpretation: v2 raises difficulty with denser contradiction and synthesis cases. Temporal retrieval still materially outperforms baseline. During falsification, we identified and fixed one scorer false-positive in v2 expectation tokens (substring overlap between `2.5 uM` and `5 uM`), then reran the pack.
 
@@ -160,10 +160,11 @@ From a full local sweep on 2026-03-03:
 
 Observed outcomes:
 
-- workspace and integration suites passed (`memory_api`: 23/23, `ingest`: 3/3, `storage`: 6/6)
+- workspace and integration suites passed (`memory_api`: 36/36, `ingest`: 3/3, `storage`: 6/6)
 - memory API soak loop passed 3/3 consecutive runs
 - deterministic smoke passed (9/9 checks)
 - scientific v2 remained stable (`temporal` 100% accuracy, 0% stale; `baseline` 50% accuracy, 40% stale)
+- webhook delivery falsification passed (signature verification, retry/backoff recovery, and conflict event capture)
 - importer stress remained green with no row failures:
   - dry-run: 8945 messages, 1414 ms, 6326.03 msgs/sec
   - import: 8945 messages, 9820 ms, 910.90 msgs/sec

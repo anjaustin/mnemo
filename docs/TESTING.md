@@ -13,7 +13,7 @@ cargo test --workspace
 Assumes the server is already running on `http://localhost:8080`.
 
 ```bash
-./tests/e2e_smoke.sh
+bash tests/e2e_smoke.sh http://localhost:8080
 ```
 
 This smoke test is designed to pass without external LLM credentials.
@@ -55,6 +55,7 @@ It verifies:
 - causal recall chain checks (`/api/v1/memory/:user/causal_recall`) for fact-to-episode lineage output
 - memory contract checks (`support_safe`, `current_strict`, `historical_strict`) for policy-scoped context behavior
 - adaptive retrieval policy checks (`balanced`, `precision`, `recall`, `stability`) for effective threshold diagnostics
+- memory webhook checks (`/api/v1/memory/webhooks`) for event capture, delivery telemetry, retry/backoff, and signature correctness
 
 ## 5) Importer stress harness (large real-world export)
 

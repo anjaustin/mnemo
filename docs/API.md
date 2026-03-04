@@ -310,6 +310,7 @@ Register a per-user webhook subscription for memory lifecycle events.
 - `events` is optional; defaults to all event types: `fact_added`, `fact_superseded`, `head_advanced`, `conflict_detected`.
 - `signing_secret` is optional; when present, Mnemo signs each delivery using HMAC-SHA256 and sends `x-mnemo-signature` as `t=<unix>,v1=<hex>` over `"<timestamp>.<raw_body>"`.
 - Deliveries use retry with exponential backoff (default 3 attempts).
+- See `docs/WEBHOOKS.md` for signature verification snippets and delivery semantics.
 
 ```json
 // Response 201

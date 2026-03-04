@@ -11,14 +11,14 @@ Primary references:
 
 ## Executive Snapshot
 
-Latest local snapshots (2026-03-02):
+Latest local snapshots (2026-03-03):
 
 | Dataset | System | Profile | Accuracy | Stale Fact Rate | Errors | p50 (ms) | p95 (ms) |
 |---|---|---|---:|---:|---:|---:|---:|
-| `temporal_cases.json` | mnemo | temporal | 100.0% | 0.0% | 0 | 106 | 106 |
-| `temporal_cases.json` | mnemo | baseline | 66.7% | 33.3% | 0 | 81 | 81 |
-| `scientific_research_cases_v2.json` | mnemo | temporal | 100.0% | 0.0% | 0 | 78 | 106 |
-| `scientific_research_cases_v2.json` | mnemo | baseline | 50.0% | 40.0% | 0 | 75 | 105 |
+| `temporal_cases.json` | mnemo | temporal | 100.0% | 0.0% | 0 | 103 | 103 |
+| `temporal_cases.json` | mnemo | baseline | 66.7% | 33.3% | 0 | 71 | 71 |
+| `scientific_research_cases_v2.json` | mnemo | temporal | 100.0% | 0.0% | 0 | 84 | 102 |
+| `scientific_research_cases_v2.json` | mnemo | baseline | 50.0% | 40.0% | 0 | 75 | 107 |
 
 Takeaways:
 

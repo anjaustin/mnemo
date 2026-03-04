@@ -10,11 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Release automation workflow for version tags (`.github/workflows/release.yml`).
 - GHCR package publication workflow (`.github/workflows/package-ghcr.yml`).
+- Memory webhook API (`/api/v1/memory/webhooks`) with retained delivery event telemetry.
+- Outbound webhook delivery pipeline with exponential retry/backoff and optional HMAC signatures (`x-mnemo-signature`).
 
 ### Changed
 
 - Workspace repository metadata now points to the canonical repository URL.
 - Added `.dockerignore` to reduce container build context and improve image build consistency.
+- README and evaluation/testing docs now reflect current quick-win memory APIs and latest falsification/benchmark snapshots.
 
 ## [0.1.0] — 2026-03-01
 
