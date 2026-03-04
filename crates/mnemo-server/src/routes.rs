@@ -9,7 +9,9 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use hmac::{Hmac, Mac};
+use redis::AsyncCommands;
 use sha2::Sha256;
+use tracing::warn;
 
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
@@ -37,7 +39,7 @@ use mnemo_core::traits::storage::{
 
 use crate::state::{
     AppState, ImportJobRecord, ImportJobStatus, MemoryWebhookEventRecord, MemoryWebhookEventType,
-    MemoryWebhookSubscription,
+    MemoryWebhookSubscription, WebhookRuntimeState,
 };
 
 // ─── Error handling ────────────────────────────────────────────────
@@ -121,14 +123,162 @@ fn is_http_url(value: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
+fn webhook_subscriptions_key(state: &AppState) -> String {
+    format!("{}:subscriptions", state.webhook_redis_prefix)
+}
+
+fn webhook_events_key(state: &AppState) -> String {
+    format!("{}:events", state.webhook_redis_prefix)
+}
+
+pub async fn restore_webhook_state(state: &AppState) -> Result<(), MnemoError> {
+    if !state.webhook_delivery.persistence_enabled {
+        return Ok(());
+    }
+    let Some(mut conn) = state.webhook_redis.clone() else {
+        return Ok(());
+    };
+
+    let subscriptions_raw: Option<String> = conn
+        .get(webhook_subscriptions_key(state))
+        .await
+        .map_err(|err| MnemoError::Redis(err.to_string()))?;
+    let events_raw: Option<String> = conn
+        .get(webhook_events_key(state))
+        .await
+        .map_err(|err| MnemoError::Redis(err.to_string()))?;
+
+    if let Some(json) = subscriptions_raw {
+        let parsed: HashMap<Uuid, MemoryWebhookSubscription> = serde_json::from_str(&json)
+            .map_err(|err| MnemoError::Serialization(err.to_string()))?;
+        let mut hooks = state.memory_webhooks.write().await;
+        *hooks = parsed;
+    }
+    if let Some(json) = events_raw {
+        let parsed: HashMap<Uuid, Vec<MemoryWebhookEventRecord>> = serde_json::from_str(&json)
+            .map_err(|err| MnemoError::Serialization(err.to_string()))?;
+        let mut events = state.memory_webhook_events.write().await;
+        *events = parsed;
+    }
+
+    Ok(())
+}
+
+async fn persist_webhook_state(state: &AppState) {
+    if !state.webhook_delivery.persistence_enabled {
+        return;
+    }
+    let Some(mut conn) = state.webhook_redis.clone() else {
+        return;
+    };
+
+    let hooks_snapshot = {
+        let hooks = state.memory_webhooks.read().await;
+        hooks.clone()
+    };
+    let events_snapshot = {
+        let events = state.memory_webhook_events.read().await;
+        events.clone()
+    };
+
+    let hooks_json = match serde_json::to_string(&hooks_snapshot) {
+        Ok(json) => json,
+        Err(err) => {
+            warn!(error = %err, "failed to serialize webhook subscriptions for persistence");
+            return;
+        }
+    };
+    let events_json = match serde_json::to_string(&events_snapshot) {
+        Ok(json) => json,
+        Err(err) => {
+            warn!(error = %err, "failed to serialize webhook events for persistence");
+            return;
+        }
+    };
+
+    if let Err(err) = redis::cmd("SET")
+        .arg(webhook_subscriptions_key(state))
+        .arg(hooks_json)
+        .exec_async(&mut conn)
+        .await
+    {
+        warn!(error = %err, "failed to persist webhook subscriptions");
+    }
+
+    if let Err(err) = redis::cmd("SET")
+        .arg(webhook_events_key(state))
+        .arg(events_json)
+        .exec_async(&mut conn)
+        .await
+    {
+        warn!(error = %err, "failed to persist webhook events");
+    }
+}
+
+async fn check_webhook_rate_and_circuit(state: &AppState, webhook_id: Uuid) -> Result<(), String> {
+    let now = chrono::Utc::now();
+    let mut runtime = state.webhook_runtime.write().await;
+    let row = runtime.entry(webhook_id).or_insert(WebhookRuntimeState {
+        window_started_at: now,
+        sent_in_window: 0,
+        consecutive_failures: 0,
+        circuit_open_until: None,
+    });
+
+    if let Some(open_until) = row.circuit_open_until {
+        if now < open_until {
+            return Err(format!("circuit open until {open_until}"));
+        }
+        row.circuit_open_until = None;
+    }
+
+    if (now - row.window_started_at).num_seconds() >= 60 {
+        row.window_started_at = now;
+        row.sent_in_window = 0;
+    }
+
+    if row.sent_in_window >= state.webhook_delivery.rate_limit_per_minute.max(1) {
+        return Err("rate limit exceeded for current minute window".to_string());
+    }
+
+    row.sent_in_window += 1;
+    Ok(())
+}
+
+async fn record_webhook_delivery_success(state: &AppState, webhook_id: Uuid) {
+    let mut runtime = state.webhook_runtime.write().await;
+    if let Some(row) = runtime.get_mut(&webhook_id) {
+        row.consecutive_failures = 0;
+        row.circuit_open_until = None;
+    }
+}
+
+async fn record_webhook_delivery_failure(state: &AppState, webhook_id: Uuid) {
+    let now = chrono::Utc::now();
+    let mut runtime = state.webhook_runtime.write().await;
+    let row = runtime.entry(webhook_id).or_insert(WebhookRuntimeState {
+        window_started_at: now,
+        sent_in_window: 0,
+        consecutive_failures: 0,
+        circuit_open_until: None,
+    });
+    row.consecutive_failures = row.consecutive_failures.saturating_add(1);
+    if row.consecutive_failures >= state.webhook_delivery.circuit_breaker_threshold.max(1) {
+        row.circuit_open_until = Some(
+            now + chrono::Duration::milliseconds(
+                state.webhook_delivery.circuit_breaker_cooldown_ms as i64,
+            ),
+        );
+        row.consecutive_failures = 0;
+    }
+}
+
 async fn emit_memory_webhook_event(
     state: &AppState,
     user_id: Uuid,
     event_type: MemoryWebhookEventType,
     payload: serde_json::Value,
 ) {
-    const MAX_EVENTS_PER_WEBHOOK: usize = 1000;
-
     let subscribed_hooks: Vec<MemoryWebhookSubscription> = {
         let hooks = state.memory_webhooks.read().await;
         hooks
@@ -157,18 +307,22 @@ async fn emit_memory_webhook_event(
             created_at: now,
             attempts: 0,
             delivered: false,
+            dead_letter: false,
             delivered_at: None,
             last_error: None,
         };
         let event_id = row.id;
         let rows = event_map.entry(webhook.id).or_default();
         rows.push(row);
-        if rows.len() > MAX_EVENTS_PER_WEBHOOK {
-            let overflow = rows.len() - MAX_EVENTS_PER_WEBHOOK;
+        let max_events = state.webhook_delivery.max_events_per_webhook.max(1);
+        if rows.len() > max_events {
+            let overflow = rows.len() - max_events;
             rows.drain(0..overflow);
         }
         queued_deliveries.push((webhook.id, event_id));
     }
+
+    persist_webhook_state(state).await;
 
     if !state.webhook_delivery.enabled {
         return;
@@ -202,6 +356,10 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
         return;
     };
 
+    if event.delivered {
+        return;
+    }
+
     let body = serde_json::json!({
         "event_id": event.id,
         "event_type": event.event_type,
@@ -219,9 +377,12 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                 event_id,
                 1,
                 false,
+                true,
                 Some(format!("serialize failure: {err}")),
             )
             .await;
+            record_webhook_delivery_failure(&state, webhook_id).await;
+            persist_webhook_state(&state).await;
             return;
         }
     };
@@ -230,6 +391,34 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
     let timeout = Duration::from_millis(state.webhook_delivery.request_timeout_ms.max(1));
 
     for attempt in 1..=max_attempts {
+        if let Err(err) = check_webhook_rate_and_circuit(&state, webhook_id).await {
+            let dead_letter = attempt >= max_attempts;
+            update_webhook_delivery_status(
+                &state,
+                webhook_id,
+                event_id,
+                attempt,
+                false,
+                dead_letter,
+                Some(err),
+            )
+            .await;
+            record_webhook_delivery_failure(&state, webhook_id).await;
+            if dead_letter {
+                persist_webhook_state(&state).await;
+                return;
+            }
+            let shift = (attempt - 1).min(10);
+            let factor = 1u64 << shift;
+            let delay_ms = state
+                .webhook_delivery
+                .base_backoff_ms
+                .saturating_mul(factor)
+                .max(1);
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            continue;
+        }
+
         let timestamp = chrono::Utc::now().timestamp().to_string();
         let signature_header = webhook
             .signing_secret
@@ -255,21 +444,32 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
 
         match request.send().await {
             Ok(response) if response.status().is_success() => {
-                update_webhook_delivery_status(&state, webhook_id, event_id, attempt, true, None)
-                    .await;
+                update_webhook_delivery_status(
+                    &state, webhook_id, event_id, attempt, true, false, None,
+                )
+                .await;
+                record_webhook_delivery_success(&state, webhook_id).await;
+                persist_webhook_state(&state).await;
                 return;
             }
             Ok(response) => {
                 let err = format!("http status {}", response.status());
+                let dead_letter = attempt >= max_attempts;
                 update_webhook_delivery_status(
                     &state,
                     webhook_id,
                     event_id,
                     attempt,
                     false,
+                    dead_letter,
                     Some(err.clone()),
                 )
                 .await;
+                record_webhook_delivery_failure(&state, webhook_id).await;
+                if dead_letter {
+                    persist_webhook_state(&state).await;
+                    return;
+                }
                 if attempt < max_attempts {
                     let shift = (attempt - 1).min(10);
                     let factor = 1u64 << shift;
@@ -282,15 +482,22 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                 }
             }
             Err(err) => {
+                let dead_letter = attempt >= max_attempts;
                 update_webhook_delivery_status(
                     &state,
                     webhook_id,
                     event_id,
                     attempt,
                     false,
+                    dead_letter,
                     Some(err.to_string()),
                 )
                 .await;
+                record_webhook_delivery_failure(&state, webhook_id).await;
+                if dead_letter {
+                    persist_webhook_state(&state).await;
+                    return;
+                }
                 if attempt < max_attempts {
                     let shift = (attempt - 1).min(10);
                     let factor = 1u64 << shift;
@@ -304,6 +511,8 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
             }
         }
     }
+
+    persist_webhook_state(&state).await;
 }
 
 fn build_webhook_signature(secret: &str, timestamp: &str, body: &str) -> String {
@@ -322,6 +531,7 @@ async fn update_webhook_delivery_status(
     event_id: Uuid,
     attempts: u32,
     delivered: bool,
+    dead_letter: bool,
     error: Option<String>,
 ) {
     let mut events = state.memory_webhook_events.write().await;
@@ -330,9 +540,11 @@ async fn update_webhook_delivery_status(
             event.attempts = attempts;
             if delivered {
                 event.delivered = true;
+                event.dead_letter = false;
                 event.delivered_at = Some(chrono::Utc::now());
                 event.last_error = None;
             } else {
+                event.dead_letter = dead_letter;
                 event.last_error = error;
             }
         }
@@ -400,6 +612,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/memory/webhooks/:id/events",
             get(list_memory_webhook_events),
+        )
+        .route(
+            "/api/v1/memory/webhooks/:id/events/dead-letter",
+            get(list_memory_webhook_dead_letters),
+        )
+        .route(
+            "/api/v1/memory/webhooks/:id/stats",
+            get(get_memory_webhook_stats),
         )
         // Import API
         .route("/api/v1/import/chat-history", post(import_chat_history))
@@ -818,6 +1038,26 @@ struct ListWebhookEventsResponse {
     webhook_id: Uuid,
     count: usize,
     events: Vec<MemoryWebhookEventRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookStatsQuery {
+    #[serde(default)]
+    window_seconds: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct WebhookStatsResponse {
+    webhook_id: Uuid,
+    total_events: usize,
+    delivered_events: usize,
+    pending_events: usize,
+    dead_letter_events: usize,
+    failed_events: usize,
+    recent_failures: usize,
+    circuit_open: bool,
+    circuit_open_until: Option<chrono::DateTime<chrono::Utc>>,
+    rate_limit_per_minute: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2153,6 +2393,7 @@ async fn register_memory_webhook(
         let mut hooks = state.memory_webhooks.write().await;
         hooks.insert(webhook.id, webhook.clone());
     }
+    persist_webhook_state(&state).await;
 
     Ok((
         StatusCode::CREATED,
@@ -2186,6 +2427,11 @@ async fn delete_memory_webhook(
         let mut events = state.memory_webhook_events.write().await;
         events.remove(&id);
     }
+    {
+        let mut runtime = state.webhook_runtime.write().await;
+        runtime.remove(&id);
+    }
+    persist_webhook_state(&state).await;
     Ok(Json(DeleteMemoryWebhookResponse { deleted: removed }))
 }
 
@@ -2220,6 +2466,101 @@ async fn list_memory_webhook_events(
         webhook_id: id,
         count: events.len(),
         events,
+    }))
+}
+
+async fn list_memory_webhook_dead_letters(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ListWebhookEventsQuery>,
+) -> Result<Json<ListWebhookEventsResponse>, AppError> {
+    {
+        let hooks = state.memory_webhooks.read().await;
+        if !hooks.contains_key(&id) {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: id.to_string(),
+            }));
+        }
+    }
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000) as usize;
+    let mut events = {
+        let event_map = state.memory_webhook_events.read().await;
+        event_map.get(&id).cloned().unwrap_or_default()
+    };
+
+    events.retain(|event| event.dead_letter);
+    if let Some(event_type) = query.event_type {
+        events.retain(|event| event.event_type == event_type);
+    }
+    events.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    events.truncate(limit);
+
+    Ok(Json(ListWebhookEventsResponse {
+        webhook_id: id,
+        count: events.len(),
+        events,
+    }))
+}
+
+async fn get_memory_webhook_stats(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<WebhookStatsQuery>,
+) -> Result<Json<WebhookStatsResponse>, AppError> {
+    {
+        let hooks = state.memory_webhooks.read().await;
+        if !hooks.contains_key(&id) {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: id.to_string(),
+            }));
+        }
+    }
+
+    let window_seconds = query.window_seconds.unwrap_or(300).clamp(1, 86_400) as i64;
+    let window_start = chrono::Utc::now() - chrono::Duration::seconds(window_seconds);
+    let events = {
+        let event_map = state.memory_webhook_events.read().await;
+        event_map.get(&id).cloned().unwrap_or_default()
+    };
+    let runtime = {
+        let runtime_map = state.webhook_runtime.read().await;
+        runtime_map.get(&id).cloned()
+    };
+
+    let total_events = events.len();
+    let delivered_events = events.iter().filter(|e| e.delivered).count();
+    let dead_letter_events = events.iter().filter(|e| e.dead_letter).count();
+    let pending_events = events
+        .iter()
+        .filter(|e| !e.delivered && !e.dead_letter)
+        .count();
+    let failed_events = events
+        .iter()
+        .filter(|e| !e.delivered && e.last_error.is_some())
+        .count();
+    let recent_failures = events
+        .iter()
+        .filter(|e| e.created_at >= window_start)
+        .filter(|e| !e.delivered && e.last_error.is_some())
+        .count();
+
+    let circuit_open_until = runtime.and_then(|row| row.circuit_open_until);
+    let circuit_open = circuit_open_until.is_some_and(|until| chrono::Utc::now() < until);
+
+    Ok(Json(WebhookStatsResponse {
+        webhook_id: id,
+        total_events,
+        delivered_events,
+        pending_events,
+        dead_letter_events,
+        failed_events,
+        recent_failures,
+        circuit_open,
+        circuit_open_until,
+        rate_limit_per_minute: state.webhook_delivery.rate_limit_per_minute,
     }))
 }
 

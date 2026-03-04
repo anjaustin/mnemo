@@ -7,7 +7,7 @@ use tracing_subscriber::EnvFilter;
 
 use mnemo_server::config::MnemoConfig;
 use mnemo_server::middleware::{AuthConfig, AuthLayer};
-use mnemo_server::routes::build_router;
+use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{AppState, MetadataPrefilterConfig, WebhookDeliveryConfig};
 
 use mnemo_graph::GraphEngine;
@@ -114,6 +114,24 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // HTTP server
+    let webhook_redis = if config.webhooks.persistence_enabled {
+        match redis::Client::open(config.redis.url.as_str()) {
+            Ok(client) => match redis::aio::ConnectionManager::new(client).await {
+                Ok(conn) => Some(conn),
+                Err(err) => {
+                    tracing::warn!(error = %err, "webhook persistence disabled: redis connection failed");
+                    None
+                }
+            },
+            Err(err) => {
+                tracing::warn!(error = %err, "webhook persistence disabled: redis client init failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let app_state = AppState {
         state_store,
         vector_store,
@@ -128,14 +146,30 @@ async fn main() -> anyhow::Result<()> {
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_delivery: WebhookDeliveryConfig {
-            enabled: true,
-            max_attempts: 3,
-            base_backoff_ms: 200,
-            request_timeout_ms: 3000,
+            enabled: config.webhooks.enabled,
+            max_attempts: config.webhooks.max_attempts,
+            base_backoff_ms: config.webhooks.base_backoff_ms,
+            request_timeout_ms: config.webhooks.request_timeout_ms,
+            max_events_per_webhook: config.webhooks.max_events_per_webhook,
+            rate_limit_per_minute: config.webhooks.rate_limit_per_minute,
+            circuit_breaker_threshold: config.webhooks.circuit_breaker_threshold,
+            circuit_breaker_cooldown_ms: config.webhooks.circuit_breaker_cooldown_ms,
+            persistence_enabled: config.webhooks.persistence_enabled,
         },
         webhook_http: Arc::new(reqwest::Client::new()),
+        webhook_redis,
+        webhook_redis_prefix: format!(
+            "{}:{}",
+            config.redis.prefix, config.webhooks.persistence_prefix
+        ),
     };
+
+    if let Err(err) = restore_webhook_state(&app_state).await {
+        tracing::warn!(error = %err, "failed to restore persisted webhook state");
+    }
+
     let app = build_router(app_state)
         .layer(AuthLayer::new(auth_config))
         .layer(TraceLayer::new_for_http())

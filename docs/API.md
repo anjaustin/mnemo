@@ -355,11 +355,20 @@ Query params:
       "created_at": "2026-03-03T12:01:00Z",
       "attempts": 1,
       "delivered": true,
+      "dead_letter": false,
       "delivered_at": "2026-03-03T12:01:00Z"
     }
   ]
 }
 ```
+
+### `GET /api/v1/memory/webhooks/:id/events/dead-letter`
+
+List only dead-lettered events (events that exhausted retries without a successful delivery).
+
+### `GET /api/v1/memory/webhooks/:id/stats`
+
+Get webhook delivery telemetry counters (pending, delivered, dead-letter, recent failures, circuit state).
 
 ### `GET /api/v1/memory/webhooks/:id`
 

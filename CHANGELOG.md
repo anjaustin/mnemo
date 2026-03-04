@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Webhook operational endpoints: dead-letter event listing and delivery stats (`/api/v1/memory/webhooks/:id/events/dead-letter`, `/api/v1/memory/webhooks/:id/stats`).
+
+### Changed
+
+- Webhook delivery now supports dead-letter marking, per-webhook rate limiting, and circuit breaker cooldown behavior.
+- Webhook subscriptions and delivery event rows are now persisted to Redis and restored on server startup.
+
 ## [0.2.0] — 2026-03-03
 
 ### Added

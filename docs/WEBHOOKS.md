@@ -19,19 +19,33 @@ If `events` is omitted during registration, Mnemo subscribes the webhook to all 
 
 - Delivery is asynchronous after an event is recorded.
 - Mnemo retries non-2xx responses with exponential backoff.
+- Webhook subscriptions and event rows are persisted in Redis and restored at startup.
 - Default runtime delivery settings:
   - `max_attempts=3`
   - `base_backoff_ms=200`
   - `request_timeout_ms=3000`
+  - `rate_limit_per_minute=120`
+  - `circuit_breaker_threshold=5`
+  - `circuit_breaker_cooldown_ms=60000`
 - Delivery telemetry is retained in-memory and queryable via:
   - `GET /api/v1/memory/webhooks/:id/events`
+  - `GET /api/v1/memory/webhooks/:id/events/dead-letter`
+  - `GET /api/v1/memory/webhooks/:id/stats`
 
 Each event record includes:
 
 - `attempts`
 - `delivered`
+- `dead_letter`
 - `delivered_at` (if successful)
 - `last_error` (if most recent attempt failed)
+
+## Delivery guarantees
+
+- Delivery is at-least-once.
+- A failed event is marked `dead_letter=true` after `max_attempts`.
+- Per-webhook rate limiting protects downstream endpoints.
+- Circuit breaker opens after repeated failures and pauses sends during cooldown.
 
 ## Outbound headers
 

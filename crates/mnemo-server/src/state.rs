@@ -51,7 +51,7 @@ pub enum MemoryWebhookEventType {
     ConflictDetected,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryWebhookSubscription {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -65,7 +65,7 @@ pub struct MemoryWebhookSubscription {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryWebhookEventRecord {
     pub id: Uuid,
     pub webhook_id: Uuid,
@@ -75,6 +75,7 @@ pub struct MemoryWebhookEventRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub attempts: u32,
     pub delivered: bool,
+    pub dead_letter: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivered_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +88,19 @@ pub struct WebhookDeliveryConfig {
     pub max_attempts: u32,
     pub base_backoff_ms: u64,
     pub request_timeout_ms: u64,
+    pub max_events_per_webhook: usize,
+    pub rate_limit_per_minute: u32,
+    pub circuit_breaker_threshold: u32,
+    pub circuit_breaker_cooldown_ms: u64,
+    pub persistence_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct WebhookRuntimeState {
+    pub window_started_at: chrono::DateTime<chrono::Utc>,
+    pub sent_in_window: u32,
+    pub consecutive_failures: u32,
+    pub circuit_open_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Shared application state passed to all Axum route handlers.
@@ -102,6 +116,9 @@ pub struct AppState {
     pub import_idempotency: Arc<RwLock<HashMap<String, Uuid>>>,
     pub memory_webhooks: Arc<RwLock<HashMap<Uuid, MemoryWebhookSubscription>>>,
     pub memory_webhook_events: Arc<RwLock<HashMap<Uuid, Vec<MemoryWebhookEventRecord>>>>,
+    pub webhook_runtime: Arc<RwLock<HashMap<Uuid, WebhookRuntimeState>>>,
     pub webhook_delivery: WebhookDeliveryConfig,
     pub webhook_http: Arc<reqwest::Client>,
+    pub webhook_redis: Option<redis::aio::ConnectionManager>,
+    pub webhook_redis_prefix: String,
 }

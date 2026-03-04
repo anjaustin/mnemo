@@ -50,6 +50,11 @@ async fn build_test_harness_with_prefilter(
             max_attempts: 3,
             base_backoff_ms: 20,
             request_timeout_ms: 150,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
         },
     )
     .await
@@ -115,8 +120,11 @@ async fn build_test_harness_with_prefilter_and_webhooks(
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_delivery,
         webhook_http: Arc::new(reqwest::Client::new()),
+        webhook_redis: None,
+        webhook_redis_prefix: "mnemo_test:webhooks".to_string(),
     });
 
     (app, state_store.clone())
@@ -272,6 +280,24 @@ async fn wait_for_webhook_event(app: &axum::Router, webhook_id: &str) -> Value {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     panic!("webhook event was not recorded");
+}
+
+async fn wait_for_dead_letter_event(app: &axum::Router, webhook_id: &str) -> Value {
+    for _ in 0..80 {
+        let (status, body) = json_request(
+            app,
+            "GET",
+            &format!("/api/v1/memory/webhooks/{webhook_id}/events/dead-letter?limit=1"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        if body["count"].as_u64().unwrap_or(0) > 0 {
+            return body["events"][0].clone();
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("webhook event was not dead-lettered");
 }
 
 #[tokio::test]
@@ -650,6 +676,11 @@ async fn test_conflict_radar_detects_active_fact_conflict() {
             max_attempts: 5,
             base_backoff_ms: 10,
             request_timeout_ms: 500,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
         },
     )
     .await;
@@ -2400,6 +2431,11 @@ async fn test_memory_webhooks_capture_head_advanced_event_after_remember() {
             max_attempts: 3,
             base_backoff_ms: 10,
             request_timeout_ms: 500,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
         },
     )
     .await;
@@ -2484,6 +2520,11 @@ async fn test_memory_webhooks_capture_conflict_detected_event() {
             max_attempts: 3,
             base_backoff_ms: 10,
             request_timeout_ms: 500,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
         },
     )
     .await;
@@ -2619,6 +2660,11 @@ async fn test_memory_webhooks_retry_backoff_eventually_delivers() {
             max_attempts: 5,
             base_backoff_ms: 10,
             request_timeout_ms: 500,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
         },
     )
     .await;
@@ -2667,4 +2713,85 @@ async fn test_memory_webhooks_retry_backoff_eventually_delivers() {
     assert_eq!(final_row["event_type"], "head_advanced");
     assert!(final_row["attempts"].as_u64().unwrap_or(0) >= 3);
     assert!(attempts.load(Ordering::SeqCst) >= 3);
+}
+
+#[tokio::test]
+async fn test_memory_webhook_dead_letter_and_stats_endpoint() {
+    let (sink_url, attempts, _) = start_webhook_sink_server(100).await;
+    let (app, _) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 3,
+            base_backoff_ms: 10,
+            request_timeout_ms: 500,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
+        },
+    )
+    .await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "webhook-dead-letter-user",
+            "session": "default",
+            "text": "seed"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "webhook-dead-letter-user",
+            "target_url": sink_url,
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "webhook-dead-letter-user",
+            "session": "default",
+            "text": "this should dead-letter"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let dead = wait_for_dead_letter_event(&app, &webhook_id).await;
+    assert_eq!(dead["event_type"], "head_advanced");
+    assert!(dead["dead_letter"].as_bool().unwrap_or(false));
+    assert!(dead["attempts"].as_u64().unwrap_or(0) >= 3);
+    assert!(attempts.load(Ordering::SeqCst) >= 3);
+
+    let (status, stats) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{webhook_id}/stats"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(stats["total_events"].as_u64().unwrap_or(0) >= 1);
+    assert!(stats["dead_letter_events"].as_u64().unwrap_or(0) >= 1);
 }

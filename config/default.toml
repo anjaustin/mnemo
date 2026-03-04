@@ -96,6 +96,19 @@ metadata_scan_limit = 400
 # If filters over-prune to zero candidates, optionally relax to scanned candidates.
 metadata_relax_if_empty = false
 
+[webhooks]
+enabled = true
+max_attempts = 3
+base_backoff_ms = 200
+request_timeout_ms = 3000
+max_events_per_webhook = 1000
+rate_limit_per_minute = 120
+circuit_breaker_threshold = 5
+circuit_breaker_cooldown_ms = 60000
+persistence_enabled = true
+# Redis key suffix under the main Redis prefix (for example: mnemo:webhooks:* )
+persistence_prefix = "webhooks"
+
 [retention]
 # Default TTL in seconds. 0 = no expiration.
 default_ttl = 0

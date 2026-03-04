@@ -21,6 +21,8 @@ pub struct MnemoConfig {
     pub retrieval: RetrievalSection,
     #[serde(default)]
     pub observability: ObservabilitySection,
+    #[serde(default)]
+    pub webhooks: WebhookSection,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -191,6 +193,47 @@ pub struct ObservabilitySection {
     pub log_format: String,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct WebhookSection {
+    #[serde(default = "default_webhook_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_webhook_max_attempts")]
+    pub max_attempts: u32,
+    #[serde(default = "default_webhook_backoff_ms")]
+    pub base_backoff_ms: u64,
+    #[serde(default = "default_webhook_timeout_ms")]
+    pub request_timeout_ms: u64,
+    #[serde(default = "default_webhook_max_events")]
+    pub max_events_per_webhook: usize,
+    #[serde(default = "default_webhook_rate_limit_per_minute")]
+    pub rate_limit_per_minute: u32,
+    #[serde(default = "default_webhook_circuit_threshold")]
+    pub circuit_breaker_threshold: u32,
+    #[serde(default = "default_webhook_circuit_cooldown_ms")]
+    pub circuit_breaker_cooldown_ms: u64,
+    #[serde(default = "default_webhook_persistence_enabled")]
+    pub persistence_enabled: bool,
+    #[serde(default = "default_webhook_prefix")]
+    pub persistence_prefix: String,
+}
+
+impl Default for WebhookSection {
+    fn default() -> Self {
+        Self {
+            enabled: default_webhook_enabled(),
+            max_attempts: default_webhook_max_attempts(),
+            base_backoff_ms: default_webhook_backoff_ms(),
+            request_timeout_ms: default_webhook_timeout_ms(),
+            max_events_per_webhook: default_webhook_max_events(),
+            rate_limit_per_minute: default_webhook_rate_limit_per_minute(),
+            circuit_breaker_threshold: default_webhook_circuit_threshold(),
+            circuit_breaker_cooldown_ms: default_webhook_circuit_cooldown_ms(),
+            persistence_enabled: default_webhook_persistence_enabled(),
+            persistence_prefix: default_webhook_prefix(),
+        }
+    }
+}
+
 impl Default for ObservabilitySection {
     fn default() -> Self {
         Self {
@@ -257,6 +300,36 @@ fn default_log_level() -> String {
 }
 fn default_log_format() -> String {
     "pretty".into()
+}
+fn default_webhook_enabled() -> bool {
+    true
+}
+fn default_webhook_max_attempts() -> u32 {
+    3
+}
+fn default_webhook_backoff_ms() -> u64 {
+    200
+}
+fn default_webhook_timeout_ms() -> u64 {
+    3000
+}
+fn default_webhook_max_events() -> usize {
+    1000
+}
+fn default_webhook_rate_limit_per_minute() -> u32 {
+    120
+}
+fn default_webhook_circuit_threshold() -> u32 {
+    5
+}
+fn default_webhook_circuit_cooldown_ms() -> u64 {
+    60_000
+}
+fn default_webhook_persistence_enabled() -> bool {
+    true
+}
+fn default_webhook_prefix() -> String {
+    "webhooks".into()
 }
 
 impl MnemoConfig {
@@ -335,6 +408,51 @@ impl MnemoConfig {
         }
         if let Ok(v) = std::env::var("MNEMO_METADATA_RELAX_IF_EMPTY") {
             config.retrieval.metadata_relax_if_empty = v == "true" || v == "1";
+        }
+
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_ENABLED") {
+            config.webhooks.enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_MAX_ATTEMPTS") {
+            if let Ok(n) = v.parse() {
+                config.webhooks.max_attempts = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_BASE_BACKOFF_MS") {
+            if let Ok(n) = v.parse() {
+                config.webhooks.base_backoff_ms = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_TIMEOUT_MS") {
+            if let Ok(n) = v.parse() {
+                config.webhooks.request_timeout_ms = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_MAX_EVENTS_PER_WEBHOOK") {
+            if let Ok(n) = v.parse() {
+                config.webhooks.max_events_per_webhook = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_RATE_LIMIT_PER_MINUTE") {
+            if let Ok(n) = v.parse() {
+                config.webhooks.rate_limit_per_minute = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_CIRCUIT_BREAKER_THRESHOLD") {
+            if let Ok(n) = v.parse() {
+                config.webhooks.circuit_breaker_threshold = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_CIRCUIT_BREAKER_COOLDOWN_MS") {
+            if let Ok(n) = v.parse() {
+                config.webhooks.circuit_breaker_cooldown_ms = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_PERSISTENCE_ENABLED") {
+            config.webhooks.persistence_enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_PERSISTENCE_PREFIX") {
+            config.webhooks.persistence_prefix = v;
         }
 
         Ok(config)

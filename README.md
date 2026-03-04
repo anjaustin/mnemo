@@ -371,9 +371,19 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_METADATA_PREFILTER_ENABLED` | Enable metadata prefilter planner | `true` |
 | `MNEMO_METADATA_SCAN_LIMIT` | Candidate scan limit for prefilter planner | `400` |
 | `MNEMO_METADATA_RELAX_IF_EMPTY` | Relax strict metadata filters when empty | `false` |
+| `MNEMO_WEBHOOKS_ENABLED` | Enable outbound webhook delivery | `true` |
+| `MNEMO_WEBHOOKS_MAX_ATTEMPTS` | Retry attempts before dead-lettering | `3` |
+| `MNEMO_WEBHOOKS_BASE_BACKOFF_MS` | Base backoff duration for retries | `200` |
+| `MNEMO_WEBHOOKS_TIMEOUT_MS` | Per-attempt request timeout | `3000` |
+| `MNEMO_WEBHOOKS_MAX_EVENTS_PER_WEBHOOK` | Max retained event rows per webhook | `1000` |
+| `MNEMO_WEBHOOKS_RATE_LIMIT_PER_MINUTE` | Max outbound sends per webhook per minute | `120` |
+| `MNEMO_WEBHOOKS_CIRCUIT_BREAKER_THRESHOLD` | Consecutive failures before opening circuit | `5` |
+| `MNEMO_WEBHOOKS_CIRCUIT_BREAKER_COOLDOWN_MS` | Circuit cooldown before retrying sends | `60000` |
+| `MNEMO_WEBHOOKS_PERSISTENCE_ENABLED` | Persist webhook subscriptions/events in Redis | `true` |
+| `MNEMO_WEBHOOKS_PERSISTENCE_PREFIX` | Redis key suffix for webhook state | `webhooks` |
 | `MNEMO_SERVER_PORT` | Server port | `8080` |
 
-Webhook outbound delivery defaults are currently runtime defaults in `crates/mnemo-server/src/main.rs`:
+Webhook outbound delivery defaults are configured in `config/default.toml` and can be overridden with env vars:
 
 - `max_attempts=3`
 - `base_backoff_ms=200`
