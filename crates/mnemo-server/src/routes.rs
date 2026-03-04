@@ -186,9 +186,9 @@ fn default_user_policy(user_id: Uuid, user_identifier: String) -> UserPolicyReco
     UserPolicyRecord {
         user_id,
         user_identifier,
-        retention_days_message: 365,
-        retention_days_text: 365,
-        retention_days_json: 180,
+        retention_days_message: 3650,
+        retention_days_text: 3650,
+        retention_days_json: 3650,
         webhook_domain_allowlist: Vec::new(),
         default_memory_contract: "default".to_string(),
         default_retrieval_policy: "balanced".to_string(),
@@ -240,6 +240,49 @@ fn is_target_url_allowed(policy: &UserPolicyRecord, target_url: &str) -> bool {
         .webhook_domain_allowlist
         .iter()
         .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
+}
+
+fn parse_memory_contract_default(value: &str) -> MemoryContract {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "support_safe" => MemoryContract::SupportSafe,
+        "current_strict" => MemoryContract::CurrentStrict,
+        "historical_strict" => MemoryContract::HistoricalStrict,
+        _ => MemoryContract::Default,
+    }
+}
+
+fn parse_retrieval_policy_default(value: &str) -> AdaptiveRetrievalPolicy {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "precision" => AdaptiveRetrievalPolicy::Precision,
+        "recall" => AdaptiveRetrievalPolicy::Recall,
+        "stability" => AdaptiveRetrievalPolicy::Stability,
+        _ => AdaptiveRetrievalPolicy::Balanced,
+    }
+}
+
+fn retention_days_for_episode_type(policy: &UserPolicyRecord, episode_type: EpisodeType) -> u32 {
+    match episode_type {
+        EpisodeType::Message => policy.retention_days_message,
+        EpisodeType::Text => policy.retention_days_text,
+        EpisodeType::Json => policy.retention_days_json,
+    }
+}
+
+fn validate_episode_retention(
+    policy: &UserPolicyRecord,
+    req: &CreateEpisodeRequest,
+) -> Result<(), AppError> {
+    let now = chrono::Utc::now();
+    let created_at = req.created_at.unwrap_or(now);
+    let retention_days = retention_days_for_episode_type(policy, req.episode_type);
+    let oldest_allowed = now - chrono::Duration::days(retention_days as i64);
+    if created_at < oldest_allowed {
+        return Err(AppError(MnemoError::Validation(format!(
+            "episode created_at is older than retention policy ({} days) for {:?}",
+            retention_days, req.episode_type
+        ))));
+    }
+    Ok(())
 }
 
 pub async fn restore_webhook_state(state: &AppState) -> Result<(), MnemoError> {
@@ -1410,6 +1453,9 @@ async fn add_episode(
 ) -> Result<(StatusCode, Json<Episode>), AppError> {
     let request_id = request_id_from_extension(ctx);
     let session = state.state_store.get_session(session_id).await?;
+    let policy =
+        get_or_create_user_policy(&state, session.user_id, session.user_id.to_string()).await;
+    validate_episode_retention(&policy, &req)?;
     let req = CreateEpisodeRequest {
         metadata: metadata_with_request_id(req.metadata, request_id.as_deref()),
         ..req
@@ -1444,6 +1490,16 @@ async fn add_episodes_batch(
 ) -> Result<(StatusCode, Json<ListResponse<Episode>>), AppError> {
     let request_id = request_id_from_extension(ctx);
     let session = state.state_store.get_session(session_id).await?;
+    let policy =
+        get_or_create_user_policy(&state, session.user_id, session.user_id.to_string()).await;
+    for (idx, ep) in req.episodes.iter().enumerate() {
+        if let Err(err) = validate_episode_retention(&policy, ep) {
+            return Err(AppError(MnemoError::Validation(format!(
+                "episodes[{}] failed retention check: {}",
+                idx, err.0
+            ))));
+        }
+    }
     let episodes_req: Vec<CreateEpisodeRequest> = req
         .episodes
         .into_iter()
@@ -2369,17 +2425,21 @@ async fn get_memory_context(
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
 
-    let user = find_user_by_identifier(&state, user.trim()).await?;
+    let user_identifier = user.trim().to_string();
+    let user = find_user_by_identifier(&state, user_identifier.as_str()).await?;
+    let policy = get_or_create_user_policy(&state, user.id, user_identifier).await;
 
     let requested_session_name = req.session.and_then(|s| {
         let trimmed = s.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     });
     let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
-    let contract = req.contract.unwrap_or(MemoryContract::Default);
+    let contract = req
+        .contract
+        .unwrap_or_else(|| parse_memory_contract_default(&policy.default_memory_contract));
     let retrieval_policy = req
         .retrieval_policy
-        .unwrap_or(AdaptiveRetrievalPolicy::Balanced);
+        .unwrap_or_else(|| parse_retrieval_policy_default(&policy.default_retrieval_policy));
     if matches!(contract, MemoryContract::HistoricalStrict) && req.as_of.is_none() {
         return Err(AppError(MnemoError::Validation(
             "historical_strict contract requires as_of".into(),
@@ -2820,11 +2880,15 @@ async fn time_travel_trace(
         )));
     }
 
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
-    let contract = req.contract.unwrap_or(MemoryContract::Default);
+    let user_identifier = user_identifier.trim().to_string();
+    let user = find_user_by_identifier(&state, user_identifier.as_str()).await?;
+    let policy = get_or_create_user_policy(&state, user.id, user_identifier).await;
+    let contract = req
+        .contract
+        .unwrap_or_else(|| parse_memory_contract_default(&policy.default_memory_contract));
     let retrieval_policy = req
         .retrieval_policy
-        .unwrap_or(AdaptiveRetrievalPolicy::Balanced);
+        .unwrap_or_else(|| parse_retrieval_policy_default(&policy.default_retrieval_policy));
     let requested_session_name = req
         .session
         .as_ref()

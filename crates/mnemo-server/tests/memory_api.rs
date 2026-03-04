@@ -3336,3 +3336,101 @@ async fn test_policy_audit_records_session_deletion() {
             && row["details"]["session_id"] == session_id
     }));
 }
+
+#[tokio::test]
+async fn test_policy_defaults_apply_to_memory_context_when_request_omits_them() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "policy-defaults-user",
+            "session": "default",
+            "text": "Acme renewal is at risk due to procurement constraints"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/policies/policy-defaults-user",
+        serde_json::json!({
+            "default_memory_contract": "support_safe",
+            "default_retrieval_policy": "precision"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/policy-defaults-user/context",
+        serde_json::json!({
+            "query": "What is Acme renewal risk?"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["contract_applied"], "support_safe");
+    assert_eq!(body["retrieval_policy_applied"], "precision");
+}
+
+#[tokio::test]
+async fn test_policy_retention_blocks_stale_episode_write() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "policy-retention-user",
+            "external_id": "policy-retention-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "retention" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap();
+
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/policies/policy-retention-user",
+        serde_json::json!({
+            "retention_days_message": 1
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let old_ts = (Utc::now() - chrono::Duration::days(10)).to_rfc3339();
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "This should be rejected by retention policy",
+            "created_at": old_ts
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

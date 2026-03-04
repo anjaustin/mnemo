@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Webhook delivery now supports dead-letter marking, per-webhook rate limiting, and circuit breaker cooldown behavior.
 - Webhook subscriptions and delivery event rows are now persisted to Redis and restored on server startup.
 - CI quality gates now include a temporal quality budget check (accuracy, stale rate, p95 latency).
+- Policy defaults now auto-apply to memory context/trace requests when callers omit contract or retrieval policy fields.
+- Episode write APIs now enforce per-user retention windows (`retention_days_message`, `retention_days_text`, `retention_days_json`).
 
 ## [0.2.0] — 2026-03-03
 

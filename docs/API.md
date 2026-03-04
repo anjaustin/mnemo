@@ -518,6 +518,8 @@ Upsert user governance policy.
 ```
 
 - `webhook_domain_allowlist` blocks webhook registrations outside allowed hosts/subdomains.
+- `default_memory_contract` and `default_retrieval_policy` are applied when memory context/trace requests omit those fields.
+- retention fields (`retention_days_*`) are enforced on episode writes (`/api/v1/sessions/:session_id/episodes*`).
 
 ### `GET /api/v1/policies/:user/audit`
 

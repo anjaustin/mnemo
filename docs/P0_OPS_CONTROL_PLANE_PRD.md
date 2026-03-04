@@ -30,6 +30,7 @@ The next step-change is operational trust at production scale: predictable deliv
 - Webhook event/audit records now retain originating request correlation IDs for incident traceability.
 - User governance policy endpoints with webhook allowlist enforcement and audit trails (`/api/v1/policies/:user`, `/api/v1/policies/:user/audit`).
 - Request IDs now persist into episode metadata and surface in `changes_since`/`time_travel/trace` for cross-pipeline joins.
+- Policy defaults now drive memory contract/retrieval fallback, and per-type retention windows enforce episode-write freshness.
 
 ### Planned next in P0
 
