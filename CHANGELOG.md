@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Policy preview endpoint (`/api/v1/policies/:user/preview`) for retention/governance impact estimation before apply.
+- Time travel summary endpoint (`/api/v1/memory/:user/time_travel/summary`) for lightweight snapshot delta counts and fast RCA-first rendering.
+
+### Changed
+
+- Manual webhook retry response now includes an optional event snapshot envelope for immediate operator confirmation (`/api/v1/memory/webhooks/:id/events/:event_id/retry`).
+
 ## [0.3.0] — 2026-03-04
 
 ### Added

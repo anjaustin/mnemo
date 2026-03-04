@@ -54,7 +54,7 @@ Each event record includes:
 
 - Replay with cursor semantics using `after_event_id`.
 - Filter replay stream by delivered/dead-letter flags.
-- Manually retry a specific event (`.../retry`) when downstream recovers.
+- Manually retry a specific event (`.../retry`) when downstream recovers; response includes queue status plus an optional event snapshot for immediate UI confirmation.
 - Audit endpoint records operator and delivery lifecycle actions for investigations.
 
 ## Outbound headers

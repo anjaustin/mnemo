@@ -950,6 +950,112 @@ async fn test_time_travel_trace_rejects_invalid_window() {
 }
 
 #[tokio::test]
+async fn test_time_travel_summary_reports_delta_counts() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "summary-user",
+            "session": "summary-session",
+            "text": "Kendra now prefers Nike"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/summary-user/time_travel/summary",
+        serde_json::json!({
+            "query": "What changed about Kendra preferences?",
+            "session": "summary-session",
+            "from": "2025-01-01T00:00:00Z",
+            "to": "2025-04-01T00:00:00Z",
+            "contract": "historical_strict",
+            "retrieval_policy": "balanced"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["contract_applied"], "historical_strict");
+    assert_eq!(body["retrieval_policy_applied"], "balanced");
+    assert!(body["fact_count_from"].as_u64().is_some());
+    assert!(body["fact_count_to"].as_u64().is_some());
+    assert!(body["episode_count_from"].as_u64().is_some());
+    assert!(body["episode_count_to"].as_u64().is_some());
+    assert!(body["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("facts"));
+}
+
+#[tokio::test]
+async fn test_policy_preview_estimates_retention_impact() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "preview-user",
+            "external_id": "preview-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "preview-session" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session_id}/episodes"),
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": "older policy preview event",
+            "created_at": "2025-01-01T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, preview) = json_request(
+        &app,
+        "POST",
+        "/api/v1/policies/preview-user/preview",
+        serde_json::json!({
+            "retention_days_message": 1
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(preview["preview_policy"]["retention_days_message"], 1);
+    assert!(
+        preview["estimated_affected_episodes_total"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+    assert_eq!(preview["confidence"], "estimated");
+}
+
+#[tokio::test]
 async fn test_conflict_radar_detects_active_fact_conflict() {
     let (app, state_store) = build_test_harness_with_prefilter_and_webhooks(
         MetadataPrefilterConfig {
@@ -3185,6 +3291,8 @@ async fn test_memory_webhook_replay_retry_and_audit_endpoints() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(retried["queued"], true);
+    assert_eq!(retried["event"]["id"], event_id);
+    assert_eq!(retried["event"]["dead_letter"], false);
 
     let delivered = wait_for_webhook_delivery(&app, &webhook_id, true).await;
     assert_eq!(delivered["id"], event_id);

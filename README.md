@@ -40,7 +40,9 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - **Chat History Importer** - Migrates existing histories with async jobs, dry-run validation, and idempotent replay protection.
 - **Memory Lifecycle Webhooks** - Emits `head_advanced`, `fact_added`, `fact_superseded`, and `conflict_detected` events with retry/backoff delivery and optional HMAC signatures.
 - **Time Travel Trace** - Compares memory snapshots across two points in time and returns timeline-level "why it changed" evidence.
+- **Time Travel Summary** - Returns fast gained/lost fact and episode counters for first-pass RCA.
 - **Governance Policies** - Per-user retention defaults, webhook domain allowlists, and audit trails for policy/destructive operations.
+  - Policy preview support for safer rollout dry-runs before apply.
   - Default contract/retrieval policy fallback and retention enforcement for episode writes.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
@@ -64,6 +66,7 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release workflow expectation: bump `Cargo.toml` (`workspace.package.version`) and `sdk/python/pyproject.toml` together before tagging.
+- Current in-repo development version: `0.3.1`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
@@ -165,6 +168,11 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/time_travel/tra
   -H "Content-Type: application/json" \
   -d '{"query":"How did Acme renewal risk evolve?","from":"2025-02-01T00:00:00Z","to":"2025-04-01T00:00:00Z","contract":"historical_strict"}'
 
+# Lightweight summary for fast first-pass RCA
+curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/time_travel/summary \
+  -H "Content-Type: application/json" \
+  -d '{"query":"How did Acme renewal risk evolve?","from":"2025-02-01T00:00:00Z","to":"2025-04-01T00:00:00Z"}'
+
 # Register a webhook for memory lifecycle events
 curl -X POST http://localhost:8080/api/v1/memory/webhooks \
   -H "Content-Type: application/json" \
@@ -182,6 +190,11 @@ curl http://localhost:8080/api/v1/memory/webhooks/WEBHOOK_ID/events?limit=10
 curl -X PUT http://localhost:8080/api/v1/policies/acct_mgr_jordan \
   -H "Content-Type: application/json" \
   -d '{"webhook_domain_allowlist":["hooks.acme.example"],"retention_days_message":365}'
+
+# Preview policy impact before applying
+curl -X POST http://localhost:8080/api/v1/policies/acct_mgr_jordan/preview \
+  -H "Content-Type: application/json" \
+  -d '{"retention_days_message":30}'
 ```
 
 ### Full workflow: Users, Sessions, Episodes

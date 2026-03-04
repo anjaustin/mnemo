@@ -18,7 +18,7 @@ Returns server status and version.
 // Response 200
 {
   "status": "ok",
-  "version": "0.3.0"
+  "version": "0.3.1"
 }
 ```
 
@@ -402,6 +402,42 @@ Trace how memory-backed answers evolve across a time window.
 }
 ```
 
+### `POST /api/v1/memory/:user/time_travel/summary`
+
+Lightweight compare endpoint for fast RCA render paths.
+
+```json
+// Request
+{
+  "query": "What changed about Kendra preferences?",
+  "from": "2025-02-01T00:00:00Z",
+  "to": "2025-04-01T00:00:00Z",
+  "session": "default",
+  "contract": "historical_strict",
+  "retrieval_policy": "balanced"
+}
+```
+
+```json
+// Response 200
+{
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "from": "2025-02-01T00:00:00Z",
+  "to": "2025-04-01T00:00:00Z",
+  "contract_applied": "historical_strict",
+  "retrieval_policy_applied": "balanced",
+  "fact_count_from": 1,
+  "fact_count_to": 2,
+  "episode_count_from": 1,
+  "episode_count_to": 3,
+  "gained_fact_count": 1,
+  "lost_fact_count": 0,
+  "gained_episode_count": 2,
+  "lost_episode_count": 0,
+  "summary": "1 gained facts, 0 lost facts; 2 gained episodes, 0 lost episodes"
+}
+```
+
 ### `POST /api/v1/memory/webhooks`
 
 Register a per-user webhook subscription for memory lifecycle events.
@@ -500,6 +536,25 @@ Manually queue a re-delivery attempt for a specific event.
 
 `force=true` allows re-delivery even if event is already marked delivered.
 
+```json
+// Response 200
+{
+  "webhook_id": "019513a4-9d3a-7000-8000-000000000444",
+  "event_id": "019513a4-9d3a-7000-8000-000000000555",
+  "queued": true,
+  "reason": "delivery retry queued",
+  "event": {
+    "id": "019513a4-9d3a-7000-8000-000000000555",
+    "event_type": "head_advanced",
+    "attempts": 1,
+    "delivered": false,
+    "dead_letter": false
+  }
+}
+```
+
+`event` is an optional snapshot of the current webhook event row after retry bookkeeping updates.
+
 ### `GET /api/v1/memory/webhooks/:id/audit`
 
 List webhook operational audit records (`webhook_registered`, `retry_queued`, `delivery_dead_letter`, etc).
@@ -537,8 +592,52 @@ Upsert user governance policy.
 ```
 
 - `webhook_domain_allowlist` blocks webhook registrations outside allowed hosts/subdomains.
-- `default_memory_contract` and `default_retrieval_policy` are applied when memory context/trace requests omit those fields.
+- `default_memory_contract` and `default_retrieval_policy` are applied when memory context/trace/summary requests omit those fields.
 - retention fields (`retention_days_*`) are enforced on episode writes (`/api/v1/sessions/:session_id/episodes*`).
+
+### `POST /api/v1/policies/:user/preview`
+
+Estimate policy impact before applying it.
+
+```json
+// Request
+{
+  "retention_days_message": 30,
+  "retention_days_text": 90,
+  "retention_days_json": 180,
+  "webhook_domain_allowlist": ["hooks.acme.example"],
+  "default_memory_contract": "support_safe",
+  "default_retrieval_policy": "precision"
+}
+```
+
+```json
+// Response 200
+{
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "current_policy": {
+    "retention_days_message": 3650,
+    "retention_days_text": 3650,
+    "retention_days_json": 3650,
+    "webhook_domain_allowlist": [],
+    "default_memory_contract": "default",
+    "default_retrieval_policy": "balanced"
+  },
+  "preview_policy": {
+    "retention_days_message": 30,
+    "retention_days_text": 90,
+    "retention_days_json": 180,
+    "webhook_domain_allowlist": ["hooks.acme.example"],
+    "default_memory_contract": "support_safe",
+    "default_retrieval_policy": "precision"
+  },
+  "estimated_affected_episodes_total": 42,
+  "estimated_affected_message_episodes": 20,
+  "estimated_affected_text_episodes": 15,
+  "estimated_affected_json_episodes": 7,
+  "confidence": "estimated"
+}
+```
 
 ### `GET /api/v1/policies/:user/audit`
 

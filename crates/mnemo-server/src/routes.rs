@@ -242,6 +242,40 @@ fn is_target_url_allowed(policy: &UserPolicyRecord, target_url: &str) -> bool {
         .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
 }
 
+fn apply_user_policy_patch(
+    mut policy: UserPolicyRecord,
+    req: &UpsertUserPolicyRequest,
+    updated_at: chrono::DateTime<chrono::Utc>,
+) -> UserPolicyRecord {
+    if let Some(v) = req.retention_days_message {
+        policy.retention_days_message = v.clamp(1, 3650);
+    }
+    if let Some(v) = req.retention_days_text {
+        policy.retention_days_text = v.clamp(1, 3650);
+    }
+    if let Some(v) = req.retention_days_json {
+        policy.retention_days_json = v.clamp(1, 3650);
+    }
+    if req.webhook_domain_allowlist.is_some() {
+        policy.webhook_domain_allowlist =
+            normalize_domain_allowlist(req.webhook_domain_allowlist.clone());
+    }
+    if let Some(v) = req.default_memory_contract.clone() {
+        let normalized = v.trim().to_string();
+        if !normalized.is_empty() {
+            policy.default_memory_contract = normalized;
+        }
+    }
+    if let Some(v) = req.default_retrieval_policy.clone() {
+        let normalized = v.trim().to_string();
+        if !normalized.is_empty() {
+            policy.default_retrieval_policy = normalized;
+        }
+    }
+    policy.updated_at = updated_at;
+    policy
+}
+
 fn parse_memory_contract_default(value: &str) -> MemoryContract {
     match value.trim().to_ascii_lowercase().as_str() {
         "support_safe" => MemoryContract::SupportSafe,
@@ -977,6 +1011,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:id", delete(delete_user))
         .route("/api/v1/policies/:user", get(get_user_policy))
         .route("/api/v1/policies/:user", put(upsert_user_policy))
+        .route("/api/v1/policies/:user/preview", post(preview_user_policy))
         .route("/api/v1/policies/:user/audit", get(list_user_policy_audit))
         .route(
             "/api/v1/users/external/:external_id",
@@ -1021,6 +1056,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/memory/:user/time_travel/trace",
             post(time_travel_trace),
+        )
+        .route(
+            "/api/v1/memory/:user/time_travel/summary",
+            post(time_travel_summary),
         )
         .route("/api/v1/memory/webhooks", post(register_memory_webhook))
         .route(
@@ -1462,33 +1501,7 @@ async fn upsert_user_policy(
         let record = policies
             .entry(user.id)
             .or_insert_with(|| default_user_policy(user.id, user_identifier.trim().to_string()));
-
-        if let Some(v) = req.retention_days_message {
-            record.retention_days_message = v.clamp(1, 3650);
-        }
-        if let Some(v) = req.retention_days_text {
-            record.retention_days_text = v.clamp(1, 3650);
-        }
-        if let Some(v) = req.retention_days_json {
-            record.retention_days_json = v.clamp(1, 3650);
-        }
-        if req.webhook_domain_allowlist.is_some() {
-            record.webhook_domain_allowlist =
-                normalize_domain_allowlist(req.webhook_domain_allowlist);
-        }
-        if let Some(v) = req.default_memory_contract {
-            let normalized = v.trim().to_string();
-            if !normalized.is_empty() {
-                record.default_memory_contract = normalized;
-            }
-        }
-        if let Some(v) = req.default_retrieval_policy {
-            let normalized = v.trim().to_string();
-            if !normalized.is_empty() {
-                record.default_retrieval_policy = normalized;
-            }
-        }
-        record.updated_at = now;
+        *record = apply_user_policy_patch(record.clone(), &req, now);
         record.clone()
     };
 
@@ -1515,6 +1528,52 @@ async fn upsert_user_policy(
 
     persist_webhook_state(&state).await;
     Ok(Json(UserPolicyResponse { policy }))
+}
+
+async fn preview_user_policy(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<PreviewUserPolicyRequest>,
+) -> Result<Json<UserPolicyPreviewResponse>, AppError> {
+    let user_identifier_trimmed = user_identifier.trim().to_string();
+    let user = find_user_by_identifier(&state, user_identifier_trimmed.as_str()).await?;
+    let current_policy = get_or_create_user_policy(&state, user.id, user_identifier_trimmed).await;
+    let upsert_req: UpsertUserPolicyRequest = req.into();
+    let preview_policy =
+        apply_user_policy_patch(current_policy.clone(), &upsert_req, chrono::Utc::now());
+
+    let sessions = list_all_sessions_for_user(&state, user.id).await?;
+    let mut affected_total = 0usize;
+    let mut affected_msg = 0usize;
+    let mut affected_text = 0usize;
+    let mut affected_json = 0usize;
+
+    for session in sessions {
+        let episodes = list_all_episodes_for_session(&state, session.id).await?;
+        for episode in episodes {
+            let before = is_episode_within_retention(&current_policy, &episode);
+            let after = is_episode_within_retention(&preview_policy, &episode);
+            if before && !after {
+                affected_total += 1;
+                match episode.episode_type {
+                    EpisodeType::Message => affected_msg += 1,
+                    EpisodeType::Text => affected_text += 1,
+                    EpisodeType::Json => affected_json += 1,
+                }
+            }
+        }
+    }
+
+    Ok(Json(UserPolicyPreviewResponse {
+        user_id: user.id,
+        current_policy,
+        preview_policy,
+        estimated_affected_episodes_total: affected_total,
+        estimated_affected_message_episodes: affected_msg,
+        estimated_affected_text_episodes: affected_text,
+        estimated_affected_json_episodes: affected_json,
+        confidence: "estimated".to_string(),
+    }))
 }
 
 async fn list_user_policy_audit(
@@ -1950,6 +2009,8 @@ struct RetryWebhookEventResponse {
     event_id: Uuid,
     queued: bool,
     reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event: Option<MemoryWebhookEventRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1997,6 +2058,78 @@ struct UserPolicyAuditResponse {
     user_id: Uuid,
     count: usize,
     audit: Vec<GovernanceAuditRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewUserPolicyRequest {
+    #[serde(default)]
+    retention_days_message: Option<u32>,
+    #[serde(default)]
+    retention_days_text: Option<u32>,
+    #[serde(default)]
+    retention_days_json: Option<u32>,
+    #[serde(default)]
+    webhook_domain_allowlist: Option<Vec<String>>,
+    #[serde(default)]
+    default_memory_contract: Option<String>,
+    #[serde(default)]
+    default_retrieval_policy: Option<String>,
+}
+
+impl From<PreviewUserPolicyRequest> for UpsertUserPolicyRequest {
+    fn from(value: PreviewUserPolicyRequest) -> Self {
+        Self {
+            retention_days_message: value.retention_days_message,
+            retention_days_text: value.retention_days_text,
+            retention_days_json: value.retention_days_json,
+            webhook_domain_allowlist: value.webhook_domain_allowlist,
+            default_memory_contract: value.default_memory_contract,
+            default_retrieval_policy: value.default_retrieval_policy,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct UserPolicyPreviewResponse {
+    user_id: Uuid,
+    current_policy: UserPolicyRecord,
+    preview_policy: UserPolicyRecord,
+    estimated_affected_episodes_total: usize,
+    estimated_affected_message_episodes: usize,
+    estimated_affected_text_episodes: usize,
+    estimated_affected_json_episodes: usize,
+    confidence: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimeTravelSummaryRequest {
+    query: String,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    contract: Option<MemoryContract>,
+    #[serde(default)]
+    retrieval_policy: Option<AdaptiveRetrievalPolicy>,
+}
+
+#[derive(Debug, Serialize)]
+struct TimeTravelSummaryResponse {
+    user_id: Uuid,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    contract_applied: MemoryContract,
+    retrieval_policy_applied: AdaptiveRetrievalPolicy,
+    fact_count_from: usize,
+    fact_count_to: usize,
+    episode_count_from: usize,
+    episode_count_to: usize,
+    gained_fact_count: usize,
+    lost_fact_count: usize,
+    gained_episode_count: usize,
+    lost_episode_count: usize,
+    summary: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3561,6 +3694,185 @@ async fn time_travel_trace(
     }))
 }
 
+async fn time_travel_summary(
+    State(state): State<AppState>,
+    ctx: Option<Extension<RequestContext>>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<TimeTravelSummaryRequest>,
+) -> Result<Json<TimeTravelSummaryResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
+    if req.query.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("query is required".into())));
+    }
+    if req.to <= req.from {
+        return Err(AppError(MnemoError::Validation(
+            "'to' must be after 'from'".to_string(),
+        )));
+    }
+
+    let user_identifier = user_identifier.trim().to_string();
+    let user = find_user_by_identifier(&state, user_identifier.as_str()).await?;
+    let policy = get_or_create_user_policy(&state, user.id, user_identifier).await;
+    let contract = req
+        .contract
+        .unwrap_or_else(|| parse_memory_contract_default(&policy.default_memory_contract));
+    let retrieval_policy = req
+        .retrieval_policy
+        .unwrap_or_else(|| parse_retrieval_policy_default(&policy.default_retrieval_policy));
+
+    if req.contract.is_some() || req.retrieval_policy.is_some() {
+        append_governance_audit(
+            &state,
+            user.id,
+            "policy_override_time_travel_summary",
+            request_id,
+            serde_json::json!({
+                "requested_contract": req.contract,
+                "requested_retrieval_policy": req.retrieval_policy,
+                "effective_contract": contract,
+                "effective_retrieval_policy": retrieval_policy,
+                "default_contract": policy.default_memory_contract,
+                "default_retrieval_policy": policy.default_retrieval_policy
+            }),
+        )
+        .await;
+    }
+
+    let requested_session_name = req
+        .session
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let scoped_session = resolve_session_scope(
+        &state,
+        user.id,
+        MemoryContextMode::Hybrid,
+        requested_session_name,
+    )
+    .await?;
+    let session_id = scoped_session.as_ref().map(|s| s.id);
+
+    let default_max_tokens = match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => 500,
+        AdaptiveRetrievalPolicy::Precision => 400,
+        AdaptiveRetrievalPolicy::Recall => 700,
+        AdaptiveRetrievalPolicy::Stability => 500,
+    };
+    let min_relevance = match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => 0.3,
+        AdaptiveRetrievalPolicy::Precision => 0.55,
+        AdaptiveRetrievalPolicy::Recall => 0.15,
+        AdaptiveRetrievalPolicy::Stability => 0.4,
+    };
+    let base_temporal_intent = match contract {
+        MemoryContract::CurrentStrict => TemporalIntent::Current,
+        MemoryContract::HistoricalStrict => TemporalIntent::Historical,
+        _ => TemporalIntent::Historical,
+    };
+    let temporal_intent = if matches!(retrieval_policy, AdaptiveRetrievalPolicy::Stability)
+        && !matches!(contract, MemoryContract::HistoricalStrict)
+    {
+        TemporalIntent::Current
+    } else {
+        base_temporal_intent
+    };
+    let temporal_weight = match retrieval_policy {
+        AdaptiveRetrievalPolicy::Balanced => None,
+        AdaptiveRetrievalPolicy::Precision => Some(0.35),
+        AdaptiveRetrievalPolicy::Recall => Some(0.2),
+        AdaptiveRetrievalPolicy::Stability => Some(0.8),
+    };
+
+    let make_context_req = |as_of: chrono::DateTime<chrono::Utc>| ContextRequest {
+        session_id,
+        messages: vec![ContextMessage {
+            role: "user".to_string(),
+            content: req.query.clone(),
+        }],
+        max_tokens: default_max_tokens,
+        search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
+        temporal_filter: Some(as_of),
+        as_of: Some(as_of),
+        time_intent: temporal_intent,
+        temporal_weight,
+        min_relevance,
+    };
+
+    let mut context_from = state
+        .retrieval
+        .get_context(user.id, &make_context_req(req.from))
+        .await?;
+    maybe_attach_recent_episode_fallback(
+        &state,
+        user.id,
+        session_id,
+        default_max_tokens,
+        temporal_intent,
+        Some(req.from),
+        &mut context_from,
+    )
+    .await?;
+    apply_memory_contract(&mut context_from, contract);
+    context_from
+        .episodes
+        .retain(|episode| is_episode_summary_within_retention(&policy, episode));
+
+    let mut context_to = state
+        .retrieval
+        .get_context(user.id, &make_context_req(req.to))
+        .await?;
+    maybe_attach_recent_episode_fallback(
+        &state,
+        user.id,
+        session_id,
+        default_max_tokens,
+        temporal_intent,
+        Some(req.to),
+        &mut context_to,
+    )
+    .await?;
+    apply_memory_contract(&mut context_to, contract);
+    context_to
+        .episodes
+        .retain(|episode| is_episode_summary_within_retention(&policy, episode));
+
+    let from_fact_ids: std::collections::HashSet<Uuid> =
+        context_from.facts.iter().map(|f| f.id).collect();
+    let to_fact_ids: std::collections::HashSet<Uuid> =
+        context_to.facts.iter().map(|f| f.id).collect();
+    let gained_fact_count = to_fact_ids.difference(&from_fact_ids).count();
+    let lost_fact_count = from_fact_ids.difference(&to_fact_ids).count();
+
+    let from_episode_ids: std::collections::HashSet<Uuid> =
+        context_from.episodes.iter().map(|e| e.id).collect();
+    let to_episode_ids: std::collections::HashSet<Uuid> =
+        context_to.episodes.iter().map(|e| e.id).collect();
+    let gained_episode_count = to_episode_ids.difference(&from_episode_ids).count();
+    let lost_episode_count = from_episode_ids.difference(&to_episode_ids).count();
+
+    let summary = format!(
+        "{} gained facts, {} lost facts; {} gained episodes, {} lost episodes",
+        gained_fact_count, lost_fact_count, gained_episode_count, lost_episode_count
+    );
+
+    Ok(Json(TimeTravelSummaryResponse {
+        user_id: user.id,
+        from: req.from,
+        to: req.to,
+        contract_applied: contract,
+        retrieval_policy_applied: retrieval_policy,
+        fact_count_from: context_from.facts.len(),
+        fact_count_to: context_to.facts.len(),
+        episode_count_from: context_from.episodes.len(),
+        episode_count_to: context_to.episodes.len(),
+        gained_fact_count,
+        lost_fact_count,
+        gained_episode_count,
+        lost_episode_count,
+        summary,
+    }))
+}
+
 async fn conflict_radar(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -4140,6 +4452,7 @@ async fn retry_memory_webhook_event(
 
     let mut found = false;
     let mut delivered = false;
+    let mut event_snapshot: Option<MemoryWebhookEventRecord> = None;
     {
         let mut event_map = state.memory_webhook_events.write().await;
         if let Some(events) = event_map.get_mut(&webhook_id) {
@@ -4150,6 +4463,7 @@ async fn retry_memory_webhook_event(
                     event.dead_letter = false;
                     event.last_error = None;
                 }
+                event_snapshot = Some(event.clone());
             }
         }
     }
@@ -4178,6 +4492,7 @@ async fn retry_memory_webhook_event(
             event_id,
             queued: false,
             reason: "event already delivered; pass force=true to re-deliver".to_string(),
+            event: event_snapshot,
         }));
     }
 
@@ -4208,6 +4523,7 @@ async fn retry_memory_webhook_event(
         event_id,
         queued: true,
         reason: "delivery retry queued".to_string(),
+        event: event_snapshot,
     }))
 }
 
