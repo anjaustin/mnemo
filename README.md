@@ -42,7 +42,7 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - **Time Travel Trace** - Compares memory snapshots across two points in time and returns timeline-level "why it changed" evidence.
 - **Time Travel Summary** - Returns fast gained/lost fact and episode counters for first-pass RCA.
 - **Governance Policies** - Per-user retention defaults, webhook domain allowlists, and audit trails for policy/destructive operations.
-  - Policy preview support for safer rollout dry-runs before apply.
+  - Policy preview and violation-window query endpoints for safer rollout dry-runs and incident triage.
   - Default contract/retrieval policy fallback and retention enforcement for episode writes.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
@@ -195,6 +195,9 @@ curl -X PUT http://localhost:8080/api/v1/policies/acct_mgr_jordan \
 curl -X POST http://localhost:8080/api/v1/policies/acct_mgr_jordan/preview \
   -H "Content-Type: application/json" \
   -d '{"retention_days_message":30}'
+
+# Query policy violations inside a time window
+curl "http://localhost:8080/api/v1/policies/acct_mgr_jordan/violations?from=2026-03-01T00:00:00Z&to=2026-03-04T00:00:00Z&limit=50"
 ```
 
 ### Full workflow: Users, Sessions, Episodes

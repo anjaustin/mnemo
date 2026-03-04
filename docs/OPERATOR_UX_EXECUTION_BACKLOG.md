@@ -54,7 +54,7 @@ Updated: 2026-03-04
 ### Backend/API Tickets
 
 - [x] Add policy preview API (estimated impact with confidence label).
-- [ ] Add policy violation time-window query endpoint.
+- [x] Add policy violation time-window query endpoint.
 
 ### Falsification
 

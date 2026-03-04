@@ -215,13 +215,13 @@ Existing APIs powering v1 UX:
 - `/api/v1/policies/:user`
 - `/api/v1/policies/:user/preview`
 - `/api/v1/policies/:user/audit`
+- `/api/v1/policies/:user/violations`
 - `/api/v1/ops/summary`
 - `/api/v1/traces/:request_id`
 
 Likely backend additions for UX polish:
 
 - pre-aggregated incident summaries endpoint.
-- query endpoint for governance violations by time window.
 - richer request_id lookup filtering for faster cross-index joins.
 
 ## 12) Proposed Data Contracts for UI

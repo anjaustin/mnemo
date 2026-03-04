@@ -58,7 +58,7 @@ It verifies:
 - adaptive retrieval policy checks (`balanced`, `precision`, `recall`, `stability`) for effective threshold diagnostics
 - memory webhook checks (`/api/v1/memory/webhooks`) for event capture, replay cursors, manual retry flows (including retry response event envelope), delivery telemetry, retry/backoff, dead-letter transitions, stats endpoint, audit rows, and signature correctness
 - observability checks (`/metrics`, `x-mnemo-request-id`) for telemetry exposure and request correlation propagation
-- governance policy checks (`/api/v1/policies/:user`, `/api/v1/policies/:user/preview`) for webhook allowlist enforcement, default contract/retrieval fallback behavior, retention write guards, preview impact estimation, and destructive-operation audit trail coverage
+- governance policy checks (`/api/v1/policies/:user`, `/api/v1/policies/:user/preview`, `/api/v1/policies/:user/violations`) for webhook allowlist enforcement, default contract/retrieval fallback behavior, retention write guards, preview impact estimation, violation-window filtering, and destructive-operation audit trail coverage
 
 ## 5) Importer stress harness (large real-world export)
 

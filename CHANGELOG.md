@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Policy preview endpoint (`/api/v1/policies/:user/preview`) for retention/governance impact estimation before apply.
+- Policy violation window query endpoint (`/api/v1/policies/:user/violations`) for operator triage over bounded time ranges.
 - Time travel summary endpoint (`/api/v1/memory/:user/time_travel/summary`) for lightweight snapshot delta counts and fast RCA-first rendering.
 
 ### Changed

@@ -3392,6 +3392,77 @@ async fn test_policy_webhook_domain_allowlist_blocks_disallowed_target() {
 }
 
 #[tokio::test]
+async fn test_policy_violations_endpoint_filters_by_window() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "policy-window-user",
+            "external_id": "policy-window-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/policies/policy-window-user",
+        serde_json::json!({
+            "webhook_domain_allowlist": ["hooks.acme.example"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "policy-window-user",
+            "target_url": "https://bad.example/webhook",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/policies/policy-window-user/violations?from=2020-01-01T00:00:00Z&to=2100-01-01T00:00:00Z&limit=20",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["count"].as_u64().unwrap_or(0) >= 1);
+    let rows = body["violations"].as_array().cloned().unwrap_or_default();
+    assert!(body["violations"].as_array().is_some());
+    assert!(rows
+        .iter()
+        .any(|row| row["action"] == "policy_violation_webhook_domain"));
+}
+
+#[tokio::test]
+async fn test_policy_violations_endpoint_rejects_invalid_window() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "GET",
+        "/api/v1/policies/nope/violations?from=2026-04-01T00:00:00Z&to=2026-01-01T00:00:00Z",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_policy_audit_records_session_deletion() {
     let app = build_test_app().await;
 

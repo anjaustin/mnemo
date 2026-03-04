@@ -643,6 +643,38 @@ Estimate policy impact before applying it.
 
 List governance audit records (`policy_updated`, `policy_violation_webhook_domain`, `session_deleted`, `user_deleted`).
 
+### `GET /api/v1/policies/:user/violations`
+
+Query policy violation audit events inside a time window.
+
+Query params:
+- `from` (required, RFC3339 timestamp)
+- `to` (required, RFC3339 timestamp)
+- `limit` (optional, default `100`, max `1000`)
+
+Only governance audit rows with actions prefixed by `policy_violation_` are returned.
+
+```json
+// Response 200
+{
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "from": "2026-03-01T00:00:00Z",
+  "to": "2026-03-04T00:00:00Z",
+  "count": 1,
+  "violations": [
+    {
+      "at": "2026-03-03T13:22:11Z",
+      "action": "policy_violation_webhook_domain",
+      "request_id": "req_01hxy...",
+      "details": {
+        "target_url": "https://bad.example/webhook",
+        "allowlist": ["hooks.acme.example"]
+      }
+    }
+  ]
+}
+```
+
 ---
 
 ## Import API

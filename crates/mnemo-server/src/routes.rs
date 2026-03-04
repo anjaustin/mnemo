@@ -1014,6 +1014,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/policies/:user/preview", post(preview_user_policy))
         .route("/api/v1/policies/:user/audit", get(list_user_policy_audit))
         .route(
+            "/api/v1/policies/:user/violations",
+            get(list_user_policy_violations),
+        )
+        .route(
             "/api/v1/users/external/:external_id",
             get(get_user_by_external_id),
         )
@@ -1598,6 +1602,48 @@ async fn list_user_policy_audit(
     }))
 }
 
+async fn list_user_policy_violations(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Query(query): Query<UserPolicyViolationQuery>,
+) -> Result<Json<UserPolicyViolationResponse>, AppError> {
+    let from = query.from.ok_or_else(|| {
+        AppError(MnemoError::Validation(
+            "'from' query parameter is required".to_string(),
+        ))
+    })?;
+    let to = query.to.ok_or_else(|| {
+        AppError(MnemoError::Validation(
+            "'to' query parameter is required".to_string(),
+        ))
+    })?;
+    if to <= from {
+        return Err(AppError(MnemoError::Validation(
+            "'to' must be after 'from'".to_string(),
+        )));
+    }
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000) as usize;
+
+    let mut rows = {
+        let audit = state.governance_audit.read().await;
+        audit.get(&user.id).cloned().unwrap_or_default()
+    };
+    rows.retain(|row| {
+        row.action.starts_with("policy_violation_") && row.at >= from && row.at <= to
+    });
+    rows.sort_by(|a, b| b.at.cmp(&a.at));
+    rows.truncate(limit);
+
+    Ok(Json(UserPolicyViolationResponse {
+        user_id: user.id,
+        from,
+        to,
+        count: rows.len(),
+        violations: rows,
+    }))
+}
+
 async fn delete_user(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -2058,6 +2104,25 @@ struct UserPolicyAuditResponse {
     user_id: Uuid,
     count: usize,
     audit: Vec<GovernanceAuditRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserPolicyViolationQuery {
+    #[serde(default)]
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    to: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct UserPolicyViolationResponse {
+    user_id: Uuid,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    count: usize,
+    violations: Vec<GovernanceAuditRecord>,
 }
 
 #[derive(Debug, Deserialize)]
