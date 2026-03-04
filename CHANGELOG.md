@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-03-03
+
 ### Added
 
 - Release automation workflow for version tags (`.github/workflows/release.yml`).
@@ -18,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Workspace repository metadata now points to the canonical repository URL.
 - Added `.dockerignore` to reduce container build context and improve image build consistency.
 - README and evaluation/testing docs now reflect current quick-win memory APIs and latest falsification/benchmark snapshots.
+- README release/package section now documents current GitHub Release artifacts and GHCR pull/tag strategy.
 
 ## [0.1.0] — 2026-03-01
 

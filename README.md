@@ -4,13 +4,13 @@
 | --- | --- | --- | --- | --- |
 | [![quality-gates](https://github.com/anjaustin/mnemo/actions/workflows/quality-gates.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/quality-gates.yml) | [![memory-falsification](https://github.com/anjaustin/mnemo/actions/workflows/memory-falsification.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/memory-falsification.yml) | [![benchmark-eval](https://github.com/anjaustin/mnemo/actions/workflows/benchmark-eval.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/benchmark-eval.yml) | [![package-ghcr](https://github.com/anjaustin/mnemo/actions/workflows/package-ghcr.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/package-ghcr.yml) | [![release](https://github.com/anjaustin/mnemo/actions/workflows/release.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/release.yml) |
 
-| Version | Release Date | License | Stars | Tracked Size |
+| Version | Release Date | License | Stars | Downloads |
 | --- | --- | --- | --- | --- |
-| [![version](https://img.shields.io/github/v/tag/anjaustin/mnemo?sort=semver&label=version)](https://github.com/anjaustin/mnemo/releases) | [![release-date](https://img.shields.io/github/release-date/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/releases) | [![license-apache](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) | [![stars](https://img.shields.io/github/stars/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/stargazers) | [![tracked-size](https://img.shields.io/badge/tracked-15.5%20MiB-2ea44f)](https://github.com/anjaustin/mnemo) |
+| [![version](https://img.shields.io/github/v/tag/anjaustin/mnemo?sort=semver&label=version)](https://github.com/anjaustin/mnemo/releases) | [![release-date](https://img.shields.io/github/release-date/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/releases) | [![license-apache](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) | [![stars](https://img.shields.io/github/stars/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/stargazers) | [![downloads](https://img.shields.io/github/downloads/anjaustin/mnemo/total)](https://github.com/anjaustin/mnemo/releases) |
 
-| Runtime (compressed) | Runtime (unpacked) | Release Binary |
+| Latest Release | Release Artifacts | GHCR Package |
 | --- | --- | --- |
-| [![image-compressed](https://img.shields.io/badge/image%20compressed-40.1%20MiB-1f6feb)](https://github.com/anjaustin/mnemo/pkgs/container/mnemo%2Fmnemo-server) | [![image-unpacked](https://img.shields.io/badge/image%20unpacked-102.1%20MiB-1f6feb)](https://github.com/anjaustin/mnemo/pkgs/container/mnemo%2Fmnemo-server) | [![release-binary](https://img.shields.io/badge/release%20binary-8.5%20MiB-2da44e)](https://github.com/anjaustin/mnemo/releases/latest) |
+| [![latest-release](https://img.shields.io/github/v/release/anjaustin/mnemo?display_name=tag&sort=semver)](https://github.com/anjaustin/mnemo/releases/latest) | [![release-assets](https://img.shields.io/badge/assets-linux--amd64%20%7C%20tar.gz%20%7C%20sha256-2da44e)](https://github.com/anjaustin/mnemo/releases/latest) | [![ghcr-package](https://img.shields.io/badge/ghcr-mnemo--server-1f6feb)](https://github.com/anjaustin/mnemo/pkgs/container/mnemo%2Fmnemo-server) |
 
 ![Mnemosyne](img/mnemosyne.gif)
 
@@ -64,8 +64,27 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
   - `SHA256SUMS.txt`
-- Docker images are published to GHCR via `.github/workflows/package-ghcr.yml`.
+- Docker images are published to GHCR via `.github/workflows/package-ghcr.yml` on `main` and version tags.
 - Published image namespace: `ghcr.io/anjaustin/mnemo/mnemo-server`.
+
+Get latest release assets:
+
+```bash
+gh release download --repo anjaustin/mnemo --pattern 'mnemo-server-*' --pattern 'SHA256SUMS.txt'
+```
+
+Pull package images:
+
+```bash
+# latest default-branch image
+docker pull ghcr.io/anjaustin/mnemo/mnemo-server:latest
+
+# immutable tag image
+docker pull ghcr.io/anjaustin/mnemo/mnemo-server:<version>
+
+# branch image (main)
+docker pull ghcr.io/anjaustin/mnemo/mnemo-server:main
+```
 
 ## Measured Performance and Evaluation
 
