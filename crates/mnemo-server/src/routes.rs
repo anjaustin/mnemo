@@ -967,6 +967,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/healthz", get(health))
         .route("/metrics", get(metrics))
+        .route("/api/v1/ops/summary", get(get_ops_summary))
+        .route("/api/v1/traces/:request_id", get(get_trace_by_request_id))
         // Users
         .route("/api/v1/users", post(create_user))
         .route("/api/v1/users", get(list_users))
@@ -1223,6 +1225,178 @@ mnemo_policy_violation_total {}\n",
         [("content-type", "text/plain; version=0.0.4")],
         body,
     )
+}
+
+async fn get_ops_summary(
+    State(state): State<AppState>,
+    Query(query): Query<OpsSummaryQuery>,
+) -> Json<OpsSummaryResponse> {
+    let window_seconds = query.window_seconds.unwrap_or(300).clamp(1, 86_400);
+    let window_start = chrono::Utc::now() - chrono::Duration::seconds(window_seconds as i64);
+
+    let http_requests_total = state.metrics.http_requests_total.load(Ordering::Relaxed);
+    let http_responses_2xx = state.metrics.http_responses_2xx.load(Ordering::Relaxed);
+    let http_responses_4xx = state.metrics.http_responses_4xx.load(Ordering::Relaxed);
+    let http_responses_5xx = state.metrics.http_responses_5xx.load(Ordering::Relaxed);
+    let webhook_deliveries_success_total = state
+        .metrics
+        .webhook_deliveries_success_total
+        .load(Ordering::Relaxed);
+    let webhook_deliveries_failure_total = state
+        .metrics
+        .webhook_deliveries_failure_total
+        .load(Ordering::Relaxed);
+    let webhook_dead_letter_total = state
+        .metrics
+        .webhook_dead_letter_total
+        .load(Ordering::Relaxed);
+    let policy_update_total = state.metrics.policy_update_total.load(Ordering::Relaxed);
+    let policy_violation_total = state.metrics.policy_violation_total.load(Ordering::Relaxed);
+
+    let active_webhooks = {
+        let hooks = state.memory_webhooks.read().await;
+        hooks.values().filter(|h| h.enabled).count()
+    };
+
+    let (dead_letter_backlog, pending_webhook_events, webhook_audit_events_in_window) = {
+        let events_map = state.memory_webhook_events.read().await;
+        let dead = events_map
+            .values()
+            .map(|rows| rows.iter().filter(|row| row.dead_letter).count())
+            .sum();
+        let pending = events_map
+            .values()
+            .map(|rows| {
+                rows.iter()
+                    .filter(|row| !row.delivered && !row.dead_letter)
+                    .count()
+            })
+            .sum();
+
+        let webhook_audit = state.memory_webhook_audit.read().await;
+        let audit_in_window = webhook_audit
+            .values()
+            .map(|rows| rows.iter().filter(|row| row.at >= window_start).count())
+            .sum();
+        (dead, pending, audit_in_window)
+    };
+
+    let governance_audit_events_in_window = {
+        let governance = state.governance_audit.read().await;
+        governance
+            .values()
+            .map(|rows| rows.iter().filter(|row| row.at >= window_start).count())
+            .sum()
+    };
+
+    Json(OpsSummaryResponse {
+        window_seconds,
+        http_requests_total,
+        http_responses_2xx,
+        http_responses_4xx,
+        http_responses_5xx,
+        webhook_deliveries_success_total,
+        webhook_deliveries_failure_total,
+        webhook_dead_letter_total,
+        policy_update_total,
+        policy_violation_total,
+        active_webhooks,
+        dead_letter_backlog,
+        pending_webhook_events,
+        governance_audit_events_in_window,
+        webhook_audit_events_in_window,
+    })
+}
+
+async fn get_trace_by_request_id(
+    State(state): State<AppState>,
+    Path(request_id): Path<String>,
+) -> Result<Json<TraceLookupResponse>, AppError> {
+    let request_id = request_id.trim().to_string();
+    if request_id.is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "request_id is required".into(),
+        )));
+    }
+
+    let users = state.state_store.list_users(10_000, None).await?;
+
+    let mut matched_episodes = Vec::new();
+    for user in users {
+        let sessions = list_all_sessions_for_user(&state, user.id).await?;
+        for session in sessions {
+            let episodes = list_all_episodes_for_session(&state, session.id).await?;
+            for episode in episodes {
+                if extract_request_id_from_metadata(&episode.metadata)
+                    .as_deref()
+                    .is_some_and(|rid| rid == request_id)
+                {
+                    matched_episodes.push(TraceEpisodeRef {
+                        user_id: user.id,
+                        session_id: session.id,
+                        episode_id: episode.id,
+                        created_at: episode.created_at,
+                        preview: preview_text(&episode.content, 140),
+                    });
+                }
+            }
+        }
+    }
+
+    let matched_webhook_events: Vec<MemoryWebhookEventRecord> = {
+        let event_map = state.memory_webhook_events.read().await;
+        event_map
+            .values()
+            .flat_map(|rows| rows.iter().cloned())
+            .filter(|row| {
+                row.request_id
+                    .as_deref()
+                    .is_some_and(|rid| rid == request_id)
+            })
+            .collect()
+    };
+
+    let matched_webhook_audit: Vec<MemoryWebhookAuditRecord> = {
+        let audit_map = state.memory_webhook_audit.read().await;
+        audit_map
+            .values()
+            .flat_map(|rows| rows.iter().cloned())
+            .filter(|row| {
+                row.request_id
+                    .as_deref()
+                    .is_some_and(|rid| rid == request_id)
+            })
+            .collect()
+    };
+
+    let matched_governance_audit: Vec<GovernanceAuditRecord> = {
+        let audit_map = state.governance_audit.read().await;
+        audit_map
+            .values()
+            .flat_map(|rows| rows.iter().cloned())
+            .filter(|row| {
+                row.request_id
+                    .as_deref()
+                    .is_some_and(|rid| rid == request_id)
+            })
+            .collect()
+    };
+
+    let summary = serde_json::json!({
+        "episode_matches": matched_episodes.len(),
+        "webhook_event_matches": matched_webhook_events.len(),
+        "webhook_audit_matches": matched_webhook_audit.len(),
+        "governance_audit_matches": matched_governance_audit.len(),
+    });
+
+    Ok(Json(TraceLookupResponse {
+        request_id,
+        matched_episodes,
+        matched_webhook_events,
+        matched_webhook_audit,
+        matched_governance_audit,
+        summary,
+    }))
 }
 
 // ─── User routes ───────────────────────────────────────────────────
@@ -1823,6 +1997,50 @@ struct UserPolicyAuditResponse {
     user_id: Uuid,
     count: usize,
     audit: Vec<GovernanceAuditRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsSummaryQuery {
+    #[serde(default)]
+    window_seconds: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsSummaryResponse {
+    window_seconds: u64,
+    http_requests_total: u64,
+    http_responses_2xx: u64,
+    http_responses_4xx: u64,
+    http_responses_5xx: u64,
+    webhook_deliveries_success_total: u64,
+    webhook_deliveries_failure_total: u64,
+    webhook_dead_letter_total: u64,
+    policy_update_total: u64,
+    policy_violation_total: u64,
+    active_webhooks: usize,
+    dead_letter_backlog: usize,
+    pending_webhook_events: usize,
+    governance_audit_events_in_window: usize,
+    webhook_audit_events_in_window: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct TraceLookupResponse {
+    request_id: String,
+    matched_episodes: Vec<TraceEpisodeRef>,
+    matched_webhook_events: Vec<MemoryWebhookEventRecord>,
+    matched_webhook_audit: Vec<MemoryWebhookAuditRecord>,
+    matched_governance_audit: Vec<GovernanceAuditRecord>,
+    summary: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct TraceEpisodeRef {
+    user_id: Uuid,
+    session_id: Uuid,
+    episode_id: Uuid,
+    created_at: chrono::DateTime<chrono::Utc>,
+    preview: String,
 }
 
 #[derive(Debug, Deserialize)]

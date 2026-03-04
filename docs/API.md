@@ -32,6 +32,25 @@ Included counters/gauges cover:
 - Webhook replay and manual retry totals
 - Current retained webhook event backlog gauges
 
+### `GET /api/v1/ops/summary`
+
+Operator summary endpoint for dashboard cards.
+
+Query params:
+- `window_seconds` (optional, default `300`, max `86400`)
+
+Returns HTTP/webhook/policy counters plus active backlog gauges and recent audit activity counts.
+
+### `GET /api/v1/traces/:request_id`
+
+Cross-pipeline trace lookup by request correlation ID.
+
+Returns matched artifacts across:
+- episode metadata writes
+- webhook event rows
+- webhook audit rows
+- governance audit rows
+
 ---
 
 ## Memory API (High-Level)

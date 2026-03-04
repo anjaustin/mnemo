@@ -213,6 +213,8 @@ Existing APIs powering v1 UX:
 - `/api/v1/memory/:user/time_travel/trace`
 - `/api/v1/policies/:user`
 - `/api/v1/policies/:user/audit`
+- `/api/v1/ops/summary`
+- `/api/v1/traces/:request_id`
 
 Likely backend additions for UX polish:
 

@@ -3434,3 +3434,124 @@ async fn test_policy_retention_blocks_stale_episode_write() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn test_ops_summary_endpoint_returns_operator_counters() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "GET",
+        "/api/v1/ops/summary?window_seconds=600",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) =
+        json_request(&app, "GET", "/api/v1/ops/summary", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["http_requests_total"].as_u64().unwrap_or(0) >= 1);
+    assert!(body.get("dead_letter_backlog").is_some());
+    assert!(body.get("policy_update_total").is_some());
+}
+
+#[tokio::test]
+async fn test_trace_lookup_joins_episode_webhook_and_governance_records() {
+    let app = build_test_app().await;
+    let req_id = "trace-join-req-9001";
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "trace-join-user",
+            "external_id": "trace-join-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "PUT",
+        "/api/v1/policies/trace-join-user",
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({
+            "webhook_domain_allowlist": []
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "trace-join-user",
+            "target_url": "https://example.com/hooks/trace",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({
+            "user": "trace-join-user",
+            "session": "default",
+            "text": "trace join payload"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=10"),
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, trace) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/traces/{req_id}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(trace["summary"]["episode_matches"].as_u64().unwrap_or(0) >= 1);
+    assert!(
+        trace["summary"]["webhook_event_matches"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+    assert!(
+        trace["summary"]["webhook_audit_matches"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+    assert!(
+        trace["summary"]["governance_audit_matches"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+}

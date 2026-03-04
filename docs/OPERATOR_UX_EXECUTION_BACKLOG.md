@@ -15,7 +15,7 @@ Updated: 2026-03-04
 
 ### Backend/API Tickets
 
-- [ ] Add aggregate webhook incident summary endpoint for dashboard cards.
+- [x] Add aggregate webhook incident summary endpoint for dashboard cards.
 - [ ] Add retry outcome status envelope for immediate UX confirmation.
 
 ### Falsification
@@ -34,7 +34,7 @@ Updated: 2026-03-04
 
 ### Backend/API Tickets
 
-- [ ] Add optional endpoint for request_id-centric trace expansion (if latency requires).
+- [x] Add optional endpoint for request_id-centric trace expansion (if latency requires).
 - [ ] Add lightweight timeline summary object for fast initial render.
 
 ### Falsification
