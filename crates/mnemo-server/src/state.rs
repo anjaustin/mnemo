@@ -96,6 +96,31 @@ pub struct MemoryWebhookAuditRecord {
     pub at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPolicyRecord {
+    pub user_id: Uuid,
+    pub user_identifier: String,
+    pub retention_days_message: u32,
+    pub retention_days_text: u32,
+    pub retention_days_json: u32,
+    pub webhook_domain_allowlist: Vec<String>,
+    pub default_memory_contract: String,
+    pub default_retrieval_policy: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceAuditRecord {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    pub details: serde_json::Value,
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Copy)]
 pub struct WebhookDeliveryConfig {
     pub enabled: bool,
@@ -128,6 +153,8 @@ pub struct ServerMetrics {
     pub webhook_dead_letter_total: AtomicU64,
     pub webhook_retry_queued_total: AtomicU64,
     pub webhook_replay_requests_total: AtomicU64,
+    pub policy_update_total: AtomicU64,
+    pub policy_violation_total: AtomicU64,
 }
 
 /// Shared application state passed to all Axum route handlers.
@@ -144,6 +171,8 @@ pub struct AppState {
     pub memory_webhooks: Arc<RwLock<HashMap<Uuid, MemoryWebhookSubscription>>>,
     pub memory_webhook_events: Arc<RwLock<HashMap<Uuid, Vec<MemoryWebhookEventRecord>>>>,
     pub memory_webhook_audit: Arc<RwLock<HashMap<Uuid, Vec<MemoryWebhookAuditRecord>>>>,
+    pub user_policies: Arc<RwLock<HashMap<Uuid, UserPolicyRecord>>>,
+    pub governance_audit: Arc<RwLock<HashMap<Uuid, Vec<GovernanceAuditRecord>>>>,
     pub webhook_runtime: Arc<RwLock<HashMap<Uuid, WebhookRuntimeState>>>,
     pub webhook_delivery: WebhookDeliveryConfig,
     pub webhook_http: Arc<reqwest::Client>,

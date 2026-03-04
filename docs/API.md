@@ -497,6 +497,32 @@ Fetch webhook configuration by ID.
 
 Delete webhook configuration and retained in-memory event records.
 
+### `GET /api/v1/policies/:user`
+
+Fetch effective governance policy for a user identifier.
+
+### `PUT /api/v1/policies/:user`
+
+Upsert user governance policy.
+
+```json
+// Request
+{
+  "retention_days_message": 365,
+  "retention_days_text": 180,
+  "retention_days_json": 90,
+  "webhook_domain_allowlist": ["hooks.acme.example"],
+  "default_memory_contract": "default",
+  "default_retrieval_policy": "balanced"
+}
+```
+
+- `webhook_domain_allowlist` blocks webhook registrations outside allowed hosts/subdomains.
+
+### `GET /api/v1/policies/:user/audit`
+
+List governance audit records (`policy_updated`, `policy_violation_webhook_domain`, `session_deleted`, `user_deleted`).
+
 ---
 
 ## Import API

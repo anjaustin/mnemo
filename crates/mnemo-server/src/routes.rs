@@ -40,8 +40,9 @@ use mnemo_core::traits::storage::{
 
 use crate::middleware::RequestContext;
 use crate::state::{
-    AppState, ImportJobRecord, ImportJobStatus, MemoryWebhookAuditRecord, MemoryWebhookEventRecord,
-    MemoryWebhookEventType, MemoryWebhookSubscription, WebhookRuntimeState,
+    AppState, GovernanceAuditRecord, ImportJobRecord, ImportJobStatus, MemoryWebhookAuditRecord,
+    MemoryWebhookEventRecord, MemoryWebhookEventType, MemoryWebhookSubscription, UserPolicyRecord,
+    WebhookRuntimeState,
 };
 
 // ─── Error handling ────────────────────────────────────────────────
@@ -172,6 +173,75 @@ fn webhook_audit_key(state: &AppState) -> String {
     format!("{}:audit", state.webhook_redis_prefix)
 }
 
+fn user_policies_key(state: &AppState) -> String {
+    format!("{}:user_policies", state.webhook_redis_prefix)
+}
+
+fn governance_audit_key(state: &AppState) -> String {
+    format!("{}:governance_audit", state.webhook_redis_prefix)
+}
+
+fn default_user_policy(user_id: Uuid, user_identifier: String) -> UserPolicyRecord {
+    let now = chrono::Utc::now();
+    UserPolicyRecord {
+        user_id,
+        user_identifier,
+        retention_days_message: 365,
+        retention_days_text: 365,
+        retention_days_json: 180,
+        webhook_domain_allowlist: Vec::new(),
+        default_memory_contract: "default".to_string(),
+        default_retrieval_policy: "balanced".to_string(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+async fn get_or_create_user_policy(
+    state: &AppState,
+    user_id: Uuid,
+    user_identifier: String,
+) -> UserPolicyRecord {
+    let policy = {
+        let mut policies = state.user_policies.write().await;
+        policies
+            .entry(user_id)
+            .or_insert_with(|| default_user_policy(user_id, user_identifier))
+            .clone()
+    };
+    persist_webhook_state(state).await;
+    policy
+}
+
+fn normalize_domain_allowlist(values: Option<Vec<String>>) -> Vec<String> {
+    values
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
+fn target_url_host(url: &str) -> Option<String> {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
+}
+
+fn is_target_url_allowed(policy: &UserPolicyRecord, target_url: &str) -> bool {
+    if policy.webhook_domain_allowlist.is_empty() {
+        return true;
+    }
+    let Some(host) = target_url_host(target_url) else {
+        return false;
+    };
+
+    policy
+        .webhook_domain_allowlist
+        .iter()
+        .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
+}
+
 pub async fn restore_webhook_state(state: &AppState) -> Result<(), MnemoError> {
     if !state.webhook_delivery.persistence_enabled {
         return Ok(());
@@ -192,6 +262,14 @@ pub async fn restore_webhook_state(state: &AppState) -> Result<(), MnemoError> {
         .get(webhook_audit_key(state))
         .await
         .map_err(|err| MnemoError::Redis(err.to_string()))?;
+    let user_policies_raw: Option<String> = conn
+        .get(user_policies_key(state))
+        .await
+        .map_err(|err| MnemoError::Redis(err.to_string()))?;
+    let governance_audit_raw: Option<String> = conn
+        .get(governance_audit_key(state))
+        .await
+        .map_err(|err| MnemoError::Redis(err.to_string()))?;
 
     if let Some(json) = subscriptions_raw {
         let parsed: HashMap<Uuid, MemoryWebhookSubscription> = serde_json::from_str(&json)
@@ -209,6 +287,18 @@ pub async fn restore_webhook_state(state: &AppState) -> Result<(), MnemoError> {
         let parsed: HashMap<Uuid, Vec<MemoryWebhookAuditRecord>> = serde_json::from_str(&json)
             .map_err(|err| MnemoError::Serialization(err.to_string()))?;
         let mut audit = state.memory_webhook_audit.write().await;
+        *audit = parsed;
+    }
+    if let Some(json) = user_policies_raw {
+        let parsed: HashMap<Uuid, UserPolicyRecord> = serde_json::from_str(&json)
+            .map_err(|err| MnemoError::Serialization(err.to_string()))?;
+        let mut policies = state.user_policies.write().await;
+        *policies = parsed;
+    }
+    if let Some(json) = governance_audit_raw {
+        let parsed: HashMap<Uuid, Vec<GovernanceAuditRecord>> = serde_json::from_str(&json)
+            .map_err(|err| MnemoError::Serialization(err.to_string()))?;
+        let mut audit = state.governance_audit.write().await;
         *audit = parsed;
     }
 
@@ -235,6 +325,14 @@ async fn persist_webhook_state(state: &AppState) {
         let audit = state.memory_webhook_audit.read().await;
         audit.clone()
     };
+    let policy_snapshot = {
+        let policies = state.user_policies.read().await;
+        policies.clone()
+    };
+    let governance_audit_snapshot = {
+        let audit = state.governance_audit.read().await;
+        audit.clone()
+    };
 
     let hooks_json = match serde_json::to_string(&hooks_snapshot) {
         Ok(json) => json,
@@ -254,6 +352,20 @@ async fn persist_webhook_state(state: &AppState) {
         Ok(json) => json,
         Err(err) => {
             warn!(error = %err, "failed to serialize webhook audit for persistence");
+            return;
+        }
+    };
+    let user_policies_json = match serde_json::to_string(&policy_snapshot) {
+        Ok(json) => json,
+        Err(err) => {
+            warn!(error = %err, "failed to serialize user policies for persistence");
+            return;
+        }
+    };
+    let governance_audit_json = match serde_json::to_string(&governance_audit_snapshot) {
+        Ok(json) => json,
+        Err(err) => {
+            warn!(error = %err, "failed to serialize governance audit for persistence");
             return;
         }
     };
@@ -284,6 +396,24 @@ async fn persist_webhook_state(state: &AppState) {
     {
         warn!(error = %err, "failed to persist webhook audit");
     }
+
+    if let Err(err) = redis::cmd("SET")
+        .arg(user_policies_key(state))
+        .arg(user_policies_json)
+        .exec_async(&mut conn)
+        .await
+    {
+        warn!(error = %err, "failed to persist user policies");
+    }
+
+    if let Err(err) = redis::cmd("SET")
+        .arg(governance_audit_key(state))
+        .arg(governance_audit_json)
+        .exec_async(&mut conn)
+        .await
+    {
+        warn!(error = %err, "failed to persist governance audit");
+    }
 }
 
 async fn append_webhook_audit(
@@ -308,6 +438,34 @@ async fn append_webhook_audit(
         rows.push(record);
         if rows.len() > MAX_AUDIT_PER_WEBHOOK {
             let overflow = rows.len() - MAX_AUDIT_PER_WEBHOOK;
+            rows.drain(0..overflow);
+        }
+    }
+    persist_webhook_state(state).await;
+}
+
+async fn append_governance_audit(
+    state: &AppState,
+    user_id: Uuid,
+    action: &str,
+    request_id: Option<String>,
+    details: serde_json::Value,
+) {
+    const MAX_AUDIT_PER_USER: usize = 1000;
+    let record = GovernanceAuditRecord {
+        id: Uuid::now_v7(),
+        user_id,
+        action: action.to_string(),
+        request_id,
+        details,
+        at: chrono::Utc::now(),
+    };
+    {
+        let mut audit = state.governance_audit.write().await;
+        let rows = audit.entry(user_id).or_default();
+        rows.push(record);
+        if rows.len() > MAX_AUDIT_PER_USER {
+            let overflow = rows.len() - MAX_AUDIT_PER_USER;
             rows.drain(0..overflow);
         }
     }
@@ -753,6 +911,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:id", get(get_user))
         .route("/api/v1/users/:id", put(update_user))
         .route("/api/v1/users/:id", delete(delete_user))
+        .route("/api/v1/policies/:user", get(get_user_policy))
+        .route("/api/v1/policies/:user", put(upsert_user_policy))
+        .route("/api/v1/policies/:user/audit", get(list_user_policy_audit))
         .route(
             "/api/v1/users/external/:external_id",
             get(get_user_by_external_id),
@@ -913,6 +1074,8 @@ async fn metrics(
         .metrics
         .webhook_replay_requests_total
         .load(Ordering::Relaxed);
+    let policy_update_total = state.metrics.policy_update_total.load(Ordering::Relaxed);
+    let policy_violation_total = state.metrics.policy_violation_total.load(Ordering::Relaxed);
 
     let (webhook_events_total, webhook_events_pending, webhook_events_dead_letter) = {
         let events_map = state.memory_webhook_events.read().await;
@@ -932,7 +1095,7 @@ async fn metrics(
         (total, pending, dead)
     };
 
-    let body = format!(
+    let mut body = format!(
         "# HELP mnemo_http_requests_total Total HTTP requests observed\n\
 # TYPE mnemo_http_requests_total counter\n\
 mnemo_http_requests_total {}\n\
@@ -983,6 +1146,16 @@ mnemo_webhook_events_dead_letter {}\n",
         webhook_events_dead_letter,
     );
 
+    body.push_str(&format!(
+        "# HELP mnemo_policy_update_total User policy update operations\n\
+# TYPE mnemo_policy_update_total counter\n\
+mnemo_policy_update_total {}\n\
+# HELP mnemo_policy_violation_total Policy violations blocked by server\n\
+# TYPE mnemo_policy_violation_total counter\n\
+mnemo_policy_violation_total {}\n",
+        policy_update_total, policy_violation_total
+    ));
+
     (
         StatusCode::OK,
         [("content-type", "text/plain; version=0.0.4")],
@@ -1028,13 +1201,130 @@ async fn update_user(
     Ok(Json(user))
 }
 
+async fn get_user_policy(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+) -> Result<Json<UserPolicyResponse>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let policy =
+        get_or_create_user_policy(&state, user.id, user_identifier.trim().to_string()).await;
+    Ok(Json(UserPolicyResponse { policy }))
+}
+
+async fn upsert_user_policy(
+    State(state): State<AppState>,
+    ctx: Option<Extension<RequestContext>>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<UpsertUserPolicyRequest>,
+) -> Result<Json<UserPolicyResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    let policy = {
+        let mut policies = state.user_policies.write().await;
+        let now = chrono::Utc::now();
+        let record = policies
+            .entry(user.id)
+            .or_insert_with(|| default_user_policy(user.id, user_identifier.trim().to_string()));
+
+        if let Some(v) = req.retention_days_message {
+            record.retention_days_message = v.clamp(1, 3650);
+        }
+        if let Some(v) = req.retention_days_text {
+            record.retention_days_text = v.clamp(1, 3650);
+        }
+        if let Some(v) = req.retention_days_json {
+            record.retention_days_json = v.clamp(1, 3650);
+        }
+        if req.webhook_domain_allowlist.is_some() {
+            record.webhook_domain_allowlist =
+                normalize_domain_allowlist(req.webhook_domain_allowlist);
+        }
+        if let Some(v) = req.default_memory_contract {
+            let normalized = v.trim().to_string();
+            if !normalized.is_empty() {
+                record.default_memory_contract = normalized;
+            }
+        }
+        if let Some(v) = req.default_retrieval_policy {
+            let normalized = v.trim().to_string();
+            if !normalized.is_empty() {
+                record.default_retrieval_policy = normalized;
+            }
+        }
+        record.updated_at = now;
+        record.clone()
+    };
+
+    state
+        .metrics
+        .policy_update_total
+        .fetch_add(1, Ordering::Relaxed);
+
+    append_governance_audit(
+        &state,
+        user.id,
+        "policy_updated",
+        request_id,
+        serde_json::json!({
+            "retention_days_message": policy.retention_days_message,
+            "retention_days_text": policy.retention_days_text,
+            "retention_days_json": policy.retention_days_json,
+            "webhook_domain_allowlist": policy.webhook_domain_allowlist,
+            "default_memory_contract": policy.default_memory_contract,
+            "default_retrieval_policy": policy.default_retrieval_policy
+        }),
+    )
+    .await;
+
+    persist_webhook_state(&state).await;
+    Ok(Json(UserPolicyResponse { policy }))
+}
+
+async fn list_user_policy_audit(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Query(query): Query<UserPolicyAuditQuery>,
+) -> Result<Json<UserPolicyAuditResponse>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000) as usize;
+
+    let mut rows = {
+        let audit = state.governance_audit.read().await;
+        audit.get(&user.id).cloned().unwrap_or_default()
+    };
+    rows.sort_by(|a, b| b.at.cmp(&a.at));
+    rows.truncate(limit);
+
+    Ok(Json(UserPolicyAuditResponse {
+        user_id: user.id,
+        count: rows.len(),
+        audit: rows,
+    }))
+}
+
 async fn delete_user(
     State(state): State<AppState>,
+    ctx: Option<Extension<RequestContext>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
+    append_governance_audit(
+        &state,
+        id,
+        "user_deleted",
+        request_id,
+        serde_json::json!({}),
+    )
+    .await;
     state.state_store.delete_user(id).await?;
     // Also delete vectors for GDPR compliance
     let _ = state.vector_store.delete_user_vectors(id).await;
+    {
+        let mut policies = state.user_policies.write().await;
+        policies.remove(&id);
+    }
+    persist_webhook_state(&state).await;
     Ok(Json(DeleteResponse { deleted: true }))
 }
 
@@ -1076,9 +1366,20 @@ async fn update_session(
 
 async fn delete_session(
     State(state): State<AppState>,
+    ctx: Option<Extension<RequestContext>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
+    let session = state.state_store.get_session(id).await?;
     state.state_store.delete_session(id).await?;
+    append_governance_audit(
+        &state,
+        session.user_id,
+        "session_deleted",
+        request_id,
+        serde_json::json!({ "session_id": id }),
+    )
+    .await;
     Ok(Json(DeleteResponse { deleted: true }))
 }
 
@@ -1413,6 +1714,40 @@ struct WebhookAuditResponse {
     webhook_id: Uuid,
     count: usize,
     audit: Vec<MemoryWebhookAuditRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpsertUserPolicyRequest {
+    #[serde(default)]
+    retention_days_message: Option<u32>,
+    #[serde(default)]
+    retention_days_text: Option<u32>,
+    #[serde(default)]
+    retention_days_json: Option<u32>,
+    #[serde(default)]
+    webhook_domain_allowlist: Option<Vec<String>>,
+    #[serde(default)]
+    default_memory_contract: Option<String>,
+    #[serde(default)]
+    default_retrieval_policy: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UserPolicyResponse {
+    policy: UserPolicyRecord,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserPolicyAuditQuery {
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct UserPolicyAuditResponse {
+    user_id: Uuid,
+    count: usize,
+    audit: Vec<GovernanceAuditRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3190,6 +3525,27 @@ async fn register_memory_webhook(
     }
 
     let user = find_user_by_identifier(&state, req.user.trim()).await?;
+    let policy = get_or_create_user_policy(&state, user.id, req.user.trim().to_string()).await;
+    if !is_target_url_allowed(&policy, req.target_url.trim()) {
+        state
+            .metrics
+            .policy_violation_total
+            .fetch_add(1, Ordering::Relaxed);
+        append_governance_audit(
+            &state,
+            user.id,
+            "policy_violation_webhook_domain",
+            request_id.clone(),
+            serde_json::json!({
+                "target_url": req.target_url.trim(),
+                "allowlist": policy.webhook_domain_allowlist,
+            }),
+        )
+        .await;
+        return Err(AppError(MnemoError::Validation(
+            "target_url host is not allowed by policy webhook_domain_allowlist".into(),
+        )));
+    }
     let now = chrono::Utc::now();
     let signing_secret = req
         .signing_secret

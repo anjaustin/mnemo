@@ -125,6 +125,8 @@ async fn build_test_harness_with_prefilter_and_webhooks(
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhook_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        user_policies: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        governance_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_delivery,
         webhook_http: Arc::new(reqwest::Client::new()),
@@ -3218,4 +3220,119 @@ async fn test_memory_webhook_replay_retry_and_audit_endpoints() {
     assert!(rows
         .iter()
         .any(|row| row["action"] == "replay_requested" && row["request_id"] == req_id));
+}
+
+#[tokio::test]
+async fn test_policy_webhook_domain_allowlist_blocks_disallowed_target() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "policy-user",
+            "external_id": "policy-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let req_id = "policy-allowlist-req-001";
+    let (status, _) = json_request_with_header(
+        &app,
+        "PUT",
+        "/api/v1/policies/policy-user",
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({
+            "webhook_domain_allowlist": ["hooks.acme.example"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({
+            "user": "policy-user",
+            "target_url": "https://evil.example/webhook",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, audit) = json_request(
+        &app,
+        "GET",
+        "/api/v1/policies/policy-user/audit?limit=20",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = audit["audit"].as_array().cloned().unwrap_or_default();
+    assert!(rows.iter().any(|row| row["action"] == "policy_updated"));
+    assert!(rows.iter().any(|row| {
+        row["action"] == "policy_violation_webhook_domain" && row["request_id"] == req_id
+    }));
+}
+
+#[tokio::test]
+async fn test_policy_audit_records_session_deletion() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "policy-delete-user",
+            "external_id": "policy-delete-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap();
+
+    let (status, session) = json_request(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        serde_json::json!({ "user_id": user_id, "name": "to-delete" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session["id"].as_str().unwrap();
+
+    let req_id = "delete-session-req-77";
+    let request = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/v1/sessions/{session_id}"))
+        .header(REQUEST_ID_HEADER, req_id)
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (status, audit) = json_request(
+        &app,
+        "GET",
+        "/api/v1/policies/policy-delete-user/audit?limit=20",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = audit["audit"].as_array().cloned().unwrap_or_default();
+    assert!(rows.iter().any(|row| {
+        row["action"] == "session_deleted"
+            && row["request_id"] == req_id
+            && row["details"]["session_id"] == session_id
+    }));
 }

@@ -40,6 +40,7 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - **Chat History Importer** - Migrates existing histories with async jobs, dry-run validation, and idempotent replay protection.
 - **Memory Lifecycle Webhooks** - Emits `head_advanced`, `fact_added`, `fact_superseded`, and `conflict_detected` events with retry/backoff delivery and optional HMAC signatures.
 - **Time Travel Trace** - Compares memory snapshots across two points in time and returns timeline-level "why it changed" evidence.
+- **Governance Policies** - Per-user retention defaults, webhook domain allowlists, and audit trails for policy/destructive operations.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
@@ -175,6 +176,11 @@ curl -X POST http://localhost:8080/api/v1/memory/webhooks \
 
 # Inspect retained event delivery status
 curl http://localhost:8080/api/v1/memory/webhooks/WEBHOOK_ID/events?limit=10
+
+# Set user governance policy (allowlist + retention defaults)
+curl -X PUT http://localhost:8080/api/v1/policies/acct_mgr_jordan \
+  -H "Content-Type: application/json" \
+  -d '{"webhook_domain_allowlist":["hooks.acme.example"],"retention_days_message":365}'
 ```
 
 ### Full workflow: Users, Sessions, Episodes

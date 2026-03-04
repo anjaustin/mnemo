@@ -28,6 +28,8 @@ The next step-change is operational trust at production scale: predictable deliv
 - Prometheus-compatible `/metrics` endpoint for HTTP and webhook delivery telemetry.
 - CI temporal quality budget gate in `.github/workflows/quality-gates.yml`.
 - Webhook event/audit records now retain originating request correlation IDs for incident traceability.
+- User governance policy endpoints with webhook allowlist enforcement and audit trails (`/api/v1/policies/:user`, `/api/v1/policies/:user/audit`).
+- Request IDs now persist into episode metadata and surface in `changes_since`/`time_travel/trace` for cross-pipeline joins.
 
 ### Planned next in P0
 
