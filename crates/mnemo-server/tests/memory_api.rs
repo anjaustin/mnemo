@@ -120,6 +120,7 @@ async fn build_test_harness_with_prefilter_and_webhooks(
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_delivery,
         webhook_http: Arc::new(reqwest::Client::new()),
@@ -2994,4 +2995,123 @@ async fn test_memory_webhook_dead_letter_and_stats_endpoint() {
     assert_eq!(status, StatusCode::OK);
     assert!(stats["total_events"].as_u64().unwrap_or(0) >= 1);
     assert!(stats["dead_letter_events"].as_u64().unwrap_or(0) >= 1);
+}
+
+#[tokio::test]
+async fn test_memory_webhook_replay_retry_and_audit_endpoints() {
+    let (sink_url, _, _) = start_webhook_sink_server(1).await;
+    let (app, _) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 1,
+            base_backoff_ms: 5,
+            request_timeout_ms: 500,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
+        },
+    )
+    .await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "webhook-ops-user",
+            "session": "default",
+            "text": "seed"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "webhook-ops-user",
+            "target_url": sink_url,
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": "webhook-ops-user",
+            "session": "default",
+            "text": "trigger dead-letter first attempt"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let dead = wait_for_dead_letter_event(&app, &webhook_id).await;
+    let event_id = dead["id"].as_str().unwrap().to_string();
+
+    let (status, replay) = json_request(
+        &app,
+        "GET",
+        &format!(
+            "/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=1&include_delivered=false&include_dead_letter=true"
+        ),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replay["count"], 1);
+    assert_eq!(replay["events"][0]["id"], event_id);
+
+    let (status, retried) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/memory/webhooks/{webhook_id}/events/{event_id}/retry"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(retried["queued"], true);
+
+    let delivered = wait_for_webhook_delivery(&app, &webhook_id, true).await;
+    assert_eq!(delivered["id"], event_id);
+    assert_eq!(delivered["delivered"], true);
+
+    let (status, replay_after) = json_request(
+        &app,
+        "GET",
+        &format!(
+            "/api/v1/memory/webhooks/{webhook_id}/events/replay?after_event_id={event_id}&limit=10"
+        ),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replay_after["count"], 0);
+
+    let (status, audit) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{webhook_id}/audit?limit=20"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = audit["audit"].as_array().cloned().unwrap_or_default();
+    assert!(!rows.is_empty());
+    assert!(rows.iter().any(|row| row["action"] == "webhook_registered"));
+    assert!(rows.iter().any(|row| row["action"] == "retry_queued"));
 }

@@ -82,6 +82,15 @@ pub struct MemoryWebhookEventRecord {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryWebhookAuditRecord {
+    pub id: Uuid,
+    pub webhook_id: Uuid,
+    pub action: String,
+    pub details: serde_json::Value,
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Copy)]
 pub struct WebhookDeliveryConfig {
     pub enabled: bool,
@@ -116,6 +125,7 @@ pub struct AppState {
     pub import_idempotency: Arc<RwLock<HashMap<String, Uuid>>>,
     pub memory_webhooks: Arc<RwLock<HashMap<Uuid, MemoryWebhookSubscription>>>,
     pub memory_webhook_events: Arc<RwLock<HashMap<Uuid, Vec<MemoryWebhookEventRecord>>>>,
+    pub memory_webhook_audit: Arc<RwLock<HashMap<Uuid, Vec<MemoryWebhookAuditRecord>>>>,
     pub webhook_runtime: Arc<RwLock<HashMap<Uuid, WebhookRuntimeState>>>,
     pub webhook_delivery: WebhookDeliveryConfig,
     pub webhook_http: Arc<reqwest::Client>,

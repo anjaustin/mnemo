@@ -146,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_delivery: WebhookDeliveryConfig {
             enabled: config.webhooks.enabled,

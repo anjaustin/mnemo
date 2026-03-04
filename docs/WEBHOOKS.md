@@ -29,8 +29,11 @@ If `events` is omitted during registration, Mnemo subscribes the webhook to all 
   - `circuit_breaker_cooldown_ms=60000`
 - Delivery telemetry is retained in-memory and queryable via:
   - `GET /api/v1/memory/webhooks/:id/events`
+  - `GET /api/v1/memory/webhooks/:id/events/replay`
+  - `POST /api/v1/memory/webhooks/:id/events/:event_id/retry`
   - `GET /api/v1/memory/webhooks/:id/events/dead-letter`
   - `GET /api/v1/memory/webhooks/:id/stats`
+  - `GET /api/v1/memory/webhooks/:id/audit`
 
 Each event record includes:
 
@@ -46,6 +49,13 @@ Each event record includes:
 - A failed event is marked `dead_letter=true` after `max_attempts`.
 - Per-webhook rate limiting protects downstream endpoints.
 - Circuit breaker opens after repeated failures and pauses sends during cooldown.
+
+## Replay and operator controls
+
+- Replay with cursor semantics using `after_event_id`.
+- Filter replay stream by delivered/dead-letter flags.
+- Manually retry a specific event (`.../retry`) when downstream recovers.
+- Audit endpoint records operator and delivery lifecycle actions for investigations.
 
 ## Outbound headers
 

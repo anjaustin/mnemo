@@ -351,6 +351,7 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 | [Competitive Plan](docs/COMPETITIVE.md) | Cross-system benchmark methodology and scorecard |
 | [Chat Import Guide](docs/IMPORTING_CHAT_HISTORY.md) | Import formats, idempotency, dry run, and migration examples |
 | [Webhook Delivery Guide](docs/WEBHOOKS.md) | Event types, retry semantics, and signature verification examples |
+| [P0 Ops Control Plane PRD](docs/P0_OPS_CONTROL_PLANE_PRD.md) | Cloud-grade ops goals, scope, falsification matrix, and rollout criteria |
 | [Domain Readiness Matrix](docs/DOMAIN_READINESS_MATRIX.md) | Domain-by-domain readiness and 30/60/90 roadmap |
 | [Agent Identity Substrate](docs/AGENT_IDENTITY_SUBSTRATE.md) | Implemented P0 design for stable identity + adaptive experience |
 | [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |

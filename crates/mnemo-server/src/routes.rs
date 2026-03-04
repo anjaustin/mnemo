@@ -38,8 +38,8 @@ use mnemo_core::traits::storage::{
 };
 
 use crate::state::{
-    AppState, ImportJobRecord, ImportJobStatus, MemoryWebhookEventRecord, MemoryWebhookEventType,
-    MemoryWebhookSubscription, WebhookRuntimeState,
+    AppState, ImportJobRecord, ImportJobStatus, MemoryWebhookAuditRecord, MemoryWebhookEventRecord,
+    MemoryWebhookEventType, MemoryWebhookSubscription, WebhookRuntimeState,
 };
 
 // ─── Error handling ────────────────────────────────────────────────
@@ -131,6 +131,10 @@ fn webhook_events_key(state: &AppState) -> String {
     format!("{}:events", state.webhook_redis_prefix)
 }
 
+fn webhook_audit_key(state: &AppState) -> String {
+    format!("{}:audit", state.webhook_redis_prefix)
+}
+
 pub async fn restore_webhook_state(state: &AppState) -> Result<(), MnemoError> {
     if !state.webhook_delivery.persistence_enabled {
         return Ok(());
@@ -147,6 +151,10 @@ pub async fn restore_webhook_state(state: &AppState) -> Result<(), MnemoError> {
         .get(webhook_events_key(state))
         .await
         .map_err(|err| MnemoError::Redis(err.to_string()))?;
+    let audit_raw: Option<String> = conn
+        .get(webhook_audit_key(state))
+        .await
+        .map_err(|err| MnemoError::Redis(err.to_string()))?;
 
     if let Some(json) = subscriptions_raw {
         let parsed: HashMap<Uuid, MemoryWebhookSubscription> = serde_json::from_str(&json)
@@ -159,6 +167,12 @@ pub async fn restore_webhook_state(state: &AppState) -> Result<(), MnemoError> {
             .map_err(|err| MnemoError::Serialization(err.to_string()))?;
         let mut events = state.memory_webhook_events.write().await;
         *events = parsed;
+    }
+    if let Some(json) = audit_raw {
+        let parsed: HashMap<Uuid, Vec<MemoryWebhookAuditRecord>> = serde_json::from_str(&json)
+            .map_err(|err| MnemoError::Serialization(err.to_string()))?;
+        let mut audit = state.memory_webhook_audit.write().await;
+        *audit = parsed;
     }
 
     Ok(())
@@ -180,6 +194,10 @@ async fn persist_webhook_state(state: &AppState) {
         let events = state.memory_webhook_events.read().await;
         events.clone()
     };
+    let audit_snapshot = {
+        let audit = state.memory_webhook_audit.read().await;
+        audit.clone()
+    };
 
     let hooks_json = match serde_json::to_string(&hooks_snapshot) {
         Ok(json) => json,
@@ -192,6 +210,13 @@ async fn persist_webhook_state(state: &AppState) {
         Ok(json) => json,
         Err(err) => {
             warn!(error = %err, "failed to serialize webhook events for persistence");
+            return;
+        }
+    };
+    let audit_json = match serde_json::to_string(&audit_snapshot) {
+        Ok(json) => json,
+        Err(err) => {
+            warn!(error = %err, "failed to serialize webhook audit for persistence");
             return;
         }
     };
@@ -213,6 +238,41 @@ async fn persist_webhook_state(state: &AppState) {
     {
         warn!(error = %err, "failed to persist webhook events");
     }
+
+    if let Err(err) = redis::cmd("SET")
+        .arg(webhook_audit_key(state))
+        .arg(audit_json)
+        .exec_async(&mut conn)
+        .await
+    {
+        warn!(error = %err, "failed to persist webhook audit");
+    }
+}
+
+async fn append_webhook_audit(
+    state: &AppState,
+    webhook_id: Uuid,
+    action: &str,
+    details: serde_json::Value,
+) {
+    const MAX_AUDIT_PER_WEBHOOK: usize = 1000;
+    let record = MemoryWebhookAuditRecord {
+        id: Uuid::now_v7(),
+        webhook_id,
+        action: action.to_string(),
+        details,
+        at: chrono::Utc::now(),
+    };
+    {
+        let mut audit = state.memory_webhook_audit.write().await;
+        let rows = audit.entry(webhook_id).or_default();
+        rows.push(record);
+        if rows.len() > MAX_AUDIT_PER_WEBHOOK {
+            let overflow = rows.len() - MAX_AUDIT_PER_WEBHOOK;
+            rows.drain(0..overflow);
+        }
+    }
+    persist_webhook_state(state).await;
 }
 
 async fn check_webhook_rate_and_circuit(state: &AppState, webhook_id: Uuid) -> Result<(), String> {
@@ -381,6 +441,16 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                 Some(format!("serialize failure: {err}")),
             )
             .await;
+            append_webhook_audit(
+                &state,
+                webhook_id,
+                "delivery_dead_letter",
+                serde_json::json!({
+                    "event_id": event_id,
+                    "reason": format!("serialize failure: {err}")
+                }),
+            )
+            .await;
             record_webhook_delivery_failure(&state, webhook_id).await;
             persist_webhook_state(&state).await;
             return;
@@ -405,6 +475,16 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
             .await;
             record_webhook_delivery_failure(&state, webhook_id).await;
             if dead_letter {
+                append_webhook_audit(
+                    &state,
+                    webhook_id,
+                    "delivery_dead_letter",
+                    serde_json::json!({
+                        "event_id": event_id,
+                        "reason": "circuit_or_rate_limited"
+                    }),
+                )
+                .await;
                 persist_webhook_state(&state).await;
                 return;
             }
@@ -467,6 +547,16 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                 .await;
                 record_webhook_delivery_failure(&state, webhook_id).await;
                 if dead_letter {
+                    append_webhook_audit(
+                        &state,
+                        webhook_id,
+                        "delivery_dead_letter",
+                        serde_json::json!({
+                            "event_id": event_id,
+                            "reason": err
+                        }),
+                    )
+                    .await;
                     persist_webhook_state(&state).await;
                     return;
                 }
@@ -495,6 +585,16 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                 .await;
                 record_webhook_delivery_failure(&state, webhook_id).await;
                 if dead_letter {
+                    append_webhook_audit(
+                        &state,
+                        webhook_id,
+                        "delivery_dead_letter",
+                        serde_json::json!({
+                            "event_id": event_id,
+                            "reason": err.to_string()
+                        }),
+                    )
+                    .await;
                     persist_webhook_state(&state).await;
                     return;
                 }
@@ -618,8 +718,20 @@ pub fn build_router(state: AppState) -> Router {
             get(list_memory_webhook_events),
         )
         .route(
+            "/api/v1/memory/webhooks/:id/events/replay",
+            get(replay_memory_webhook_events),
+        )
+        .route(
+            "/api/v1/memory/webhooks/:id/events/:event_id/retry",
+            post(retry_memory_webhook_event),
+        )
+        .route(
             "/api/v1/memory/webhooks/:id/events/dead-letter",
             get(list_memory_webhook_dead_letters),
+        )
+        .route(
+            "/api/v1/memory/webhooks/:id/audit",
+            get(list_memory_webhook_audit),
         )
         .route(
             "/api/v1/memory/webhooks/:id/stats",
@@ -1042,6 +1154,54 @@ struct ListWebhookEventsResponse {
     webhook_id: Uuid,
     count: usize,
     events: Vec<MemoryWebhookEventRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplayWebhookEventsQuery {
+    #[serde(default)]
+    after_event_id: Option<Uuid>,
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    include_delivered: Option<bool>,
+    #[serde(default)]
+    include_dead_letter: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplayWebhookEventsResponse {
+    webhook_id: Uuid,
+    count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_after_event_id: Option<Uuid>,
+    events: Vec<MemoryWebhookEventRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RetryWebhookEventRequest {
+    #[serde(default)]
+    force: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct RetryWebhookEventResponse {
+    webhook_id: Uuid,
+    event_id: Uuid,
+    queued: bool,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookAuditQuery {
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct WebhookAuditResponse {
+    webhook_id: Uuid,
+    count: usize,
+    audit: Vec<MemoryWebhookAuditRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2812,6 +2972,17 @@ async fn register_memory_webhook(
         hooks.insert(webhook.id, webhook.clone());
     }
     persist_webhook_state(&state).await;
+    append_webhook_audit(
+        &state,
+        webhook.id,
+        "webhook_registered",
+        serde_json::json!({
+            "target_url": webhook.target_url.clone(),
+            "events": webhook.events.clone(),
+            "enabled": webhook.enabled
+        }),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -2844,6 +3015,10 @@ async fn delete_memory_webhook(
     {
         let mut events = state.memory_webhook_events.write().await;
         events.remove(&id);
+    }
+    {
+        let mut audit = state.memory_webhook_audit.write().await;
+        audit.remove(&id);
     }
     {
         let mut runtime = state.webhook_runtime.write().await;
@@ -2884,6 +3059,139 @@ async fn list_memory_webhook_events(
         webhook_id: id,
         count: events.len(),
         events,
+    }))
+}
+
+async fn replay_memory_webhook_events(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ReplayWebhookEventsQuery>,
+) -> Result<Json<ReplayWebhookEventsResponse>, AppError> {
+    {
+        let hooks = state.memory_webhooks.read().await;
+        if !hooks.contains_key(&id) {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: id.to_string(),
+            }));
+        }
+    }
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000) as usize;
+    let include_delivered = query.include_delivered.unwrap_or(true);
+    let include_dead_letter = query.include_dead_letter.unwrap_or(true);
+    let mut events = {
+        let event_map = state.memory_webhook_events.read().await;
+        event_map.get(&id).cloned().unwrap_or_default()
+    };
+
+    events.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    if let Some(after_event_id) = query.after_event_id {
+        if let Some(idx) = events.iter().position(|e| e.id == after_event_id) {
+            events = events.into_iter().skip(idx + 1).collect();
+        }
+    }
+    if !include_delivered {
+        events.retain(|e| !e.delivered);
+    }
+    if !include_dead_letter {
+        events.retain(|e| !e.dead_letter);
+    }
+
+    let page: Vec<MemoryWebhookEventRecord> = events.into_iter().take(limit).collect();
+    let next_after_event_id = page.last().map(|e| e.id);
+
+    Ok(Json(ReplayWebhookEventsResponse {
+        webhook_id: id,
+        count: page.len(),
+        next_after_event_id,
+        events: page,
+    }))
+}
+
+async fn retry_memory_webhook_event(
+    State(state): State<AppState>,
+    Path((webhook_id, event_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<RetryWebhookEventRequest>,
+) -> Result<Json<RetryWebhookEventResponse>, AppError> {
+    {
+        let hooks = state.memory_webhooks.read().await;
+        if !hooks.contains_key(&webhook_id) {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: webhook_id.to_string(),
+            }));
+        }
+    }
+
+    let mut found = false;
+    let mut delivered = false;
+    {
+        let mut event_map = state.memory_webhook_events.write().await;
+        if let Some(events) = event_map.get_mut(&webhook_id) {
+            if let Some(event) = events.iter_mut().find(|e| e.id == event_id) {
+                found = true;
+                delivered = event.delivered;
+                if !delivered || req.force.unwrap_or(false) {
+                    event.dead_letter = false;
+                    event.last_error = None;
+                }
+            }
+        }
+    }
+
+    if !found {
+        return Err(AppError(MnemoError::NotFound {
+            resource_type: "WebhookEvent".into(),
+            id: event_id.to_string(),
+        }));
+    }
+
+    if delivered && !req.force.unwrap_or(false) {
+        append_webhook_audit(
+            &state,
+            webhook_id,
+            "retry_skipped",
+            serde_json::json!({
+                "event_id": event_id,
+                "reason": "already_delivered"
+            }),
+        )
+        .await;
+        return Ok(Json(RetryWebhookEventResponse {
+            webhook_id,
+            event_id,
+            queued: false,
+            reason: "event already delivered; pass force=true to re-deliver".to_string(),
+        }));
+    }
+
+    persist_webhook_state(&state).await;
+    append_webhook_audit(
+        &state,
+        webhook_id,
+        "retry_queued",
+        serde_json::json!({
+            "event_id": event_id,
+            "force": req.force.unwrap_or(false)
+        }),
+    )
+    .await;
+
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        deliver_memory_webhook_event(state_clone, webhook_id, event_id).await;
+    });
+
+    Ok(Json(RetryWebhookEventResponse {
+        webhook_id,
+        event_id,
+        queued: true,
+        reason: "delivery retry queued".to_string(),
     }))
 }
 
@@ -2979,6 +3287,36 @@ async fn get_memory_webhook_stats(
         circuit_open,
         circuit_open_until,
         rate_limit_per_minute: state.webhook_delivery.rate_limit_per_minute,
+    }))
+}
+
+async fn list_memory_webhook_audit(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<WebhookAuditQuery>,
+) -> Result<Json<WebhookAuditResponse>, AppError> {
+    {
+        let hooks = state.memory_webhooks.read().await;
+        if !hooks.contains_key(&id) {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: id.to_string(),
+            }));
+        }
+    }
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000) as usize;
+    let mut audit = {
+        let map = state.memory_webhook_audit.read().await;
+        map.get(&id).cloned().unwrap_or_default()
+    };
+    audit.sort_by(|a, b| b.at.cmp(&a.at));
+    audit.truncate(limit);
+
+    Ok(Json(WebhookAuditResponse {
+        webhook_id: id,
+        count: audit.len(),
+        audit,
     }))
 }
 

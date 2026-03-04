@@ -442,6 +442,33 @@ Query params:
 
 List only dead-lettered events (events that exhausted retries without a successful delivery).
 
+### `GET /api/v1/memory/webhooks/:id/events/replay`
+
+Cursor-style replay API for webhook event consumers.
+
+Query params:
+- `after_event_id` (optional, exclusive cursor)
+- `limit` (optional, default `100`, max `1000`)
+- `include_delivered` (optional, default `true`)
+- `include_dead_letter` (optional, default `true`)
+
+### `POST /api/v1/memory/webhooks/:id/events/:event_id/retry`
+
+Manually queue a re-delivery attempt for a specific event.
+
+```json
+// Request
+{
+  "force": false
+}
+```
+
+`force=true` allows re-delivery even if event is already marked delivered.
+
+### `GET /api/v1/memory/webhooks/:id/audit`
+
+List webhook operational audit records (`webhook_registered`, `retry_queued`, `delivery_dead_letter`, etc).
+
 ### `GET /api/v1/memory/webhooks/:id/stats`
 
 Get webhook delivery telemetry counters (pending, delivered, dead-letter, recent failures, circuit state).
