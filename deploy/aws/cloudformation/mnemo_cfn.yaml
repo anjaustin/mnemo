@@ -1,0 +1,363 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Mnemo Memory Server — single EC2 instance running the full three-service
+  stack (mnemo-server + Redis + Qdrant) via Docker Compose. Persistent data
+  is stored on a separate EBS gp3 volume mounted at /data.
+
+# ============================================================================
+# Parameters
+# ============================================================================
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - m6i.large
+      - m6i.xlarge
+    Description: >
+      EC2 instance type. t3.medium (2 vCPU / 4 GB RAM) is the recommended
+      minimum for production. t3.small (2 GB RAM) is suitable for dev/demo only.
+
+  DataVolumeSize:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 500
+    Description: Size in GiB for the persistent EBS data volume (Redis + Qdrant).
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 key pair for SSH access.
+
+  SSHCidr:
+    Type: String
+    Default: "0.0.0.0/0"
+    AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$"
+    Description: >
+      CIDR block allowed to SSH into the instance. Restrict to your IP
+      (e.g. 203.0.113.42/32) before deploying to production.
+
+  MnemoVersion:
+    Type: String
+    Default: latest
+    Description: >
+      mnemo-server Docker image tag to pull from GHCR.
+      Use "latest" or pin to a specific version e.g. "0.3.1".
+
+  MnemoLlmProvider:
+    Type: String
+    Default: ""
+    Description: "LLM provider: openai | anthropic | ollama | liquid (leave blank to skip enrichment)"
+
+  MnemoLlmApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: API key for the LLM provider (stored only in instance UserData; not logged by CloudFormation).
+
+  MnemoLlmModel:
+    Type: String
+    Default: "gpt-4o-mini"
+    Description: LLM model name.
+
+  MnemoEmbeddingApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: API key for the embedding model (may be same as LLM key for OpenAI).
+
+  MnemoEmbeddingModel:
+    Type: String
+    Default: "text-embedding-3-small"
+    Description: Embedding model name.
+
+  MnemoAuthEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable API key authentication. Set to true before public exposure.
+
+  MnemoAuthApiKeys:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Comma-separated API keys (required when MnemoAuthEnabled=true).
+
+# ============================================================================
+# Mappings — latest Amazon Linux 2023 AMI per region
+# Update periodically; these are current as of 2026-Q1.
+# ============================================================================
+Mappings:
+  RegionAMI:
+    us-east-1:
+      AMI: ami-0c101f26f147fa7fd
+    us-east-2:
+      AMI: ami-0b2f7e6e1b6a5b9b1
+    us-west-1:
+      AMI: ami-0ce2a7a8e9e7b7c7d
+    us-west-2:
+      AMI: ami-0c55b159cbfafe1f0
+    eu-west-1:
+      AMI: ami-0d71ea30463e0ff49
+    eu-west-2:
+      AMI: ami-0c67c8a2e8e6f8a2e
+    eu-central-1:
+      AMI: ami-0a261c0e5f51090b1
+    ap-southeast-1:
+      AMI: ami-0cff7528ff583bf9a
+    ap-southeast-2:
+      AMI: ami-0c6120f461d6b39e9
+    ap-northeast-1:
+      AMI: ami-0c3fd0f5d33134a76
+    ca-central-1:
+      AMI: ami-0c3d3a230b9668c02
+    sa-east-1:
+      AMI: ami-0c6b1d09930fac512
+
+# ============================================================================
+# Resources
+# ============================================================================
+Resources:
+
+  # ── Security Group ─────────────────────────────────────────────────
+  MnemoSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Mnemo server — HTTP + SSH access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: "0.0.0.0/0"
+          Description: Mnemo REST API
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+          Description: HTTPS (nginx, if configured)
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+          Description: HTTP (nginx redirect, if configured)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHCidr
+          Description: SSH access
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-sg"
+
+  # ── Data Volume (EBS) ──────────────────────────────────────────────
+  MnemoDataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    Properties:
+      AvailabilityZone: !GetAtt MnemoInstance.AvailabilityZone
+      Size: !Ref DataVolumeSize
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-data"
+
+  MnemoVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref MnemoInstance
+      VolumeId: !Ref MnemoDataVolume
+      Device: /dev/xvdf
+
+  # ── EC2 Instance ───────────────────────────────────────────────────
+  MnemoInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AMI]
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - !Ref MnemoSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-server"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > /var/log/mnemo-init.log 2>&1
+
+          # ── Wait for EBS data volume ─────────────────────────────
+          while [ ! -e /dev/xvdf ]; do sleep 2; done
+
+          # Format if new (no filesystem yet)
+          if ! blkid /dev/xvdf; then
+            mkfs.ext4 /dev/xvdf
+          fi
+
+          mkdir -p /data
+          mount /dev/xvdf /data
+
+          # Persist mount across reboots
+          echo "/dev/xvdf /data ext4 defaults,nofail 0 2" >> /etc/fstab
+
+          # ── Docker ──────────────────────────────────────────────
+          dnf update -y
+          dnf install -y docker curl
+          systemctl enable --now docker
+
+          # ── Docker Compose plugin ────────────────────────────────
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -fsSL \
+            "https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64" \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          # ── Directories ──────────────────────────────────────────
+          mkdir -p /data/redis /data/qdrant /opt/mnemo
+
+          # ── Environment file ─────────────────────────────────────
+          cat > /opt/mnemo/.env <<'ENVEOF'
+          MNEMO_VERSION=${MnemoVersion}
+          MNEMO_SERVER_PORT=8080
+          MNEMO_LLM_PROVIDER=${MnemoLlmProvider}
+          MNEMO_LLM_API_KEY=${MnemoLlmApiKey}
+          MNEMO_LLM_MODEL=${MnemoLlmModel}
+          MNEMO_EMBEDDING_API_KEY=${MnemoEmbeddingApiKey}
+          MNEMO_EMBEDDING_MODEL=${MnemoEmbeddingModel}
+          MNEMO_AUTH_ENABLED=${MnemoAuthEnabled}
+          MNEMO_AUTH_API_KEYS=${MnemoAuthApiKeys}
+          MNEMO_WEBHOOKS_ENABLED=true
+          MNEMO_WEBHOOKS_MAX_ATTEMPTS=3
+          RUST_LOG=mnemo=info
+          ENVEOF
+          chmod 600 /opt/mnemo/.env
+
+          # ── Docker Compose file ──────────────────────────────────
+          cat > /opt/mnemo/docker-compose.yml <<'COMPOSEEOF'
+          services:
+            redis:
+              image: redis/redis-stack:7.4.0-v1
+              container_name: mnemo-redis
+              restart: always
+              ports:
+                - "127.0.0.1:6379:6379"
+              volumes:
+                - /data/redis:/data
+              environment:
+                - REDIS_ARGS=--save 60 1 --loglevel warning
+              healthcheck:
+                test: ["CMD", "redis-cli", "ping"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+                start_period: 10s
+
+            qdrant:
+              image: qdrant/qdrant:v1.12.4
+              container_name: mnemo-qdrant
+              restart: always
+              ports:
+                - "127.0.0.1:6334:6334"
+              volumes:
+                - /data/qdrant:/qdrant/storage
+              environment:
+                - QDRANT__SERVICE__GRPC_PORT=6334
+                - QDRANT__LOG_LEVEL=WARN
+              healthcheck:
+                test: ["CMD-SHELL", "pidof qdrant || exit 1"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+                start_period: 15s
+
+            mnemo:
+              image: ghcr.io/anjaustin/mnemo/mnemo-server:${MNEMO_VERSION:-latest}
+              container_name: mnemo-server
+              restart: always
+              ports:
+                - "8080:8080"
+              environment:
+                - MNEMO_SERVER_HOST=0.0.0.0
+                - MNEMO_SERVER_PORT=8080
+                - MNEMO_REDIS_URL=redis://redis:6379
+                - MNEMO_QDRANT_URL=http://qdrant:6334
+                - MNEMO_LLM_PROVIDER=${MNEMO_LLM_PROVIDER:-}
+                - MNEMO_LLM_API_KEY=${MNEMO_LLM_API_KEY:-}
+                - MNEMO_LLM_MODEL=${MNEMO_LLM_MODEL:-gpt-4o-mini}
+                - MNEMO_EMBEDDING_API_KEY=${MNEMO_EMBEDDING_API_KEY:-}
+                - MNEMO_EMBEDDING_MODEL=${MNEMO_EMBEDDING_MODEL:-text-embedding-3-small}
+                - MNEMO_AUTH_ENABLED=${MNEMO_AUTH_ENABLED:-false}
+                - MNEMO_AUTH_API_KEYS=${MNEMO_AUTH_API_KEYS:-}
+                - MNEMO_WEBHOOKS_ENABLED=${MNEMO_WEBHOOKS_ENABLED:-true}
+                - MNEMO_WEBHOOKS_MAX_ATTEMPTS=${MNEMO_WEBHOOKS_MAX_ATTEMPTS:-3}
+                - RUST_LOG=${RUST_LOG:-mnemo=info}
+              depends_on:
+                redis:
+                  condition: service_healthy
+                qdrant:
+                  condition: service_healthy
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+                interval: 15s
+                timeout: 5s
+                retries: 3
+                start_period: 20s
+          COMPOSEEOF
+
+          # ── Start the stack ──────────────────────────────────────
+          cd /opt/mnemo
+          docker compose up -d
+
+          # ── cfn-signal ───────────────────────────────────────────
+          # Signal CloudFormation that UserData completed successfully.
+          # Requires cfn-bootstrap (pre-installed on Amazon Linux 2023).
+          /opt/aws/bin/cfn-signal -e $? \
+            --stack  ${AWS::StackName} \
+            --region ${AWS::Region} \
+            --resource MnemoInstance || true
+
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+
+# ============================================================================
+# Outputs
+# ============================================================================
+Outputs:
+  InstancePublicIP:
+    Description: Public IP address of the Mnemo instance
+    Value: !GetAtt MnemoInstance.PublicIp
+
+  HealthCheckURL:
+    Description: Mnemo health check endpoint
+    Value: !Sub "http://${MnemoInstance.PublicIp}:8080/health"
+
+  MemoryWriteExample:
+    Description: Example curl command to write a memory
+    Value: !Sub |
+      curl -s -X POST http://${MnemoInstance.PublicIp}:8080/api/v1/memory \
+        -H "Content-Type: application/json" \
+        -d '{"user":"alice","session":"test","content":"Mnemo on AWS"}'
+
+  SSHCommand:
+    Description: SSH command to access the instance
+    Value: !Sub "ssh -i <your-key>.pem ec2-user@${MnemoInstance.PublicIp}"
+
+  InitLog:
+    Description: Path to UserData init log on the instance
+    Value: /var/log/mnemo-init.log
+
+  DataVolumeId:
+    Description: EBS volume ID (retained on stack delete — delete manually if no longer needed)
+    Value: !Ref MnemoDataVolume

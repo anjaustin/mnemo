@@ -218,6 +218,25 @@ Northflank supports multi-service stacks from Docker images with persistent volu
 
 ---
 
+### T10 — Linode / Akamai Cloud
+**Priority:** P3  
+**Tooling:** Terraform (Linode provider)  
+**Status:** Not started
+
+Linode (now Akamai Cloud) is a VPS-tier provider with a simple, cost-effective compute offering. Uses the same Terraform module pattern as T4 (GCP) and T5 (DigitalOcean) — different provider, same structure.
+
+**Deliverables:**
+- `deploy/linode/terraform/main.tf` — Linode instance (`linode_instance`), user-data installs Docker + pulls GHCR + writes compose file + starts stack
+- `deploy/linode/terraform/variables.tf` — token, region, instance type, disk size, SSH key
+- `deploy/linode/terraform/outputs.tf` — public IP, health URL
+- `deploy/linode/DEPLOY.md` — token setup, `terraform init/plan/apply`, verify, destroy
+
+**Infrastructure output:**
+- 1 Linode instance (g6-standard-2: 2 vCPU / 4 GB RAM ≈ $18/month — cheaper than comparable DO/GCP)
+- 1 public IPv4
+
+---
+
 ## 4) Shared Infrastructure: What All Targets Need
 
 Every deployment target uses the same `mnemo-server` binary/image and the same configuration surface. The shared pieces that must be written once:
@@ -301,7 +320,7 @@ When using managed services, only `mnemo-server` needs to be deployed — no vol
 | **Phase 1** | T1 Docker, T2 Bare Metal | Production compose file + systemd unit + nginx ref — no cloud account needed to test |
 | **Phase 2** | T3 AWS, T4 GCP, T5 DigitalOcean | Cloud IaC templates — one-command deploy to each provider |
 | **Phase 3** | T6 Render, T7 Railway | PaaS blueprints — one-click or near-one-click deploy |
-| **Phase 4** | T8 Elestio, T9 Northflank | Catalog submissions — low engineering, high reach |
+| **Phase 4** | T8 Elestio, T9 Northflank, T10 Linode | Catalog submissions + Linode Terraform — low engineering, high reach |
 
 Each phase gate: deployed successfully from scratch, verified `/health` returns `{"status":"ok"}`, data persists across a container/instance restart.
 
@@ -346,9 +365,15 @@ deploy/
 ├── elestio/
 │   ├── docker-compose.yml
 │   └── DEPLOY.md
-└── northflank/
-    ├── stack.json
-    └── DEPLOY.md
+├── northflank/
+│   ├── stack.json
+│   └── DEPLOY.md
+└── linode/
+    └── terraform/
+        ├── main.tf
+        ├── variables.tf
+        ├── outputs.tf
+        └── DEPLOY.md
 ```
 
 ---
