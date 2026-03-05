@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - T5 DigitalOcean deployment live-falsified (nyc3, s-2vcpu-4gb, droplet 556194472) — all 5 gates passed, torn down.
+- T6 Render deployment live-falsified (oregon, starter plan, slug mnemo-9z5v) — all 5 gates passed, torn down.
+  - Fixed `render.yaml`: swapped Render managed Redis (no Stack modules) for `redis/redis-stack-server` as private service.
+  - Fixed `render.yaml`: Qdrant changed from `web` to `pserv` (private, no public exposure).
+  - Discovery: Render web services bind to port 10000; set `MNEMO_SERVER_PORT=10000`.
 
 ## [0.3.3] — 2026-03-05
 

@@ -167,16 +167,30 @@ Matches AnythingLLM's DigitalOcean target. Uses the same Terraform module struct
 
 ### T6 — Render.com
 **Priority:** P2  
-**Tooling:** `render.yaml` blueprint  
-**Status:** ✅ Artifacts written — pending live falsification
+**Tooling:** `render.yaml` blueprint + Render API  
+**Status:** ✅ Falsified + torn down (2026-03-05, oregon, starter plan, slug mnemo-9z5v)
 
-Render supports Docker services and managed Redis. Qdrant would run as a separate Render service or use Qdrant Cloud.
+Render supports Docker services with private networking. Mnemo runs as three services: mnemo-server (public web), Redis Stack (private), and Qdrant (private).
+
+> **Discovery:** Render's managed Key Value (Redis) does NOT include Redis Stack modules (RedisSearch, RedisJSON). Must run `redis/redis-stack-server` as a private Docker service instead.
+
+> **Discovery:** Render web services listen on port 10000 by default. Set `MNEMO_SERVER_PORT=10000` so Mnemo binds to the port Render proxies to.
+
+> **Discovery:** Render private services are reachable at `<service-name>:<port>` on the private network. Redis at `mnemo-redis:6379`, Qdrant at `mnemo-qdrant:6334`.
+
+**Falsification evidence (2026-03-05):**
+- Gate 1 (Health): `{"status":"ok","version":"0.3.3"}` — PASS
+- Gate 2 (Write): `{"ok":true,"episode_id":"019cbf3e-3169-..."}` — PASS
+- Gate 3 (Context): returned 38-token context with episode text — PASS
+- Gate 4 (List Episodes): 1 episode found — PASS
+- Gate 5 (Delete Session): `{"deleted":true}` HTTP 200 — PASS
+- All 3 services deleted via API — confirmed 0 resources remaining
 
 **Deliverables:**
 - `deploy/render/render.yaml` — Render blueprint defining:
-  - `mnemo-server` Docker service (GHCR image, port 8080, env vars)
-  - `mnemo-redis` Redis service (Render managed Redis) or env var pointing to external
-  - `MNEMO_QDRANT_URL` env var pointing to Qdrant Cloud (Qdrant has a free tier)
+  - `mnemo` web service (GHCR image, port 10000, env vars)
+  - `mnemo-redis` private service (Redis Stack Docker image, persistent disk)
+  - `mnemo-qdrant` private service (Qdrant Docker image, persistent disk)
 - `deploy/render/DEPLOY.md` — fork repo, connect Render, set env vars, deploy
 
 **Constraint:** Render's free tier is not suitable (Redis is paid; persistent disk is paid). Starter plan ~$14/month for the server + ~$10/month managed Redis = ~$24/month minimum. Document this clearly.
