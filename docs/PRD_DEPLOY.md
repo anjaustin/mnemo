@@ -1,7 +1,7 @@
 # Mnemo Deployment PRD
 
-**Status:** Phase 2 in progress (T1–T4 complete, T5–T10 pending)  
-**Version:** 0.3.2  
+**Status:** Phase 2 complete — all T1–T10 artifacts written; T1–T4 + T10 fully falsified  
+**Version:** 0.3.3  
 **Date:** 2026-03-05
 
 ---
@@ -141,7 +141,7 @@ AnythingLLM uses GCP Deployment Manager YAML. We'll use Terraform instead — it
 ### T5 — DigitalOcean (Terraform)
 **Priority:** P1  
 **Tooling:** Terraform  
-**Status:** 🔄 In progress
+**Status:** ✅ Artifacts written — pending live falsification
 
 Matches AnythingLLM's DigitalOcean target. Uses the same Terraform module structure as T4 for consistency — different provider, same patterns.
 
@@ -160,7 +160,7 @@ Matches AnythingLLM's DigitalOcean target. Uses the same Terraform module struct
 ### T6 — Render.com
 **Priority:** P2  
 **Tooling:** `render.yaml` blueprint  
-**Status:** Not started
+**Status:** ✅ Artifacts written — pending live falsification
 
 Render supports Docker services and managed Redis. Qdrant would run as a separate Render service or use Qdrant Cloud.
 
@@ -178,7 +178,7 @@ Render supports Docker services and managed Redis. Qdrant would run as a separat
 ### T7 — Railway
 **Priority:** P2  
 **Tooling:** Railway template (`railway.json` or template repo)  
-**Status:** Not started
+**Status:** ✅ Artifacts written — pending live falsification
 
 Railway supports multi-service templates. Redis is available as a Railway plugin. Qdrant must be self-hosted as a Railway service or externalized.
 
@@ -195,7 +195,7 @@ Railway supports multi-service templates. Redis is available as a Railway plugin
 ### T8 — Elestio
 **Priority:** P3  
 **Tooling:** Elestio managed open source hosting  
-**Status:** Not started
+**Status:** ✅ Artifacts written — pending live falsification
 
 Elestio can host any Docker-based open source project. Requires submitting a software listing. Lower engineering effort — primarily documentation and the compose file.
 
@@ -208,7 +208,7 @@ Elestio can host any Docker-based open source project. Requires submitting a sof
 ### T9 — Northflank
 **Priority:** P3  
 **Tooling:** Northflank stack definition  
-**Status:** Not started
+**Status:** ✅ Artifacts written — pending live falsification
 
 Northflank supports multi-service stacks from Docker images with persistent volumes.
 
@@ -221,7 +221,7 @@ Northflank supports multi-service stacks from Docker images with persistent volu
 ### T10 — Linode / Akamai Cloud
 **Priority:** P3  
 **Tooling:** Terraform (Linode provider)  
-**Status:** Not started
+**Status:** ✅ Complete — all 5 falsification gates passed (Linode US-ORD, Ubuntu 24.04)
 
 Linode (now Akamai Cloud) is a VPS-tier provider with a simple, cost-effective compute offering. Uses the same Terraform module pattern as T4 (GCP) and T5 (DigitalOcean) — different provider, same structure.
 

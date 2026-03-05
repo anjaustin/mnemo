@@ -1,0 +1,114 @@
+{
+  "apiVersion": "v1",
+  "spec": {
+    "kind": "Stack",
+    "name": "mnemo",
+    "services": [
+      {
+        "name": "mnemo-redis",
+        "billing": {
+          "deploymentPlan": "nf-compute-10",
+          "storageClass": "ssd",
+          "storage": 10240
+        },
+        "deployment": {
+          "docker": {
+            "configType": "customCommand",
+            "image": "redis/redis-stack:7.4.0-v1",
+            "command": "redis-server --save 60 1 --appendonly yes --loglevel warning"
+          }
+        },
+        "ports": [
+          {
+            "name": "redis",
+            "internalPort": 6379,
+            "public": false,
+            "protocol": "TCP"
+          }
+        ],
+        "volumes": [
+          {
+            "name": "redis-data",
+            "mountPath": "/data",
+            "size": 10240
+          }
+        ],
+        "healthChecks": [
+          {
+            "type": "CMD",
+            "command": ["redis-cli", "ping"]
+          }
+        ]
+      },
+      {
+        "name": "mnemo-qdrant",
+        "billing": {
+          "deploymentPlan": "nf-compute-10",
+          "storageClass": "ssd",
+          "storage": 20480
+        },
+        "deployment": {
+          "docker": {
+            "configType": "default",
+            "image": "qdrant/qdrant:v1.12.4"
+          }
+        },
+        "ports": [
+          {
+            "name": "grpc",
+            "internalPort": 6334,
+            "public": false,
+            "protocol": "TCP"
+          }
+        ],
+        "volumes": [
+          {
+            "name": "qdrant-storage",
+            "mountPath": "/qdrant/storage",
+            "size": 20480
+          }
+        ],
+        "runtimeEnvironment": [
+          { "key": "QDRANT__SERVICE__GRPC_PORT", "value": "6334" },
+          { "key": "QDRANT__LOG_LEVEL", "value": "WARN" }
+        ]
+      },
+      {
+        "name": "mnemo-server",
+        "billing": {
+          "deploymentPlan": "nf-compute-20"
+        },
+        "deployment": {
+          "docker": {
+            "configType": "default",
+            "image": "ghcr.io/anjaustin/mnemo/mnemo-server:latest"
+          }
+        },
+        "ports": [
+          {
+            "name": "http",
+            "internalPort": 8080,
+            "public": true,
+            "protocol": "HTTP"
+          }
+        ],
+        "runtimeEnvironment": [
+          { "key": "MNEMO_SERVER_HOST", "value": "0.0.0.0" },
+          { "key": "MNEMO_SERVER_PORT", "value": "8080" },
+          { "key": "MNEMO_REDIS_URL", "value": "redis://mnemo-redis:6379" },
+          { "key": "MNEMO_QDRANT_URL", "value": "http://mnemo-qdrant:6334" },
+          { "key": "MNEMO_WEBHOOKS_ENABLED", "value": "true" },
+          { "key": "MNEMO_WEBHOOKS_MAX_ATTEMPTS", "value": "3" },
+          { "key": "RUST_LOG", "value": "mnemo=info" }
+        ],
+        "healthChecks": [
+          {
+            "type": "HTTP",
+            "port": 8080,
+            "path": "/health"
+          }
+        ]
+      }
+    ]
+  }
+}

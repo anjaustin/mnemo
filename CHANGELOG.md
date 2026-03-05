@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-03-05
+
+### Added
+
+- Production deployment artifacts for T5–T10 (DigitalOcean, Render, Railway, Elestio, Northflank, Linode) — T10 Linode falsified end-to-end; T5–T9 artifacts written and ready.
+- `deploy/digitalocean/terraform/` — Droplet + Firewall Terraform, Ubuntu 24.04, Docker Compose via user-data. Same startup script pattern as T4 GCP.
+- `deploy/render/render.yaml` — Render Blueprint: mnemo web service + managed Redis + Qdrant web service with persistent disk.
+- `deploy/render/DEPLOY.md` — Blueprint and manual deploy instructions; cost notes (Redis Stack module caveat documented).
+- `deploy/railway/railway.json` + `DEPLOY.md` — Railway template manifest and deploy guide; private networking wiring documented.
+- `deploy/elestio/docker-compose.yml` + `DEPLOY.md` — Elestio-compatible compose; port mapping convention and env var panel instructions.
+- `deploy/northflank/stack.json` + `DEPLOY.md` — Northflank stack definition (3 services, persistent volumes); CLI and dashboard deploy paths.
+- `deploy/linode/terraform/` — Linode instance + Firewall Terraform, `startup.sh.tpl`, variables, outputs. Ubuntu 24.04, Docker Compose stack.
+- `deploy/linode/DEPLOY.md` — full guide; cost callout (~$18/month, lowest of IaaS targets).
+
+### Discovered (T10 Linode falsification)
+
+- Linode Ubuntu 24.04 has Docker pre-installed via snap or not at all — startup script uses official Docker apt repo for deterministic install.
+- Existing services on host (Qdrant on 6333/6334, n8n on 5678) require Mnemo's internal Qdrant to bind host port 6335→6334 to avoid conflict; compose-internal networking uses `qdrant:6334` unaffected.
+- `sudo` requires `-S` flag and password piped via stdin in non-interactive SSH sessions.
+
 ## [0.3.2] — 2026-03-05
 
 ### Added

@@ -1,0 +1,9 @@
+# Terraform state and local cache — never commit
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+mnemo.plan
+
+# Sensitive vars — fill in locally, never commit
+terraform.tfvars

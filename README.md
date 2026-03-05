@@ -73,7 +73,7 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release workflow expectation: bump `Cargo.toml` (`workspace.package.version`) and `sdk/python/pyproject.toml` together before tagging.
-- Current in-repo development version: `0.3.2`.
+- Current in-repo development version: `0.3.3`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
@@ -434,12 +434,12 @@ Production deployment artifacts are in `deploy/`. Each target is fully falsified
 | Bare Metal / VPS | systemd + nginx | ✅ Falsified | [deploy/bare-metal/DEPLOY.md](deploy/bare-metal/DEPLOY.md) |
 | AWS EC2 | CloudFormation | ✅ Falsified | [deploy/aws/cloudformation/DEPLOY.md](deploy/aws/cloudformation/DEPLOY.md) |
 | GCP Compute Engine | Terraform | ✅ Falsified | [deploy/gcp/DEPLOY.md](deploy/gcp/DEPLOY.md) |
-| DigitalOcean | Terraform | 🔄 In progress | — |
-| Render | `render.yaml` | ⏳ Planned | — |
-| Railway | Railway template | ⏳ Planned | — |
-| Elestio | Managed hosting | ⏳ Planned | — |
-| Northflank | Stack definition | ⏳ Planned | — |
-| Linode / Akamai | Terraform | ⏳ Planned | — |
+| DigitalOcean | Terraform | ✅ Artifacts ready | [deploy/digitalocean/DEPLOY.md](deploy/digitalocean/DEPLOY.md) |
+| Render | `render.yaml` | ✅ Artifacts ready | [deploy/render/DEPLOY.md](deploy/render/DEPLOY.md) |
+| Railway | Railway template | ✅ Artifacts ready | [deploy/railway/DEPLOY.md](deploy/railway/DEPLOY.md) |
+| Elestio | Managed hosting | ✅ Artifacts ready | [deploy/elestio/DEPLOY.md](deploy/elestio/DEPLOY.md) |
+| Northflank | Stack definition | ✅ Artifacts ready | [deploy/northflank/DEPLOY.md](deploy/northflank/DEPLOY.md) |
+| Linode / Akamai | Terraform | ✅ Falsified | [deploy/linode/DEPLOY.md](deploy/linode/DEPLOY.md) |
 
 ### Quickest path to production
 
@@ -556,8 +556,12 @@ See `docs/PHASE_2_PRD.md` for milestones.
 - T2 Bare Metal systemd + nginx ✅
 - T3 AWS CloudFormation — all 5 gates passed ✅
 - T4 GCP Terraform — all 5 gates passed ✅
-- T5 DigitalOcean Terraform 🔄
-- T6–T10 Render / Railway / Elestio / Northflank / Linode ⏳
+- T5 DigitalOcean Terraform — artifacts written ✅
+- T6 Render — artifacts written ✅
+- T7 Railway — artifacts written ✅
+- T8 Elestio — artifacts written ✅
+- T9 Northflank — artifacts written ✅
+- T10 Linode — all 5 gates passed ✅
 
 See `docs/PRD_DEPLOY.md` for full deployment PRD and falsification gate contract.
 
