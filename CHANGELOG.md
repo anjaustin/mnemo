@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- T5 DigitalOcean deployment live-falsified (nyc3, s-2vcpu-4gb, droplet 556194472) — all 5 gates passed, torn down.
+
 ## [0.3.3] — 2026-03-05
 
 ### Added

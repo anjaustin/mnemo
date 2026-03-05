@@ -434,7 +434,7 @@ Production deployment artifacts are in `deploy/`. Each target is fully falsified
 | Bare Metal / VPS | systemd + nginx | ✅ Falsified | [deploy/bare-metal/DEPLOY.md](deploy/bare-metal/DEPLOY.md) |
 | AWS EC2 | CloudFormation | ✅ Falsified | [deploy/aws/cloudformation/DEPLOY.md](deploy/aws/cloudformation/DEPLOY.md) |
 | GCP Compute Engine | Terraform | ✅ Falsified | [deploy/gcp/DEPLOY.md](deploy/gcp/DEPLOY.md) |
-| DigitalOcean | Terraform | ✅ Artifacts ready | [deploy/digitalocean/DEPLOY.md](deploy/digitalocean/DEPLOY.md) |
+| DigitalOcean | Terraform | ✅ Falsified | [deploy/digitalocean/DEPLOY.md](deploy/digitalocean/DEPLOY.md) |
 | Render | `render.yaml` | ✅ Artifacts ready | [deploy/render/DEPLOY.md](deploy/render/DEPLOY.md) |
 | Railway | Railway template | ✅ Artifacts ready | [deploy/railway/DEPLOY.md](deploy/railway/DEPLOY.md) |
 | Elestio | Managed hosting | ✅ Artifacts ready | [deploy/elestio/DEPLOY.md](deploy/elestio/DEPLOY.md) |
@@ -455,7 +455,7 @@ docker compose -f docker-compose.prod.yml up -d
 
 # Verify
 curl http://localhost:8080/health
-# {"status":"ok","version":"0.3.2"}
+# {"status":"ok","version":"0.3.3"}
 ```
 
 See [deploy/docker/DEPLOY.md](deploy/docker/DEPLOY.md) for full options including the managed-services variant (external Redis + Qdrant Cloud).
@@ -556,7 +556,7 @@ See `docs/PHASE_2_PRD.md` for milestones.
 - T2 Bare Metal systemd + nginx ✅
 - T3 AWS CloudFormation — all 5 gates passed ✅
 - T4 GCP Terraform — all 5 gates passed ✅
-- T5 DigitalOcean Terraform — artifacts written ✅
+- T5 DigitalOcean Terraform — all 5 gates passed ✅
 - T6 Render — artifacts written ✅
 - T7 Railway — artifacts written ✅
 - T8 Elestio — artifacts written ✅

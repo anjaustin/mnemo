@@ -141,9 +141,17 @@ AnythingLLM uses GCP Deployment Manager YAML. We'll use Terraform instead — it
 ### T5 — DigitalOcean (Terraform)
 **Priority:** P1  
 **Tooling:** Terraform  
-**Status:** ✅ Artifacts written — pending live falsification
+**Status:** ✅ Falsified + torn down (2026-03-05, nyc3, s-2vcpu-4gb, droplet 556194472)
 
 Matches AnythingLLM's DigitalOcean target. Uses the same Terraform module structure as T4 for consistency — different provider, same patterns.
+
+**Falsification evidence (2026-03-05):**
+- Gate 1 (Health): `{"status":"ok","version":"0.3.3"}` — PASS
+- Gate 2 (Write): `{"ok":true,"episode_id":"019cbefe-3973-..."}` — PASS
+- Gate 3 (Context): returned 67-token context with episode text — PASS
+- Gate 4 (List Episodes): 3 episodes found — PASS
+- Gate 5 (Delete Session): `{"deleted":true}` HTTP 200 — PASS
+- Droplet destroyed via `terraform destroy` — confirmed 0 resources remaining
 
 **Deliverables:**
 - `deploy/digitalocean/terraform/main.tf` — DO Droplet (s-2vcpu-4gb default), user-data installs Docker + compose stack
