@@ -7,6 +7,9 @@ Cargo.lock
 .env
 *.key
 
+# Credentials / cloud keys — never commit
+.keys/
+
 # Python
 __pycache__/
 *.pyc
