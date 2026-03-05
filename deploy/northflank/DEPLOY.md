@@ -8,7 +8,7 @@
 
 | Service | Image | Notes |
 |---|---|---|
-| `mnemo-redis` | `redis/redis-stack:7.4.0-v1` | 10 GB SSD volume at `/data` |
+| `mnemo-redis` | `redis/redis-stack-server:7.4.0-v1` | 10 GB SSD volume at `/data`; uses `REDIS_ARGS` env var |
 | `mnemo-qdrant` | `qdrant/qdrant:v1.12.4` | 20 GB SSD volume at `/qdrant/storage` |
 | `mnemo-server` | `ghcr.io/anjaustin/mnemo/mnemo-server:latest` | Public HTTP port 8080 |
 
@@ -70,7 +70,7 @@ Northflank provides a public URL for the `mnemo-server` service. Test it:
 
 ```bash
 curl https://mnemo-server-xxxx.northflank.app/health
-# Expected: {"status":"ok","version":"0.3.2"}
+# Expected: {"status":"ok","version":"0.3.3"}
 
 curl -s -X POST https://mnemo-server-xxxx.northflank.app/api/v1/memory \
   -H "Content-Type: application/json" \
@@ -82,6 +82,8 @@ curl -s -X POST https://mnemo-server-xxxx.northflank.app/api/v1/memory \
 
 ## Notes
 
-- Internal service hostnames follow Northflank's pattern (service name within a project). The stack definition uses `mnemo-redis` and `mnemo-qdrant` as internal hostnames.
+- Internal service hostnames use short names within the same project: `mnemo-redis` and `mnemo-qdrant`. External DNS follows the pattern `<portname>--<servicename>--<namespace>.code.run`.
+- **Must use `redis/redis-stack-server`** (not `redis/redis-stack` with a custom command). The `-stack` image's custom entrypoint loads RedisSearch/RedisJSON modules; overriding the command with `redis-server ...` bypasses module loading. Pass persistence args via the `REDIS_ARGS` env var instead.
 - Persistent volumes are managed by Northflank and survive service restarts and redeployments.
 - The `nf-compute-10` plan is the entry-level Northflank compute tier. Upgrade if you need more RAM for high-volume workloads.
+- Cluster used during falsification: `nf-us-east-ohio`, namespace `ns-blcxq2rhfzbr`.

@@ -1,6 +1,6 @@
 # Mnemo Deployment PRD
 
-**Status:** Phase 2 complete — all T1–T10 artifacts written; T1–T4 + T10 fully falsified  
+**Status:** Phase 2 complete — all 10 targets fully falsified (T1–T10)  
 **Version:** 0.3.3  
 **Date:** 2026-03-05
 
@@ -10,7 +10,7 @@
 
 Mnemo has a working GHCR image, a `docker-compose.yml` for local development, and binary release artifacts. What it lacks is a deployment story: no cloud templates, no one-click targets, no bare-metal guide, no reverse-proxy reference. Operators who want to run Mnemo in production must figure everything out themselves.
 
-The goal is to match — and in meaningful ways exceed — the deployment surface area of AnythingLLM, the open-source project we are building deployment parity with. AnythingLLM covers: Docker, AWS CloudFormation, GCP Deployment Manager, DigitalOcean Terraform, Render, Railway, Elestio, Northflank, and bare metal. We want the same reach, adapted to Mnemo's three-service architecture.
+The goal is to match — and in meaningful ways exceed — the deployment surface area of AnythingLLM, the open-source project we are building deployment parity with. AnythingLLM covers: Docker, AWS CloudFormation, GCP Deployment Manager, DigitalOcean Terraform, Render, Railway, and bare metal. We want the same reach plus additional targets (Vultr, Northflank, Linode), adapted to Mnemo's three-service architecture.
 
 ---
 
@@ -224,29 +224,59 @@ Railway supports multi-service Docker image deployments with private networking.
 
 ---
 
-### T8 — Elestio
+### T8 — Vultr
 **Priority:** P3  
-**Tooling:** Elestio managed open source hosting  
-**Status:** ✅ Artifacts written — pending live falsification
+**Tooling:** Terraform (Vultr provider) + `user_data` startup script  
+**Status:** ✅ Falsified + torn down (2026-03-05, ewr/New Jersey, vc2-2c-4gb, instance 207eff09)
 
-Elestio can host any Docker-based open source project. Requires submitting a software listing. Lower engineering effort — primarily documentation and the compose file.
+Vultr VPS with the same Terraform + startup script pattern as T5 DigitalOcean. Single instance running the full three-service stack via Docker Compose. Replaced T8 Elestio (blocked on account review + 0 credits).
+
+> **Note:** Original T8 was Elestio. Elestio account had 0 credits, required internal review, and returned persistent 502 errors from `getProjects` endpoint. Replaced with Vultr for reliable API-driven provisioning.
+
+**Falsification evidence (2026-03-05):**
+- Gate 1 (Health): `{"status":"ok","version":"0.3.3"}` — PASS
+- Gate 2 (Write): `{"ok":true,"episode_id":"019cbf8d-e7ce-..."}` — PASS
+- Gate 3 (Context): returned 29-token context with episode text — PASS
+- Gate 4 (List Episodes): 1 episode found — PASS
+- Gate 5 (Delete Session): `{"deleted":true}` HTTP 200 — PASS
+- Instance destroyed via API (HTTP 204) — confirmed 0 instances remaining
 
 **Deliverables:**
-- `deploy/elestio/docker-compose.yml` — Elestio-compatible compose (follows their conventions)
-- Submit Mnemo to Elestio's software catalog
+- `deploy/vultr/terraform/main.tf` — Vultr instance + firewall group with SSH/8080/443 rules
+- `deploy/vultr/terraform/variables.tf` — API key, region, plan, OS ID, SSH key
+- `deploy/vultr/terraform/outputs.tf` — public IP, health URL, SSH command
+- `deploy/vultr/terraform/startup.sh.tpl` — Docker install + compose stack (same pattern as DO T5)
+- `deploy/vultr/DEPLOY.md` — quick start, verify, tear down
+
+**Infrastructure output:**
+- 1 Vultr VPS instance (vc2-2c-4gb: 2 vCPU / 4 GB RAM ≈ $20/month)
+- 1 Firewall group (SSH + Mnemo API + HTTPS)
+- 1 public IPv4
 
 ---
 
 ### T9 — Northflank
 **Priority:** P3  
-**Tooling:** Northflank stack definition  
-**Status:** ✅ Artifacts written — pending live falsification
+**Tooling:** Northflank REST API + Docker images  
+**Status:** ✅ Falsified + torn down (2026-03-05, nf-us-east-ohio, namespace ns-blcxq2rhfzbr)
 
-Northflank supports multi-service stacks from Docker images with persistent volumes.
+Northflank supports multi-service stacks from Docker images with persistent volumes. Services deployed as `deployment` type with external Docker images via REST API.
+
+> **Discovery:** `redis/redis-stack` image with a custom command (`redis-server --save ...`) bypasses the Stack entrypoint that loads RedisSearch/RedisJSON modules. Must use `redis/redis-stack-server` and pass persistence args via `REDIS_ARGS` env var instead.
+
+> **Discovery:** Internal service DNS uses short names (`mnemo-redis`, `mnemo-qdrant`) within the same project. External DNS follows pattern `<portname>--<servicename>--<namespace>.code.run`.
+
+**Falsification evidence (2026-03-05):**
+- Gate 1 (Health): `{"status":"ok","version":"0.3.3"}` — PASS
+- Gate 2 (Write): `{"ok":true,"episode_id":"019cbf7b-ba89-..."}` — PASS
+- Gate 3 (Context): returned 33-token context with episode text — PASS
+- Gate 4 (List Episodes): 1 episode found — PASS
+- Gate 5 (Delete Session): `{"deleted":true}` HTTP 200 — PASS
+- All 3 services deleted via API — confirmed 0 services remaining
 
 **Deliverables:**
-- `deploy/northflank/stack.json` — Northflank stack definition for mnemo-server + redis + qdrant
-- `deploy/northflank/DEPLOY.md`
+- `deploy/northflank/stack.json` — Northflank stack definition (redis-stack-server + qdrant + mnemo-server)
+- `deploy/northflank/DEPLOY.md` — CLI and dashboard deploy paths
 
 ---
 
@@ -352,7 +382,7 @@ When using managed services, only `mnemo-server` needs to be deployed — no vol
 | **Phase 1** | T1 Docker, T2 Bare Metal | Production compose file + systemd unit + nginx ref — no cloud account needed to test |
 | **Phase 2** | T3 AWS, T4 GCP, T5 DigitalOcean | Cloud IaC templates — one-command deploy to each provider |
 | **Phase 3** | T6 Render, T7 Railway | PaaS blueprints — one-click or near-one-click deploy |
-| **Phase 4** | T8 Elestio, T9 Northflank, T10 Linode | Catalog submissions + Linode Terraform — low engineering, high reach |
+| **Phase 4** | T8 Vultr, T9 Northflank, T10 Linode | VPS Terraform + PaaS stack — low engineering, high reach |
 
 Each phase gate: deployed successfully from scratch, verified `/health` returns `{"status":"ok"}`, data persists across a container/instance restart.
 
@@ -394,9 +424,13 @@ deploy/
 ├── railway/
 │   ├── railway.json
 │   └── DEPLOY.md
-├── elestio/
-│   ├── docker-compose.yml
-│   └── DEPLOY.md
+├── vultr/
+│   └── terraform/
+│       ├── main.tf
+│       ├── variables.tf
+│       ├── outputs.tf
+│       ├── startup.sh.tpl
+│       └── DEPLOY.md
 ├── northflank/
 │   ├── stack.json
 │   └── DEPLOY.md

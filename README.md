@@ -426,7 +426,7 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 
 ## Deployment
 
-Production deployment artifacts are in `deploy/`. Each target is fully falsified (5-gate test: health, write, context, restart-persistence, service status).
+Production deployment artifacts are in `deploy/`. All 10 targets are fully falsified (5-gate test: health, write, context, list-episodes, delete).
 
 | Target | Tooling | Status | Guide |
 |--------|---------|--------|-------|
@@ -437,8 +437,8 @@ Production deployment artifacts are in `deploy/`. Each target is fully falsified
 | DigitalOcean | Terraform | ✅ Falsified | [deploy/digitalocean/DEPLOY.md](deploy/digitalocean/DEPLOY.md) |
 | Render | `render.yaml` | ✅ Falsified | [deploy/render/DEPLOY.md](deploy/render/DEPLOY.md) |
 | Railway | Railway template | ✅ Falsified | [deploy/railway/DEPLOY.md](deploy/railway/DEPLOY.md) |
-| Elestio | Managed hosting | ✅ Artifacts ready | [deploy/elestio/DEPLOY.md](deploy/elestio/DEPLOY.md) |
-| Northflank | Stack definition | ✅ Artifacts ready | [deploy/northflank/DEPLOY.md](deploy/northflank/DEPLOY.md) |
+| Vultr | Terraform | ✅ Falsified | [deploy/vultr/DEPLOY.md](deploy/vultr/DEPLOY.md) |
+| Northflank | Stack definition | ✅ Falsified | [deploy/northflank/DEPLOY.md](deploy/northflank/DEPLOY.md) |
 | Linode / Akamai | Terraform | ✅ Falsified | [deploy/linode/DEPLOY.md](deploy/linode/DEPLOY.md) |
 
 ### Quickest path to production
@@ -473,7 +473,7 @@ See [deploy/docker/DEPLOY.md](deploy/docker/DEPLOY.md) for full options includin
 
 | Document | Description |
 |----------|-------------|
-| [Deployment PRD](docs/PRD_DEPLOY.md) | T1–T10 deployment targets, falsification gates, rollout phasing |
+| [Deployment PRD](docs/PRD_DEPLOY.md) | T1–T10 deployment targets (all 10 falsified), gates, rollout phasing |
 | [API Reference](docs/API.md) | Every endpoint with request/response examples |
 | [Architecture](docs/ARCHITECTURE.md) | Data model, temporal reasoning, pipeline internals |
 | [Phase 2 PRD](docs/PHASE_2_PRD.md) | Productization plan for temporal memory and proof gates |
@@ -550,7 +550,7 @@ Webhook outbound delivery defaults are configured in `config/default.toml` and c
 
 See `docs/PHASE_2_PRD.md` for milestones.
 
-**Phase 2 Deployment — Cloud IaC** 🚧 in progress
+**Phase 2 Deployment — Cloud IaC** ✅ complete (10/10 targets falsified)
 
 - T1 Docker production compose ✅
 - T2 Bare Metal systemd + nginx ✅
@@ -559,8 +559,8 @@ See `docs/PHASE_2_PRD.md` for milestones.
 - T5 DigitalOcean Terraform — all 5 gates passed ✅
 - T6 Render — all 5 gates passed ✅
 - T7 Railway — all 5 gates passed ✅
-- T8 Elestio — artifacts written ✅
-- T9 Northflank — artifacts written ✅
+- T8 Vultr Terraform — all 5 gates passed ✅
+- T9 Northflank — all 5 gates passed ✅
 - T10 Linode — all 5 gates passed ✅
 
 See `docs/PRD_DEPLOY.md` for full deployment PRD and falsification gate contract.
