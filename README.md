@@ -45,6 +45,11 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
   - Policy preview and violation-window query endpoints for safer rollout dry-runs and incident triage.
   - Default contract/retrieval policy fallback and retention enforcement for episode writes.
 - **Operator Endpoints** - Dashboard summary, request-id trace lookup, and drill automation for dead-letter recovery, RCA, and governance workflows.
+- **Python SDK** - Zero-dependency sync client (`Mnemo`) and async client (`AsyncMnemo`) with full API coverage, typed results, and `x-mnemo-request-id` propagation.
+  - **LangChain adapter** - Drop-in `MnemoChatMessageHistory` (`BaseChatMessageHistory`) via `mnemo.ext.langchain`.
+  - **LlamaIndex adapter** - Drop-in `MnemoChatStore` (`BaseChatStore`, all 7 abstract methods) via `mnemo.ext.llamaindex`.
+- **Raw Vector API** - General-purpose vector database endpoints for external integrations (upsert, similarity search, delete, count, namespace lifecycle).
+- **AnythingLLM Integration** - Drop-in vector DB provider for [AnythingLLM](https://github.com/Mintplex-Labs/anything-llm) (55.5k stars). See `integrations/anythingllm/`.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
@@ -256,6 +261,68 @@ curl -X POST http://localhost:8080/api/v1/import/chat-history \
 curl http://localhost:8080/api/v1/import/jobs/JOB_ID
 ```
 
+### Python SDK
+
+Install:
+
+```bash
+pip install git+https://github.com/anjaustin/mnemo.git#subdirectory=sdk/python
+
+# With async support (aiohttp)
+pip install "mnemo-client[async] @ git+https://github.com/anjaustin/mnemo.git#subdirectory=sdk/python"
+
+# With LangChain adapter
+pip install "mnemo-client[langchain] @ git+https://github.com/anjaustin/mnemo.git#subdirectory=sdk/python"
+
+# With LlamaIndex adapter
+pip install "mnemo-client[llamaindex] @ git+https://github.com/anjaustin/mnemo.git#subdirectory=sdk/python"
+```
+
+Basic usage:
+
+```python
+from mnemo import Mnemo
+
+client = Mnemo("http://localhost:8080")
+
+# Remember
+client.add("jordan", "Acme renewal is at risk — procurement needs SOC 2 before signature.")
+
+# Recall
+ctx = client.context("jordan", "What is blocking Acme renewal?")
+print(ctx.text)  # inject into agent system prompt
+```
+
+LangChain adapter:
+
+```python
+from mnemo import Mnemo
+from mnemo.ext.langchain import MnemoChatMessageHistory
+
+client = Mnemo("http://localhost:8080")
+history = MnemoChatMessageHistory(session_name="acme-deal-chat", user_id="jordan", client=client)
+
+history.add_user_message("What are the Acme renewal blockers?")
+history.add_ai_message("SOC 2 evidence is still required by procurement.")
+
+print(history.messages)  # [HumanMessage(...), AIMessage(...)]
+history.clear()
+```
+
+LlamaIndex adapter:
+
+```python
+from mnemo import Mnemo
+from mnemo.ext.llamaindex import MnemoChatStore
+from llama_index.core.llms import ChatMessage, MessageRole
+
+client = Mnemo("http://localhost:8080")
+store = MnemoChatStore(client=client, user_id="jordan")
+
+store.add_message("acme-session", ChatMessage(role=MessageRole.USER, content="What blocks renewal?"))
+msgs = store.get_messages("acme-session")
+```
+
 ## Architecture
 
 ```
@@ -364,7 +431,7 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 - Pin release versions (`v*.*.*`) for server binaries or container tags.
 - Run the full quality gate stack in CI on every merge.
 - Track evaluation drift with the temporal harness on a fixed dataset cadence.
-- Keep `CHANGELOG.md`, `docs/PHASE_2_PRD.md`, and `docs/OPERATOR_UX_EXECUTION_BACKLOG.md` updated with shipped behavior.
+- Keep `CHANGELOG.md`, `docs/OPERATOR_UX_EXECUTION_BACKLOG.md`, and integration READMEs updated with shipped behavior.
 
 ## Documentation
 
@@ -382,6 +449,7 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 | [Operator UX Backlog](docs/OPERATOR_UX_EXECUTION_BACKLOG.md) | Ticketized execution plan for the two hero operator lanes |
 | [SDK Integrations PRD](docs/SDK_INTEGRATIONS_PRD.md) | Python SDK rebuild, LangChain adapter, LlamaIndex adapter |
 | [Operator Dashboard PRD](docs/OPERATOR_DASHBOARD_PRD.md) | Embedded zero-deployment operator dashboard |
+| [AnythingLLM Integration](integrations/anythingllm/README.md) | Drop-in vector DB provider for AnythingLLM |
 | [Domain Readiness Matrix](docs/DOMAIN_READINESS_MATRIX.md) | Domain-by-domain readiness and 30/60/90 roadmap |
 | [Agent Identity Substrate](docs/AGENT_IDENTITY_SUBSTRATE.md) | Implemented P0 design for stable identity + adaptive experience |
 | [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
@@ -452,8 +520,14 @@ See `docs/PHASE_2_PRD.md` for milestones.
 - Operator hero-lane backend (summary, trace, preview, violations) ✅
 - Webhook ops endpoints (dead-letter, replay, retry, stats) ✅
 - Falsification suite: 56 integration tests including 4×4 contract/policy matrix ✅
+- Raw Vector API (6 endpoints — upsert, search, delete, count, namespace lifecycle) ✅
+- Session Messages API (list, clear, delete-by-index) ✅
+- AnythingLLM vector DB provider (`integrations/anythingllm/`) ✅
+- Python SDK full rebuild: sync + async clients, 27 methods, full API coverage ✅
+- LangChain `MnemoChatMessageHistory` drop-in adapter ✅
+- LlamaIndex `MnemoChatStore` drop-in adapter (all 7 abstract methods) ✅
+- SDK falsification test suite: 65/65 assertions pass ✅
 - Operator-facing frontend surfaces 🚧 (`docs/OPERATOR_DASHBOARD_PRD.md`)
-- SDK integrations (LangChain + LlamaIndex) 🚧 (`docs/SDK_INTEGRATIONS_PRD.md`)
 - p95 latency evidence capture 🚧
 
 See `docs/OPERATOR_UX_PRD.md`, `docs/SDK_INTEGRATIONS_PRD.md`, and `docs/OPERATOR_DASHBOARD_PRD.md` for current scope.
