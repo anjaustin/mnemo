@@ -4,9 +4,13 @@
 | --- | --- | --- | --- | --- |
 | [![quality-gates](https://github.com/anjaustin/mnemo/actions/workflows/quality-gates.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/quality-gates.yml) | [![memory-falsification](https://github.com/anjaustin/mnemo/actions/workflows/memory-falsification.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/memory-falsification.yml) | [![benchmark-eval](https://github.com/anjaustin/mnemo/actions/workflows/benchmark-eval.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/benchmark-eval.yml) | [![package-ghcr](https://github.com/anjaustin/mnemo/actions/workflows/package-ghcr.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/package-ghcr.yml) | [![release](https://github.com/anjaustin/mnemo/actions/workflows/release.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/release.yml) |
 
-| Version | License | Downloads | Release Artifacts | GHCR Package |
+| Version | Release Date | License | Stars | Downloads |
 | --- | --- | --- | --- | --- |
-| [![version](https://img.shields.io/github/v/tag/anjaustin/mnemo?sort=semver&label=version)](https://github.com/anjaustin/mnemo/releases) | [![license-apache](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) | [![downloads](https://img.shields.io/github/downloads/anjaustin/mnemo/total?label=downloads&color=blue)](https://github.com/anjaustin/mnemo/releases) | [![release-assets](https://img.shields.io/badge/assets-linux--amd64%20%7C%20tar.gz%20%7C%20sha256-2da44e)](https://github.com/anjaustin/mnemo/releases/latest) | [![ghcr-package](https://img.shields.io/badge/ghcr-mnemo--server-1f6feb)](https://github.com/anjaustin/mnemo/pkgs/container/mnemo%2Fmnemo-server) |
+| [![version](https://img.shields.io/github/v/tag/anjaustin/mnemo?sort=semver&label=version)](https://github.com/anjaustin/mnemo/releases) | [![release-date](https://img.shields.io/github/release-date/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/releases) | [![license-apache](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) | [![stars](https://img.shields.io/github/stars/anjaustin/mnemo)](https://github.com/anjaustin/mnemo/stargazers) | [![downloads](https://img.shields.io/github/downloads/anjaustin/mnemo/total?label=downloads&color=blue)](https://github.com/anjaustin/mnemo/releases) |
+
+| Latest Release | Release Artifacts | GHCR Package |
+| --- | --- | --- |
+| [![latest-release](https://img.shields.io/github/v/release/anjaustin/mnemo?display_name=tag&sort=semver)](https://github.com/anjaustin/mnemo/releases/latest) | [![release-assets](https://img.shields.io/badge/assets-linux--amd64%20%7C%20tar.gz%20%7C%20sha256-2da44e)](https://github.com/anjaustin/mnemo/releases/latest) | [![ghcr-package](https://img.shields.io/badge/ghcr-mnemo--server-1f6feb)](https://github.com/anjaustin/mnemo/pkgs/container/mnemo%2Fmnemo-server) |
 
 ![Mnemosyne](img/mnemosyne.gif)
 
