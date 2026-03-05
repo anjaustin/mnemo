@@ -35,7 +35,8 @@ use mnemo_core::models::{
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::storage::{
-    AgentStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, UserStore, VectorStore,
+    AgentStore, EdgeStore, EntityStore, EpisodeStore, RawVectorStore, SessionStore, UserStore,
+    VectorStore,
 };
 
 use crate::middleware::RequestContext;
@@ -1134,6 +1135,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/agents/:agent_id/context", post(get_agent_context))
         // Graph
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
+        // Raw Vector API (external vector DB interface for AnythingLLM, etc.)
+        .route(
+            "/api/v1/vectors/:namespace",
+            post(vectors_upsert).delete(vectors_delete_namespace),
+        )
+        .route("/api/v1/vectors/:namespace/query", post(vectors_query))
+        .route(
+            "/api/v1/vectors/:namespace/delete",
+            post(vectors_delete_ids),
+        )
+        .route("/api/v1/vectors/:namespace/count", get(vectors_count))
+        .route("/api/v1/vectors/:namespace/exists", get(vectors_exists))
         // Allow larger request bodies for import payloads.
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state)
@@ -6421,5 +6434,194 @@ async fn get_subgraph(
         "nodes": nodes,
         "edges": edges,
         "entities_visited": subgraph.entities_visited,
+    })))
+}
+
+// ─── Raw Vector API ────────────────────────────────────────────────
+//
+// These endpoints expose Mnemo as a pluggable vector database for external
+// systems like AnythingLLM. Namespaces are isolated from Mnemo's internal
+// entity/edge/episode collections (prefixed with `raw_`).
+
+#[derive(Deserialize)]
+struct VectorsUpsertRequest {
+    vectors: Vec<VectorPoint>,
+}
+
+#[derive(Deserialize)]
+struct VectorPoint {
+    id: String,
+    vector: Vec<f32>,
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct VectorsQueryRequest {
+    vector: Vec<f32>,
+    #[serde(default = "default_top_k")]
+    top_k: u32,
+    #[serde(default = "default_min_score")]
+    min_score: f32,
+}
+
+fn default_top_k() -> u32 {
+    10
+}
+fn default_min_score() -> f32 {
+    0.0
+}
+
+#[derive(Deserialize)]
+struct VectorsDeleteIdsRequest {
+    ids: Vec<String>,
+}
+
+/// `POST /api/v1/vectors/:namespace`
+///
+/// Upsert vectors into a namespace. Creates the namespace if it doesn't exist.
+async fn vectors_upsert(
+    State(state): State<AppState>,
+    Path(namespace): Path<String>,
+    Json(body): Json<VectorsUpsertRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if body.vectors.is_empty() {
+        return Err(MnemoError::Validation("vectors array must not be empty".into()).into());
+    }
+
+    let count = body.vectors.len();
+    let vectors: Vec<(String, Vec<f32>, serde_json::Value)> = body
+        .vectors
+        .into_iter()
+        .map(|p| (p.id, p.vector, p.metadata))
+        .collect();
+
+    state
+        .vector_store
+        .upsert_vectors(&namespace, vectors)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "namespace": namespace,
+        "upserted": count,
+    })))
+}
+
+/// `POST /api/v1/vectors/:namespace/query`
+///
+/// Search vectors by similarity in a namespace.
+async fn vectors_query(
+    State(state): State<AppState>,
+    Path(namespace): Path<String>,
+    Json(body): Json<VectorsQueryRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let exists = state.vector_store.has_namespace(&namespace).await?;
+
+    if !exists {
+        return Ok(Json(serde_json::json!({
+            "results": [],
+            "namespace": namespace,
+        })));
+    }
+
+    let hits = state
+        .vector_store
+        .search_vectors(&namespace, body.vector, body.top_k, body.min_score)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "results": hits,
+        "namespace": namespace,
+    })))
+}
+
+/// `POST /api/v1/vectors/:namespace/delete`
+///
+/// Delete specific vectors by ID from a namespace.
+async fn vectors_delete_ids(
+    State(state): State<AppState>,
+    Path(namespace): Path<String>,
+    Json(body): Json<VectorsDeleteIdsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if body.ids.is_empty() {
+        return Err(MnemoError::Validation("ids array must not be empty".into()).into());
+    }
+
+    let exists = state.vector_store.has_namespace(&namespace).await?;
+
+    if !exists {
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "namespace": namespace,
+            "deleted": 0,
+        })));
+    }
+
+    let count = body.ids.len();
+    state
+        .vector_store
+        .delete_vectors(&namespace, body.ids)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "namespace": namespace,
+        "deleted": count,
+    })))
+}
+
+/// `DELETE /api/v1/vectors/:namespace`
+///
+/// Delete an entire namespace and all its vectors.
+async fn vectors_delete_namespace(
+    State(state): State<AppState>,
+    Path(namespace): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state.vector_store.delete_namespace(&namespace).await?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "namespace": namespace,
+        "deleted": true,
+    })))
+}
+
+/// `GET /api/v1/vectors/:namespace/count`
+///
+/// Count total vectors in a namespace.
+async fn vectors_count(
+    State(state): State<AppState>,
+    Path(namespace): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let exists = state.vector_store.has_namespace(&namespace).await?;
+
+    if !exists {
+        return Ok(Json(serde_json::json!({
+            "namespace": namespace,
+            "count": 0,
+        })));
+    }
+
+    let count = state.vector_store.count_vectors(&namespace).await?;
+
+    Ok(Json(serde_json::json!({
+        "namespace": namespace,
+        "count": count,
+    })))
+}
+
+/// `GET /api/v1/vectors/:namespace/exists`
+///
+/// Check whether a namespace exists.
+async fn vectors_exists(
+    State(state): State<AppState>,
+    Path(namespace): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let exists = state.vector_store.has_namespace(&namespace).await?;
+
+    Ok(Json(serde_json::json!({
+        "namespace": namespace,
+        "exists": exists,
     })))
 }

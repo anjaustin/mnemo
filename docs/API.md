@@ -1221,6 +1221,144 @@ Traverse the knowledge graph from a seed entity using BFS.
 
 ---
 
+## Raw Vector API
+
+These endpoints expose Mnemo as a general-purpose vector database for external systems like [AnythingLLM](https://github.com/Mintplex-Labs/anything-llm). Namespaces are fully isolated from Mnemo's internal entity/edge/episode collections.
+
+Vector IDs can be any string (they are deterministically hashed to UUIDs internally). The original IDs are preserved and returned in search results.
+
+### `POST /api/v1/vectors/:namespace`
+
+Upsert vectors into a namespace. Creates the namespace (Qdrant collection) automatically if it doesn't exist, using the dimension of the first vector.
+
+```json
+// Request
+{
+  "vectors": [
+    {
+      "id": "doc-chunk-1",
+      "vector": [0.1, -0.3, 0.5, ...],
+      "metadata": {
+        "text": "The quick brown fox",
+        "docId": "readme.md",
+        "source": "upload"
+      }
+    }
+  ]
+}
+```
+
+```json
+// Response 200
+{
+  "ok": true,
+  "namespace": "workspace-abc",
+  "upserted": 1
+}
+```
+
+Upserting with an existing ID overwrites the vector and metadata (idempotent). Vectors are batched internally in chunks of 500.
+
+### `POST /api/v1/vectors/:namespace/query`
+
+Search vectors by cosine similarity.
+
+```json
+// Request
+{
+  "vector": [0.1, -0.3, 0.5, ...],
+  "top_k": 5,
+  "min_score": 0.25
+}
+```
+
+`top_k` defaults to 10. `min_score` defaults to 0.0.
+
+```json
+// Response 200
+{
+  "results": [
+    {
+      "id": "doc-chunk-1",
+      "score": 0.92,
+      "payload": {
+        "text": "The quick brown fox",
+        "docId": "readme.md",
+        "source": "upload"
+      }
+    }
+  ],
+  "namespace": "workspace-abc"
+}
+```
+
+Querying a non-existent namespace returns an empty `results` array (not an error).
+
+### `POST /api/v1/vectors/:namespace/delete`
+
+Delete specific vectors by ID.
+
+```json
+// Request
+{
+  "ids": ["doc-chunk-1", "doc-chunk-2"]
+}
+```
+
+```json
+// Response 200
+{
+  "ok": true,
+  "namespace": "workspace-abc",
+  "deleted": 2
+}
+```
+
+Deleting non-existent IDs is a no-op (idempotent).
+
+### `DELETE /api/v1/vectors/:namespace`
+
+Delete an entire namespace and all its vectors.
+
+```json
+// Response 200
+{
+  "ok": true,
+  "namespace": "workspace-abc",
+  "deleted": true
+}
+```
+
+Deleting a non-existent namespace is a no-op (idempotent).
+
+### `GET /api/v1/vectors/:namespace/count`
+
+Count total vectors in a namespace.
+
+```json
+// Response 200
+{
+  "namespace": "workspace-abc",
+  "count": 1024
+}
+```
+
+Returns `count: 0` for non-existent namespaces.
+
+### `GET /api/v1/vectors/:namespace/exists`
+
+Check whether a namespace exists.
+
+```json
+// Response 200
+{
+  "namespace": "workspace-abc",
+  "exists": true
+}
+```
+
+---
+
 ## Errors
 
 All errors follow a consistent format:

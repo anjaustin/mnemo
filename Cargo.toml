@@ -33,7 +33,7 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 
 # IDs
-uuid = { version = "1", features = ["v7", "serde"] }
+uuid = { version = "1", features = ["v5", "v7", "serde"] }
 ulid = { version = "1", features = ["serde"] }
 
 # Logging & tracing

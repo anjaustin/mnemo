@@ -253,6 +253,57 @@ pub trait VectorStore: Send + Sync {
     async fn delete_user_vectors(&self, user_id: Uuid) -> StorageResult<()>;
 }
 
+// ─── Raw Vector Storage ────────────────────────────────────────────
+
+/// A scored search hit from raw vector queries.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VectorHit {
+    pub id: String,
+    pub score: f32,
+    pub payload: serde_json::Value,
+}
+
+/// Trait for raw (namespace-based) vector storage.
+///
+/// This enables external systems (e.g. AnythingLLM) to use Mnemo as a
+/// pluggable vector database. Namespaces map to dynamically-created Qdrant
+/// collections and are fully isolated from Mnemo's internal entity/edge/episode
+/// collections.
+#[allow(async_fn_in_trait)]
+pub trait RawVectorStore: Send + Sync {
+    /// Ensure a namespace (collection) exists, creating it if needed.
+    /// `dimensions` specifies the vector size for collection creation.
+    async fn ensure_namespace(&self, namespace: &str, dimensions: u32) -> StorageResult<()>;
+
+    /// Check whether a namespace (collection) exists.
+    async fn has_namespace(&self, namespace: &str) -> StorageResult<bool>;
+
+    /// Delete an entire namespace (collection) and all its vectors.
+    async fn delete_namespace(&self, namespace: &str) -> StorageResult<()>;
+
+    /// Upsert a batch of vectors into a namespace.
+    async fn upsert_vectors(
+        &self,
+        namespace: &str,
+        vectors: Vec<(String, Vec<f32>, serde_json::Value)>,
+    ) -> StorageResult<()>;
+
+    /// Search a namespace by vector similarity.
+    async fn search_vectors(
+        &self,
+        namespace: &str,
+        query_vector: Vec<f32>,
+        top_k: u32,
+        min_score: f32,
+    ) -> StorageResult<Vec<VectorHit>>;
+
+    /// Delete specific vectors by ID from a namespace.
+    async fn delete_vectors(&self, namespace: &str, ids: Vec<String>) -> StorageResult<()>;
+
+    /// Count total vectors in a namespace.
+    async fn count_vectors(&self, namespace: &str) -> StorageResult<u64>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).

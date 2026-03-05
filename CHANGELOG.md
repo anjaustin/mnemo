@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Contract/retrieval policy combination consistency test: exhaustive 4×4 matrix (16 cases) verifying `retrieval_policy_diagnostics` resolution across all `MemoryContract` × `AdaptiveRetrievalPolicy` pairs.
 - SDK Integrations PRD (`docs/SDK_INTEGRATIONS_PRD.md`) — Python SDK rebuild, LangChain `MnemoChatMessageHistory`, LlamaIndex `MnemoChatStore`, Docker-based falsification.
 - Operator Dashboard PRD (`docs/OPERATOR_DASHBOARD_PRD.md`) — embedded zero-deployment dashboard with dead-letter recovery, RCA canvas, governance center, and graph explorer.
+- Raw Vector API (`/api/v1/vectors/:namespace/*`) — 6 endpoints exposing Mnemo as a pluggable vector database for external systems like AnythingLLM. Supports upsert, similarity search, delete, count, namespace lifecycle, and automatic dimension detection.
+- `RawVectorStore` trait in `mnemo-core` for namespace-based raw vector operations, isolated from internal entity/edge/episode collections.
+- AnythingLLM vector DB provider (`integrations/anythingllm/`) — drop-in Node.js adapter implementing AnythingLLM's `VectorDatabase` base class for seamless integration.
+- Raw Vector API falsification test suite (39 assertions covering upsert, search, delete, idempotency, batch operations, validation, and namespace lifecycle).
 
 ### Changed
 
