@@ -1995,7 +1995,7 @@ async fn get_session_messages(
         params.limit
     };
     let list_params = ListEpisodesParams {
-        limit: effective_limit.max(1).min(1000),
+        limit: effective_limit.clamp(1, 1000),
         after: params.after,
         status: None,
     };

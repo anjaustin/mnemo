@@ -461,7 +461,7 @@ impl RawVectorStore for QdrantVectorStore {
         let hits = results
             .result
             .into_iter()
-            .filter_map(|point| {
+            .map(|point| {
                 // Prefer the original caller-supplied ID stored in `_mnemo_id`.
                 let id = point
                     .payload
@@ -491,11 +491,11 @@ impl RawVectorStore for QdrantVectorStore {
                 payload_map.remove("_mnemo_id");
                 let payload = Self::payload_to_json(&payload_map);
 
-                Some(VectorHit {
+                VectorHit {
                     id,
                     score: point.score,
                     payload,
-                })
+                }
             })
             .collect();
 
