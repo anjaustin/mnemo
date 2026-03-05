@@ -1,0 +1,107 @@
+# ============================================================================
+# Mnemo Production Stack — All-in-One (Single Host)
+# Pulls from GHCR. Requires .env (copy from .env.example).
+#
+# Usage:
+#   cp .env.example .env && $EDITOR .env
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml ps
+# ============================================================================
+
+services:
+  # ── Redis ─────────────────────────────────────────────────────────
+  redis:
+    image: redis/redis-stack:7.4.0-v1
+    container_name: mnemo-redis
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"   # Redis — bind to loopback only in prod
+      # RedisInsight (8001) intentionally not exposed in prod
+    volumes:
+      - redis-data:/data
+    environment:
+      - REDIS_ARGS=--save 60 1 --loglevel warning --requirepass ${REDIS_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 128m
+
+  # ── Qdrant ────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: mnemo-qdrant
+    restart: always
+    ports:
+      - "127.0.0.1:6333:6333"   # REST — bind to loopback only in prod
+      - "127.0.0.1:6334:6334"   # gRPC — bind to loopback only in prod
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__LOG_LEVEL=WARN
+    healthcheck:
+      test: ["CMD-SHELL", "pidof qdrant || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+        reservations:
+          memory: 256m
+
+  # ── Mnemo Server ──────────────────────────────────────────────────
+  mnemo:
+    image: ghcr.io/anjaustin/mnemo/mnemo-server:${MNEMO_VERSION:-latest}
+    container_name: mnemo-server
+    restart: always
+    ports:
+      - "${MNEMO_SERVER_PORT:-8080}:8080"
+    environment:
+      - MNEMO_SERVER_HOST=0.0.0.0
+      - MNEMO_SERVER_PORT=8080
+      - MNEMO_REDIS_URL=redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379
+      - MNEMO_QDRANT_URL=http://qdrant:6334
+      - MNEMO_LLM_PROVIDER=${MNEMO_LLM_PROVIDER:-}
+      - MNEMO_LLM_API_KEY=${MNEMO_LLM_API_KEY:-}
+      - MNEMO_LLM_MODEL=${MNEMO_LLM_MODEL:-gpt-4o-mini}
+      - MNEMO_EMBEDDING_API_KEY=${MNEMO_EMBEDDING_API_KEY:-}
+      - MNEMO_EMBEDDING_MODEL=${MNEMO_EMBEDDING_MODEL:-text-embedding-3-small}
+      - MNEMO_AUTH_ENABLED=${MNEMO_AUTH_ENABLED:-false}
+      - MNEMO_AUTH_API_KEYS=${MNEMO_AUTH_API_KEYS:-}
+      - MNEMO_WEBHOOKS_ENABLED=${MNEMO_WEBHOOKS_ENABLED:-true}
+      - MNEMO_WEBHOOKS_MAX_ATTEMPTS=${MNEMO_WEBHOOKS_MAX_ATTEMPTS:-3}
+      - RUST_LOG=${RUST_LOG:-mnemo=info}
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 64m
+
+volumes:
+  redis-data:
+    driver: local
+  qdrant-data:
+    driver: local

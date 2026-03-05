@@ -1,0 +1,58 @@
+# ============================================================================
+# Mnemo systemd service unit
+#
+# Install:
+#   sudo cp mnemo.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mnemo
+#
+# Requires:
+#   - Binary at /usr/local/bin/mnemo-server
+#   - Environment file at /etc/mnemo/mnemo.env
+#   - Redis and Qdrant running (see DEPLOY.md)
+# ============================================================================
+
+[Unit]
+Description=Mnemo Memory Server
+Documentation=https://github.com/anjaustin/mnemo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mnemo
+Group=mnemo
+
+# Binary location (installed by update.sh or manually)
+ExecStart=/usr/local/bin/mnemo-server
+
+# Environment from file — copy /etc/mnemo/mnemo.env from .env.example
+EnvironmentFile=/etc/mnemo/mnemo.env
+
+# Working directory
+WorkingDirectory=/var/lib/mnemo
+
+# Restart policy
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mnemo /var/log/mnemo
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mnemo
+
+[Install]
+WantedBy=multi-user.target

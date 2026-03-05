@@ -1,0 +1,50 @@
+# ============================================================================
+# Mnemo Production Stack — Managed Services Variant
+#
+# This file runs ONLY mnemo-server. Redis and Qdrant are expected to be
+# externally managed (ElastiCache/Upstash for Redis, Qdrant Cloud for Qdrant).
+#
+# Set MNEMO_REDIS_URL and MNEMO_QDRANT_URL in .env to point at your
+# managed service endpoints.
+#
+# Usage:
+#   cp .env.example .env && $EDITOR .env
+#   docker compose -f docker-compose.managed.yml up -d
+#   docker compose -f docker-compose.managed.yml ps
+# ============================================================================
+
+services:
+  mnemo:
+    image: ghcr.io/anjaustin/mnemo/mnemo-server:${MNEMO_VERSION:-latest}
+    container_name: mnemo-server
+    restart: always
+    ports:
+      - "${MNEMO_SERVER_PORT:-8080}:8080"
+    environment:
+      - MNEMO_SERVER_HOST=0.0.0.0
+      - MNEMO_SERVER_PORT=8080
+      # Point these at your managed service endpoints:
+      - MNEMO_REDIS_URL=${MNEMO_REDIS_URL:?MNEMO_REDIS_URL is required}
+      - MNEMO_QDRANT_URL=${MNEMO_QDRANT_URL:?MNEMO_QDRANT_URL is required}
+      - MNEMO_LLM_PROVIDER=${MNEMO_LLM_PROVIDER:-}
+      - MNEMO_LLM_API_KEY=${MNEMO_LLM_API_KEY:-}
+      - MNEMO_LLM_MODEL=${MNEMO_LLM_MODEL:-gpt-4o-mini}
+      - MNEMO_EMBEDDING_API_KEY=${MNEMO_EMBEDDING_API_KEY:-}
+      - MNEMO_EMBEDDING_MODEL=${MNEMO_EMBEDDING_MODEL:-text-embedding-3-small}
+      - MNEMO_AUTH_ENABLED=${MNEMO_AUTH_ENABLED:-false}
+      - MNEMO_AUTH_API_KEYS=${MNEMO_AUTH_API_KEYS:-}
+      - MNEMO_WEBHOOKS_ENABLED=${MNEMO_WEBHOOKS_ENABLED:-true}
+      - MNEMO_WEBHOOKS_MAX_ATTEMPTS=${MNEMO_WEBHOOKS_MAX_ATTEMPTS:-3}
+      - RUST_LOG=${RUST_LOG:-mnemo=info}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 64m
