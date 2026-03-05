@@ -1,0 +1,9 @@
+# Terraform state and local cache — never commit
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+mnemo.plan
+
+# Sensitive vars — copy terraform.tfvars.example and fill in locally
+# terraform.tfvars is committed here because it contains no secrets (project ID only)
