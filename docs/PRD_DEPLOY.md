@@ -199,18 +199,28 @@ Render supports Docker services with private networking. Mnemo runs as three ser
 
 ### T7 — Railway
 **Priority:** P2  
-**Tooling:** Railway template (`railway.json` or template repo)  
-**Status:** ✅ Artifacts written — pending live falsification
+**Tooling:** Railway GraphQL API + Docker images  
+**Status:** ✅ Falsified + torn down (2026-03-05, oregon, slug mnemo-production-902f)
 
-Railway supports multi-service templates. Redis is available as a Railway plugin. Qdrant must be self-hosted as a Railway service or externalized.
+Railway supports multi-service Docker image deployments with private networking. Mnemo runs as three services via Docker images with Railway's internal DNS (`<service>.railway.internal`).
+
+> **Discovery:** Railway's managed Redis plugin is plain Redis — must run `redis/redis-stack-server` as a Docker image service instead (same as Render).
+
+> **Discovery:** Railway private networking uses `<service-name>.railway.internal` hostnames. Redis at `mnemo-redis.railway.internal:6379`, Qdrant at `mnemo-qdrant.railway.internal:6334`.
+
+> **Discovery:** Railway project tokens (not user tokens) can create/manage services but cannot query `me`. All service CRUD works via GraphQL API.
+
+**Falsification evidence (2026-03-05):**
+- Gate 1 (Health): `{"status":"ok","version":"0.3.3"}` — PASS
+- Gate 2 (Write): `{"ok":true,"episode_id":"019cbf47-a62b-..."}` — PASS
+- Gate 3 (Context): returned 38-token context with episode text — PASS
+- Gate 4 (List Episodes): 1 episode found — PASS
+- Gate 5 (Delete Session): `{"deleted":true}` HTTP 200 — PASS
+- All 3 services deleted via API — confirmed 0 resources remaining
 
 **Deliverables:**
-- `deploy/railway/railway.json` — Railway template manifest:
-  - `mnemo-server` service (GHCR image)
-  - `mnemo-redis` service (Railway Redis plugin or custom Redis image)
-  - `mnemo-qdrant` service (Qdrant image with persistent volume)
-  - Environment variable wiring between services
-- `deploy/railway/DEPLOY.md` — deploy from template, configure env, verify
+- `deploy/railway/railway.json` — Railway template manifest
+- `deploy/railway/DEPLOY.md` — deploy guide with env var wiring
 
 ---
 

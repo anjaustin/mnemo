@@ -73,7 +73,7 @@ Railway provides a public URL for the `mnemo` service. Test it:
 
 ```bash
 curl https://your-railway-url.up.railway.app/health
-# Expected: {"status":"ok","version":"0.3.2"}
+# Expected: {"status":"ok","version":"0.3.3"}
 ```
 
 ---

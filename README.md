@@ -436,7 +436,7 @@ Production deployment artifacts are in `deploy/`. Each target is fully falsified
 | GCP Compute Engine | Terraform | ✅ Falsified | [deploy/gcp/DEPLOY.md](deploy/gcp/DEPLOY.md) |
 | DigitalOcean | Terraform | ✅ Falsified | [deploy/digitalocean/DEPLOY.md](deploy/digitalocean/DEPLOY.md) |
 | Render | `render.yaml` | ✅ Falsified | [deploy/render/DEPLOY.md](deploy/render/DEPLOY.md) |
-| Railway | Railway template | ✅ Artifacts ready | [deploy/railway/DEPLOY.md](deploy/railway/DEPLOY.md) |
+| Railway | Railway template | ✅ Falsified | [deploy/railway/DEPLOY.md](deploy/railway/DEPLOY.md) |
 | Elestio | Managed hosting | ✅ Artifacts ready | [deploy/elestio/DEPLOY.md](deploy/elestio/DEPLOY.md) |
 | Northflank | Stack definition | ✅ Artifacts ready | [deploy/northflank/DEPLOY.md](deploy/northflank/DEPLOY.md) |
 | Linode / Akamai | Terraform | ✅ Falsified | [deploy/linode/DEPLOY.md](deploy/linode/DEPLOY.md) |
@@ -558,7 +558,7 @@ See `docs/PHASE_2_PRD.md` for milestones.
 - T4 GCP Terraform — all 5 gates passed ✅
 - T5 DigitalOcean Terraform — all 5 gates passed ✅
 - T6 Render — all 5 gates passed ✅
-- T7 Railway — artifacts written ✅
+- T7 Railway — all 5 gates passed ✅
 - T8 Elestio — artifacts written ✅
 - T9 Northflank — artifacts written ✅
 - T10 Linode — all 5 gates passed ✅
