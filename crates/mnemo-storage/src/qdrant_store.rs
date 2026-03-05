@@ -315,9 +315,7 @@ impl QdrantVectorStore {
     }
 
     /// Convert a serde_json::Value object to Qdrant payload (no user_id injection).
-    fn json_to_payload(
-        extra: serde_json::Value,
-    ) -> std::collections::HashMap<String, QdrantValue> {
+    fn json_to_payload(extra: serde_json::Value) -> std::collections::HashMap<String, QdrantValue> {
         let mut payload = std::collections::HashMap::new();
         if let serde_json::Value::Object(map) = extra {
             for (k, v) in map {
@@ -428,11 +426,7 @@ impl RawVectorStore for QdrantVectorStore {
                             kind: Some(Kind::StringValue(id.clone())),
                         },
                     );
-                    PointStruct::new(
-                        Self::uuid_to_point_id(uuid),
-                        embedding.clone(),
-                        payload,
-                    )
+                    PointStruct::new(Self::uuid_to_point_id(uuid), embedding.clone(), payload)
                 })
                 .collect();
 
@@ -480,12 +474,12 @@ impl RawVectorStore for QdrantVectorStore {
                         // Fallback to Qdrant point ID
                         match &point.id {
                             Some(pid) => match &pid.point_id_options {
-                                Some(
-                                    qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s),
-                                ) => s.clone(),
-                                Some(
-                                    qdrant_client::qdrant::point_id::PointIdOptions::Num(n),
-                                ) => n.to_string(),
+                                Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) => {
+                                    s.clone()
+                                }
+                                Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => {
+                                    n.to_string()
+                                }
                                 None => String::new(),
                             },
                             None => String::new(),

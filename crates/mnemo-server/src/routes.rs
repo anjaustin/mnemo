@@ -1989,7 +1989,11 @@ async fn get_session_messages(
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<MessagesResponse>, AppError> {
     // Default to 100 for messages (callers typically want full history).
-    let effective_limit = if params.limit == 20 { 100 } else { params.limit };
+    let effective_limit = if params.limit == 20 {
+        100
+    } else {
+        params.limit
+    };
     let list_params = ListEpisodesParams {
         limit: effective_limit.max(1).min(1000),
         after: params.after,
