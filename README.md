@@ -24,6 +24,39 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 - Builders who want self-hosted control, not a managed black box.
 - Engineering orgs that care about hard quality gates and reproducible evaluation.
 
+## Deploy Mnemo
+
+All 10 targets fully falsified (5-gate test: health, write, context, list-episodes, delete). Production deployment guides in `deploy/`.
+
+| Docker | AWS | GCP | DigitalOcean | Render |
+|:------:|:---:|:---:|:------------:|:------:|
+| [![Deploy with Docker][docker-btn]][docker-deploy] | [![Deploy on AWS][aws-btn]][aws-deploy] | [![Deploy on GCP][gcp-btn]][gcp-deploy] | [![Deploy on DigitalOcean][do-btn]][do-deploy] | [![Deploy on Render][render-btn]][render-deploy] |
+
+| Railway | Vultr | Northflank | Linode |
+|:-------:|:-----:|:----------:|:------:|
+| [![Deploy on Railway][railway-btn]][railway-deploy] | [![Deploy on Vultr][vultr-btn]][vultr-deploy] | [![Deploy on Northflank][northflank-btn]][northflank-deploy] | [![Deploy on Linode][linode-btn]][linode-deploy] |
+
+[docker-btn]: ./img/deploy/docker.svg
+[docker-deploy]: deploy/docker/DEPLOY.md
+[aws-btn]: ./img/deploy/aws.svg
+[aws-deploy]: deploy/aws/cloudformation/DEPLOY.md
+[gcp-btn]: https://deploy.cloud.run/button.svg
+[gcp-deploy]: deploy/gcp/DEPLOY.md
+[do-btn]: https://www.deploytodo.com/do-btn-blue.svg
+[do-deploy]: deploy/digitalocean/DEPLOY.md
+[render-btn]: https://render.com/images/deploy-to-render-button.svg
+[render-deploy]: deploy/render/DEPLOY.md
+[railway-btn]: https://railway.app/button.svg
+[railway-deploy]: deploy/railway/DEPLOY.md
+[vultr-btn]: ./img/deploy/vultr.svg
+[vultr-deploy]: deploy/vultr/DEPLOY.md
+[northflank-btn]: https://assets.northflank.com/deploy_to_northflank_smm_36700fb050.svg
+[northflank-deploy]: deploy/northflank/DEPLOY.md
+[linode-btn]: ./img/deploy/linode.svg
+[linode-deploy]: deploy/linode/DEPLOY.md
+
+[or set up a production Mnemo instance without Docker →](deploy/bare-metal/DEPLOY.md)
+
 ## Why teams choose Mnemo
 
 - **Temporal memory, not static notes**: facts can be superseded while preserving history for point-in-time recall (`docs/TEMPORAL_VECTORIZATION.md`).
@@ -423,58 +456,6 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
   -H "Content-Type: application/json" \
   -d '{"query":"What was Acme renewal status before procurement blocked signature?"}'
 ```
-
-## Deployment
-
-Production deployment artifacts are in `deploy/`. All 10 targets are fully falsified (5-gate test: health, write, context, list-episodes, delete).
-
-| Docker | Bare Metal | AWS | GCP | DigitalOcean |
-|:------:|:----------:|:---:|:---:|:------------:|
-| [![Deploy with Docker][docker-btn]][docker-deploy] | [![Bare Metal / VPS][bare-metal-btn]][bare-metal-deploy] | [![Deploy on AWS][aws-btn]][aws-deploy] | [![Deploy on GCP][gcp-btn]][gcp-deploy] | [![Deploy on DigitalOcean][do-btn]][do-deploy] |
-
-| Render | Railway | Vultr | Northflank | Linode |
-|:------:|:-------:|:-----:|:----------:|:------:|
-| [![Deploy on Render][render-btn]][render-deploy] | [![Deploy on Railway][railway-btn]][railway-deploy] | [![Deploy on Vultr][vultr-btn]][vultr-deploy] | [![Deploy on Northflank][northflank-btn]][northflank-deploy] | [![Deploy on Linode][linode-btn]][linode-deploy] |
-
-[docker-btn]: ./img/deploy/docker.svg
-[docker-deploy]: deploy/docker/DEPLOY.md
-[bare-metal-btn]: ./img/deploy/bare-metal.svg
-[bare-metal-deploy]: deploy/bare-metal/DEPLOY.md
-[aws-btn]: ./img/deploy/aws.svg
-[aws-deploy]: deploy/aws/cloudformation/DEPLOY.md
-[gcp-btn]: ./img/deploy/gcp.svg
-[gcp-deploy]: deploy/gcp/DEPLOY.md
-[do-btn]: ./img/deploy/digitalocean.svg
-[do-deploy]: deploy/digitalocean/DEPLOY.md
-[render-btn]: ./img/deploy/render.svg
-[render-deploy]: deploy/render/DEPLOY.md
-[railway-btn]: ./img/deploy/railway.svg
-[railway-deploy]: deploy/railway/DEPLOY.md
-[vultr-btn]: ./img/deploy/vultr.svg
-[vultr-deploy]: deploy/vultr/DEPLOY.md
-[northflank-btn]: ./img/deploy/northflank.svg
-[northflank-deploy]: deploy/northflank/DEPLOY.md
-[linode-btn]: ./img/deploy/linode.svg
-[linode-deploy]: deploy/linode/DEPLOY.md
-
-### Quickest path to production
-
-```bash
-# Clone and configure
-git clone https://github.com/anjaustin/mnemo.git
-cd mnemo/deploy/docker
-cp .env.example .env
-# Edit .env — set LLM key, auth keys, etc.
-
-# Start
-docker compose -f docker-compose.prod.yml up -d
-
-# Verify
-curl http://localhost:8080/health
-# {"status":"ok","version":"0.3.3"}
-```
-
-See [deploy/docker/DEPLOY.md](deploy/docker/DEPLOY.md) for full options including the managed-services variant (external Redis + Qdrant Cloud).
 
 ## Production Readiness Checklist
 
