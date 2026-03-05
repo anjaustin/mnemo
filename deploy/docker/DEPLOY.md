@@ -48,7 +48,7 @@ curl http://localhost:8080/health
 # Write a memory
 curl -s -X POST http://localhost:8080/api/v1/memory \
   -H "Content-Type: application/json" \
-  -d '{"user":"alice","session":"test","content":"Mnemo deployed successfully"}'
+  -d '{"user":"alice","session":"test","text":"Mnemo deployed successfully"}'
 
 # Read context
 curl -s -X POST http://localhost:8080/api/v1/memory/alice/context \

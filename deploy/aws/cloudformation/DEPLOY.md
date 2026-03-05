@@ -91,7 +91,7 @@ curl http://$IP:8080/health
 # Write a memory
 curl -s -X POST http://$IP:8080/api/v1/memory \
   -H "Content-Type: application/json" \
-  -d '{"user":"alice","session":"test","content":"Mnemo running on AWS"}'
+  -d '{"user":"alice","session":"test","text":"Mnemo running on AWS"}'
 
 # Read context
 curl -s -X POST http://$IP:8080/api/v1/memory/alice/context \

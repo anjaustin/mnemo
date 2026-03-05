@@ -188,7 +188,7 @@ curl https://your.domain.example/health
 # Write a memory
 curl -s -X POST https://your.domain.example/api/v1/memory \
   -H "Content-Type: application/json" \
-  -d '{"user":"alice","session":"test","content":"Bare metal deploy works"}'
+  -d '{"user":"alice","session":"test","text":"Bare metal deploy works"}'
 
 # Read context
 curl -s -X POST https://your.domain.example/api/v1/memory/alice/context \

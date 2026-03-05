@@ -46,7 +46,8 @@ Parameters:
     Default: latest
     Description: >
       mnemo-server Docker image tag to pull from GHCR.
-      Use "latest" or pin to a specific version e.g. "0.3.1".
+      Currently only "latest" is published. Versioned tags (e.g. "0.3.1")
+      will be available once the GHCR publish workflow is updated to tag by version.
 
   MnemoLlmProvider:
     Type: String
@@ -127,7 +128,7 @@ Resources:
   MnemoSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Mnemo server — HTTP + SSH access
+      GroupDescription: Mnemo server - HTTP and SSH access
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 8080
@@ -153,26 +154,6 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-sg"
 
-  # ── Data Volume (EBS) ──────────────────────────────────────────────
-  MnemoDataVolume:
-    Type: AWS::EC2::Volume
-    DeletionPolicy: Retain
-    Properties:
-      AvailabilityZone: !GetAtt MnemoInstance.AvailabilityZone
-      Size: !Ref DataVolumeSize
-      VolumeType: gp3
-      Encrypted: true
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-data"
-
-  MnemoVolumeAttachment:
-    Type: AWS::EC2::VolumeAttachment
-    Properties:
-      InstanceId: !Ref MnemoInstance
-      VolumeId: !Ref MnemoDataVolume
-      Device: /dev/xvdf
-
   # ── EC2 Instance ───────────────────────────────────────────────────
   MnemoInstance:
     Type: AWS::EC2::Instance
@@ -188,148 +169,166 @@ Resources:
             VolumeSize: 20
             VolumeType: gp3
             DeleteOnTermination: true
+        # Data volume for Redis + Qdrant — attached at boot, no race condition.
+        # NOTE: This volume IS deleted when the instance is terminated.
+        # Take a snapshot before termination if you need to preserve data.
+        - DeviceName: /dev/xvdf
+          Ebs:
+            VolumeSize: !Ref DataVolumeSize
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: false
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-server"
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          exec > /var/log/mnemo-init.log 2>&1
+        Fn::Base64:
+          !Sub
+            - |
+              #!/bin/bash
+              exec > /var/log/mnemo-init.log 2>&1
+              set -eux
 
-          # ── Wait for EBS data volume ─────────────────────────────
-          while [ ! -e /dev/xvdf ]; do sleep 2; done
+              # Always signal CFN on exit (success or failure)
+              signal_cfn() { /opt/aws/bin/cfn-signal -e $1 --stack ${CfnStackName} --region ${CfnRegion} --resource MnemoInstance || true; }
+              trap 'signal_cfn $?' EXIT
 
-          # Format if new (no filesystem yet)
-          if ! blkid /dev/xvdf; then
-            mkfs.ext4 /dev/xvdf
-          fi
+              # ── Wait for EBS data volume ──────────────────────────────
+              for i in $(seq 1 30); do [ -e /dev/xvdf ] && break; sleep 2; done
 
-          mkdir -p /data
-          mount /dev/xvdf /data
+              # Format if new
+              if ! blkid /dev/xvdf; then mkfs.ext4 /dev/xvdf; fi
+              mkdir -p /data
+              mount /dev/xvdf /data
+              grep -q /dev/xvdf /etc/fstab || echo "/dev/xvdf /data ext4 defaults,nofail 0 2" >> /etc/fstab
 
-          # Persist mount across reboots
-          echo "/dev/xvdf /data ext4 defaults,nofail 0 2" >> /etc/fstab
+              # ── Docker ───────────────────────────────────────────────
+              # curl-minimal is pre-installed on AL2023; installing curl conflicts with it.
+              # docker is the only package we need to add.
+              dnf install -y docker --setopt=install_weak_deps=False
+              systemctl enable --now docker
 
-          # ── Docker ──────────────────────────────────────────────
-          dnf update -y
-          dnf install -y docker curl
-          systemctl enable --now docker
+              # ── Docker Compose plugin ─────────────────────────────────
+              mkdir -p /usr/local/lib/docker/cli-plugins
+              curl -fsSL "https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64" \
+                -o /usr/local/lib/docker/cli-plugins/docker-compose
+              chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-          # ── Docker Compose plugin ────────────────────────────────
-          mkdir -p /usr/local/lib/docker/cli-plugins
-          curl -fsSL \
-            "https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64" \
-            -o /usr/local/lib/docker/cli-plugins/docker-compose
-          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+              # ── App directories ───────────────────────────────────────
+              mkdir -p /data/redis /data/qdrant /opt/mnemo
 
-          # ── Directories ──────────────────────────────────────────
-          mkdir -p /data/redis /data/qdrant /opt/mnemo
+              # ── Environment file ──────────────────────────────────────
+              cat > /opt/mnemo/.env <<'EOF'
+              MNEMO_VERSION=__MNEMO_VERSION__
+              MNEMO_SERVER_PORT=8080
+              MNEMO_LLM_PROVIDER=__LLM_PROVIDER__
+              MNEMO_LLM_API_KEY=__LLM_API_KEY__
+              MNEMO_LLM_MODEL=__LLM_MODEL__
+              MNEMO_EMBEDDING_API_KEY=__EMBED_API_KEY__
+              MNEMO_EMBEDDING_MODEL=__EMBED_MODEL__
+              MNEMO_AUTH_ENABLED=__AUTH_ENABLED__
+              MNEMO_AUTH_API_KEYS=__AUTH_API_KEYS__
+              MNEMO_WEBHOOKS_ENABLED=true
+              MNEMO_WEBHOOKS_MAX_ATTEMPTS=3
+              RUST_LOG=mnemo=info
+              EOF
 
-          # ── Environment file ─────────────────────────────────────
-          cat > /opt/mnemo/.env <<'ENVEOF'
-          MNEMO_VERSION=${MnemoVersion}
-          MNEMO_SERVER_PORT=8080
-          MNEMO_LLM_PROVIDER=${MnemoLlmProvider}
-          MNEMO_LLM_API_KEY=${MnemoLlmApiKey}
-          MNEMO_LLM_MODEL=${MnemoLlmModel}
-          MNEMO_EMBEDDING_API_KEY=${MnemoEmbeddingApiKey}
-          MNEMO_EMBEDDING_MODEL=${MnemoEmbeddingModel}
-          MNEMO_AUTH_ENABLED=${MnemoAuthEnabled}
-          MNEMO_AUTH_API_KEYS=${MnemoAuthApiKeys}
-          MNEMO_WEBHOOKS_ENABLED=true
-          MNEMO_WEBHOOKS_MAX_ATTEMPTS=3
-          RUST_LOG=mnemo=info
-          ENVEOF
-          chmod 600 /opt/mnemo/.env
+              # Substitute placeholder values with CFN param values
+              sed -i \
+                -e "s|__MNEMO_VERSION__|${CfnMnemoVersion}|g" \
+                -e "s|__LLM_PROVIDER__|${CfnLlmProvider}|g" \
+                -e "s|__LLM_API_KEY__|${CfnLlmApiKey}|g" \
+                -e "s|__LLM_MODEL__|${CfnLlmModel}|g" \
+                -e "s|__EMBED_API_KEY__|${CfnEmbeddingApiKey}|g" \
+                -e "s|__EMBED_MODEL__|${CfnEmbeddingModel}|g" \
+                -e "s|__AUTH_ENABLED__|${CfnAuthEnabled}|g" \
+                -e "s|__AUTH_API_KEYS__|${CfnAuthApiKeys}|g" \
+                /opt/mnemo/.env
+              chmod 600 /opt/mnemo/.env
 
-          # ── Docker Compose file ──────────────────────────────────
-          cat > /opt/mnemo/docker-compose.yml <<'COMPOSEEOF'
-          services:
-            redis:
-              image: redis/redis-stack:7.4.0-v1
-              container_name: mnemo-redis
-              restart: always
-              ports:
-                - "127.0.0.1:6379:6379"
-              volumes:
-                - /data/redis:/data
-              environment:
-                - REDIS_ARGS=--save 60 1 --loglevel warning
-              healthcheck:
-                test: ["CMD", "redis-cli", "ping"]
-                interval: 10s
-                timeout: 5s
-                retries: 5
-                start_period: 10s
-
-            qdrant:
-              image: qdrant/qdrant:v1.12.4
-              container_name: mnemo-qdrant
-              restart: always
-              ports:
-                - "127.0.0.1:6334:6334"
-              volumes:
-                - /data/qdrant:/qdrant/storage
-              environment:
-                - QDRANT__SERVICE__GRPC_PORT=6334
-                - QDRANT__LOG_LEVEL=WARN
-              healthcheck:
-                test: ["CMD-SHELL", "pidof qdrant || exit 1"]
-                interval: 10s
-                timeout: 5s
-                retries: 5
-                start_period: 15s
-
-            mnemo:
-              image: ghcr.io/anjaustin/mnemo/mnemo-server:${MNEMO_VERSION:-latest}
-              container_name: mnemo-server
-              restart: always
-              ports:
-                - "8080:8080"
-              environment:
-                - MNEMO_SERVER_HOST=0.0.0.0
-                - MNEMO_SERVER_PORT=8080
-                - MNEMO_REDIS_URL=redis://redis:6379
-                - MNEMO_QDRANT_URL=http://qdrant:6334
-                - MNEMO_LLM_PROVIDER=${MNEMO_LLM_PROVIDER:-}
-                - MNEMO_LLM_API_KEY=${MNEMO_LLM_API_KEY:-}
-                - MNEMO_LLM_MODEL=${MNEMO_LLM_MODEL:-gpt-4o-mini}
-                - MNEMO_EMBEDDING_API_KEY=${MNEMO_EMBEDDING_API_KEY:-}
-                - MNEMO_EMBEDDING_MODEL=${MNEMO_EMBEDDING_MODEL:-text-embedding-3-small}
-                - MNEMO_AUTH_ENABLED=${MNEMO_AUTH_ENABLED:-false}
-                - MNEMO_AUTH_API_KEYS=${MNEMO_AUTH_API_KEYS:-}
-                - MNEMO_WEBHOOKS_ENABLED=${MNEMO_WEBHOOKS_ENABLED:-true}
-                - MNEMO_WEBHOOKS_MAX_ATTEMPTS=${MNEMO_WEBHOOKS_MAX_ATTEMPTS:-3}
-                - RUST_LOG=${RUST_LOG:-mnemo=info}
-              depends_on:
+              # ── Docker Compose file ───────────────────────────────────
+              MNEMO_VER=$(grep '^MNEMO_VERSION=' /opt/mnemo/.env | cut -d= -f2)
+              cat > /opt/mnemo/docker-compose.yml <<'EOF'
+              services:
                 redis:
-                  condition: service_healthy
+                  image: redis/redis-stack:7.4.0-v1
+                  container_name: mnemo-redis
+                  restart: always
+                  ports:
+                    - "127.0.0.1:6379:6379"
+                  volumes:
+                    - /data/redis:/data
+                  environment:
+                    - REDIS_ARGS=--save 60 1 --appendonly yes --loglevel warning
+                  healthcheck:
+                    test: ["CMD", "redis-cli", "ping"]
+                    interval: 10s
+                    timeout: 5s
+                    retries: 5
+                    start_period: 10s
                 qdrant:
-                  condition: service_healthy
-              healthcheck:
-                test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-                interval: 15s
-                timeout: 5s
-                retries: 3
-                start_period: 20s
-          COMPOSEEOF
+                  image: qdrant/qdrant:v1.12.4
+                  container_name: mnemo-qdrant
+                  restart: always
+                  ports:
+                    - "127.0.0.1:6334:6334"
+                  volumes:
+                    - /data/qdrant:/qdrant/storage
+                  environment:
+                    - QDRANT__SERVICE__GRPC_PORT=6334
+                    - QDRANT__LOG_LEVEL=WARN
+                  healthcheck:
+                    test: ["CMD-SHELL", "pidof qdrant || exit 1"]
+                    interval: 10s
+                    timeout: 5s
+                    retries: 5
+                    start_period: 15s
+                mnemo:
+                  image: ghcr.io/anjaustin/mnemo/mnemo-server:__MNEMO_VER__
+                  container_name: mnemo-server
+                  restart: always
+                  ports:
+                    - "8080:8080"
+                  env_file:
+                    - /opt/mnemo/.env
+                  environment:
+                    - MNEMO_SERVER_HOST=0.0.0.0
+                    - MNEMO_SERVER_PORT=8080
+                    - MNEMO_REDIS_URL=redis://redis:6379
+                    - MNEMO_QDRANT_URL=http://qdrant:6334
+                  depends_on:
+                    redis:
+                      condition: service_healthy
+                    qdrant:
+                      condition: service_healthy
+                  healthcheck:
+                    test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+                    interval: 15s
+                    timeout: 5s
+                    retries: 3
+                    start_period: 20s
+              EOF
+              sed -i "s|__MNEMO_VER__|$MNEMO_VER|g" /opt/mnemo/docker-compose.yml
 
-          # ── Start the stack ──────────────────────────────────────
-          cd /opt/mnemo
-          docker compose up -d
+              # ── Start the stack ───────────────────────────────────────
+              cd /opt/mnemo
+              docker compose up -d
 
-          # ── cfn-signal ───────────────────────────────────────────
-          # Signal CloudFormation that UserData completed successfully.
-          # Requires cfn-bootstrap (pre-installed on Amazon Linux 2023).
-          /opt/aws/bin/cfn-signal -e $? \
-            --stack  ${AWS::StackName} \
-            --region ${AWS::Region} \
-            --resource MnemoInstance || true
+              echo "Init complete."
+            - CfnMnemoVersion:  !Ref MnemoVersion
+              CfnLlmProvider:   !Ref MnemoLlmProvider
+              CfnLlmApiKey:     !Ref MnemoLlmApiKey
+              CfnLlmModel:      !Ref MnemoLlmModel
+              CfnEmbeddingApiKey: !Ref MnemoEmbeddingApiKey
+              CfnEmbeddingModel:  !Ref MnemoEmbeddingModel
+              CfnAuthEnabled:   !Ref MnemoAuthEnabled
+              CfnAuthApiKeys:   !Ref MnemoAuthApiKeys
+              CfnStackName:     !Ref "AWS::StackName"
+              CfnRegion:        !Ref "AWS::Region"
 
     CreationPolicy:
       ResourceSignal:
-        Timeout: PT10M
+        Timeout: PT20M
 
 # ============================================================================
 # Outputs
@@ -348,7 +347,7 @@ Outputs:
     Value: !Sub |
       curl -s -X POST http://${MnemoInstance.PublicIp}:8080/api/v1/memory \
         -H "Content-Type: application/json" \
-        -d '{"user":"alice","session":"test","content":"Mnemo on AWS"}'
+        -d '{"user":"alice","session":"test","text":"Mnemo on AWS"}'
 
   SSHCommand:
     Description: SSH command to access the instance
@@ -358,6 +357,6 @@ Outputs:
     Description: Path to UserData init log on the instance
     Value: /var/log/mnemo-init.log
 
-  DataVolumeId:
-    Description: EBS volume ID (retained on stack delete — delete manually if no longer needed)
-    Value: !Ref MnemoDataVolume
+  DataNote:
+    Description: Data volume note
+    Value: "Data volume (Redis + Qdrant) is attached as /dev/xvdf with DeleteOnTermination=false. Snapshot before terminating the instance to preserve data."
