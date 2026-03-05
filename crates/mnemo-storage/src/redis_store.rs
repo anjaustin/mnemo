@@ -463,6 +463,65 @@ impl EpisodeStore for RedisStateStore {
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
         Ok(())
     }
+
+    async fn delete_episode(&self, id: Uuid) -> StorageResult<()> {
+        // Get the episode to find its session_id
+        let episode = self.get_episode(id).await?;
+
+        // Remove from session's episode sorted set
+        let zset_key = self.key(&["session_episodes", &episode.session_id.to_string()]);
+        let mut conn = self.conn.clone();
+        conn.zrem::<_, _, ()>(&zset_key, id.to_string())
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Remove from pending queue (if present)
+        let pending_key = self.key(&["pending_episodes"]);
+        let _: () = conn
+            .zrem(&pending_key, id.to_string())
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Delete the episode data
+        let key = self.key(&["episode", &id.to_string()]);
+        self.del(&key).await?;
+
+        tracing::debug!(episode_id = %id, session_id = %episode.session_id, "Deleted episode");
+        Ok(())
+    }
+
+    async fn delete_session_episodes(&self, session_id: Uuid) -> StorageResult<u32> {
+        let zset_key = self.key(&["session_episodes", &session_id.to_string()]);
+        let mut conn = self.conn.clone();
+
+        // Get all episode IDs in this session
+        let ids: Vec<String> = redis::cmd("ZRANGE")
+            .arg(&zset_key)
+            .arg(0)
+            .arg(-1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let count = ids.len() as u32;
+
+        // Delete each episode's data and remove from pending queue
+        let pending_key = self.key(&["pending_episodes"]);
+        for id_str in &ids {
+            let key = self.key(&["episode", id_str]);
+            self.del(&key).await?;
+            let _: () = conn
+                .zrem(&pending_key, id_str)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
+
+        // Clear the session's episode sorted set
+        self.del(&zset_key).await?;
+
+        tracing::debug!(session_id = %session_id, deleted = count, "Cleared session episodes");
+        Ok(count)
+    }
 }
 
 // ─── EntityStore ───────────────────────────────────────────────────

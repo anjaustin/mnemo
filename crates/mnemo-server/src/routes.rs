@@ -1036,6 +1036,15 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/v1/sessions/:session_id/episodes", get(list_episodes))
         .route("/api/v1/episodes/:id", get(get_episode))
+        // Session messages (for LangChain/LlamaIndex SDK adapters)
+        .route(
+            "/api/v1/sessions/:session_id/messages",
+            get(get_session_messages).delete(delete_session_messages),
+        )
+        .route(
+            "/api/v1/sessions/:session_id/messages/:idx",
+            delete(delete_session_message_by_idx),
+        )
         // Entities
         .route("/api/v1/users/:user_id/entities", get(list_entities))
         .route("/api/v1/entities/:id", get(get_entity))
@@ -1938,6 +1947,137 @@ async fn list_episodes(
         .list_episodes(session_id, list_params)
         .await?;
     Ok(Json(ListResponse::new(episodes)))
+}
+
+// ─── Session message routes (framework adapter endpoints) ───────────
+//
+// These endpoints expose raw message access required by LangChain's
+// BaseChatMessageHistory and LlamaIndex's BaseChatStore adapters.
+
+#[derive(Serialize)]
+struct MessageRecord {
+    /// 0-based ordinal index within the session (chronological order).
+    idx: usize,
+    /// Episode ID (stable unique identifier).
+    id: Uuid,
+    role: Option<String>,
+    content: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Serialize)]
+struct MessagesResponse {
+    messages: Vec<MessageRecord>,
+    count: usize,
+    session_id: Uuid,
+}
+
+#[derive(Serialize)]
+struct ClearMessagesResponse {
+    deleted: u32,
+    session_id: Uuid,
+}
+
+/// `GET /api/v1/sessions/:session_id/messages`
+///
+/// Return messages for a session in chronological order.
+/// Returns a flat message-shaped projection over episodes.
+/// Query params: `limit` (default 100), `after` (cursor UUID).
+async fn get_session_messages(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+    Query(params): Query<PaginationParams>,
+) -> Result<Json<MessagesResponse>, AppError> {
+    // Default to 100 for messages (callers typically want full history).
+    let effective_limit = if params.limit == 20 { 100 } else { params.limit };
+    let list_params = ListEpisodesParams {
+        limit: effective_limit.max(1).min(1000),
+        after: params.after,
+        status: None,
+    };
+
+    // list_episodes returns newest-first; reverse to get chronological order.
+    let mut episodes = state
+        .state_store
+        .list_episodes(session_id, list_params)
+        .await?;
+    episodes.reverse();
+
+    let messages: Vec<MessageRecord> = episodes
+        .into_iter()
+        .enumerate()
+        .map(|(idx, ep)| MessageRecord {
+            idx,
+            id: ep.id,
+            role: ep.role.map(|r| format!("{:?}", r).to_lowercase()),
+            content: ep.content,
+            created_at: ep.created_at,
+        })
+        .collect();
+
+    let count = messages.len();
+    Ok(Json(MessagesResponse {
+        messages,
+        count,
+        session_id,
+    }))
+}
+
+/// `DELETE /api/v1/sessions/:session_id/messages`
+///
+/// Clear all episodes/messages for a session without deleting the session.
+/// Used by LangChain `clear()` and LlamaIndex `delete_messages()`.
+async fn delete_session_messages(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<Json<ClearMessagesResponse>, AppError> {
+    // Verify session exists
+    state.state_store.get_session(session_id).await?;
+
+    let deleted = state
+        .state_store
+        .delete_session_episodes(session_id)
+        .await?;
+
+    Ok(Json(ClearMessagesResponse {
+        deleted,
+        session_id,
+    }))
+}
+
+/// `DELETE /api/v1/sessions/:session_id/messages/:idx`
+///
+/// Delete a specific message by 0-based ordinal index within the session.
+/// Used by LlamaIndex `delete_message(key, idx)`.
+async fn delete_session_message_by_idx(
+    State(state): State<AppState>,
+    Path((session_id, idx)): Path<(Uuid, usize)>,
+) -> Result<Json<DeleteResponse>, AppError> {
+    // List all episodes in chronological order
+    let list_params = ListEpisodesParams {
+        limit: 10000,
+        after: None,
+        status: None,
+    };
+    let mut episodes = state
+        .state_store
+        .list_episodes(session_id, list_params)
+        .await?;
+    episodes.reverse(); // chronological
+
+    if idx >= episodes.len() {
+        return Err(MnemoError::Validation(format!(
+            "Index {} out of range — session has {} messages",
+            idx,
+            episodes.len()
+        ))
+        .into());
+    }
+
+    let episode_id = episodes[idx].id;
+    state.state_store.delete_episode(episode_id).await?;
+
+    Ok(Json(DeleteResponse { deleted: true }))
 }
 
 // ─── Entity routes ─────────────────────────────────────────────────

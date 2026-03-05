@@ -136,6 +136,13 @@ pub trait EpisodeStore: Send + Sync {
     /// Re-add an episode to the pending queue with a future timestamp for delayed retry.
     /// `delay_ms` is how far in the future the episode should become eligible for processing.
     async fn requeue_episode(&self, id: Uuid, delay_ms: u64) -> StorageResult<()>;
+
+    /// Delete a single episode by ID and remove it from its session's episode set.
+    async fn delete_episode(&self, id: Uuid) -> StorageResult<()>;
+
+    /// Delete all episodes in a session (clear messages) without deleting the session itself.
+    /// Returns the number of episodes deleted.
+    async fn delete_session_episodes(&self, session_id: Uuid) -> StorageResult<u32>;
 }
 
 // ─── Entity Storage ────────────────────────────────────────────────

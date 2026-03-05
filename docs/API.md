@@ -1221,6 +1221,76 @@ Traverse the knowledge graph from a seed entity using BFS.
 
 ---
 
+## Session Messages API
+
+These endpoints provide raw message access for framework adapters (LangChain, LlamaIndex). Messages are episodes projected as role+content pairs, ordered chronologically.
+
+Session IDs are UUIDs (from the `session_id` field returned by `POST /api/v1/memory`).
+
+### `GET /api/v1/sessions/:session_id/messages`
+
+Return all messages for a session in chronological order.
+
+Query params:
+- `limit` (optional, default `100`, max `1000`) — maximum messages to return
+- `after` (optional, episode UUID) — return only messages after this episode ID
+
+```json
+// Response 200
+{
+  "messages": [
+    {
+      "idx": 0,
+      "id": "019cba12-...",
+      "role": "user",
+      "content": "Hello from LangChain",
+      "created_at": "2026-03-04T12:00:00Z"
+    },
+    {
+      "idx": 1,
+      "id": "019cba13-...",
+      "role": "assistant",
+      "content": "Hello back from AI",
+      "created_at": "2026-03-04T12:00:01Z"
+    }
+  ],
+  "count": 2,
+  "session_id": "019cba10-..."
+}
+```
+
+### `DELETE /api/v1/sessions/:session_id/messages`
+
+Clear all messages (episodes) for a session without deleting the session itself.
+
+Required by `MnemoChatMessageHistory.clear()` and `MnemoChatStore.delete_messages()`.
+
+```json
+// Response 200
+{
+  "deleted": true,
+  "count": 2
+}
+```
+
+### `DELETE /api/v1/sessions/:session_id/messages/:idx`
+
+Delete a specific message by 0-based ordinal index within the session.
+
+Returns `400` with `validation_error` if the index is out of bounds.
+
+Required by `MnemoChatStore.delete_message()` and `delete_last_message()`.
+
+```json
+// Response 200
+{
+  "deleted": true,
+  "episode_id": "019cba13-..."
+}
+```
+
+---
+
 ## Raw Vector API
 
 These endpoints expose Mnemo as a general-purpose vector database for external systems like [AnythingLLM](https://github.com/Mintplex-Labs/anything-llm). Namespaces are fully isolated from Mnemo's internal entity/edge/episode collections.

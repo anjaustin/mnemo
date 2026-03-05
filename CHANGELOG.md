@@ -24,6 +24,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `RawVectorStore` trait in `mnemo-core` for namespace-based raw vector operations, isolated from internal entity/edge/episode collections.
 - AnythingLLM vector DB provider (`integrations/anythingllm/`) — drop-in Node.js adapter implementing AnythingLLM's `VectorDatabase` base class for seamless integration.
 - Raw Vector API falsification test suite (39 assertions covering upsert, search, delete, idempotency, batch operations, validation, and namespace lifecycle).
+- Session Messages API — 3 new endpoints enabling framework adapters: `GET /api/v1/sessions/:id/messages` (chronological message list with pagination), `DELETE /api/v1/sessions/:id/messages` (clear session), `DELETE /api/v1/sessions/:id/messages/:idx` (delete by ordinal index). Falsified with 31 assertions.
+- `delete_episode(id)` and `delete_session_episodes(session_id)` methods added to `EpisodeStore` trait and implemented in `RedisStateStore`.
+- Python SDK full rebuild (`sdk/python/mnemo-client 0.3.1`):
+  - `Mnemo` sync client with complete API coverage (27 methods: memory, governance, webhooks, operator, import, session messages, health).
+  - `AsyncMnemo` async client (aiohttp-backed) mirroring all sync methods.
+  - Typed exception hierarchy (`_errors.py`): `MnemoError`, `MnemoConnectionError`, `MnemoTimeoutError`, `MnemoHttpError`, `MnemoRateLimitError`, `MnemoNotFoundError`, `MnemoValidationError`.
+  - Typed result dataclasses (`_models.py`) for all 18 response types.
+  - `SyncTransport` with retry logic, `x-mnemo-request-id` propagation, and typed error mapping.
+  - `context()` now includes `contract`, `retrieval_policy`, `filters`, `time_intent`, `as_of`, `temporal_weight` parameters.
+  - `mnemo.ext.langchain.MnemoChatMessageHistory` — drop-in LangChain `BaseChatMessageHistory` adapter.
+  - `mnemo.ext.llamaindex.MnemoChatStore` — drop-in LlamaIndex `BaseChatStore` adapter (all 7 abstract methods).
+  - Optional extras: `[async]` (aiohttp), `[langchain]` (langchain-core), `[llamaindex]` (llama-index-core), `[all]`.
+  - SDK falsification test suite (`sdk/python/tests/test_sdk.py`) — 65 assertions, all passing against live server.
 
 ### Changed
 
