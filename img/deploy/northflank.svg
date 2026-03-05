@@ -1,4 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="180" height="40" viewBox="0 0 180 40">
-  <rect width="180" height="40" rx="6" fill="#01E296"/>
-  <text x="90" y="24" fill="#000000" font-family="system-ui,sans-serif" font-size="14" font-weight="600" text-anchor="middle">Deploy on Northflank</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="44" viewBox="0 0 220 44">
+  <rect width="220" height="44" rx="6" fill="#01E296"/>
+  <g transform="translate(12,9)">
+    <rect x="0" y="0" width="26" height="26" rx="4" fill="#000000" opacity="0.15"/>
+    <text x="13" y="20" fill="#000000" font-family="system-ui,-apple-system,sans-serif" font-size="18" font-weight="800" text-anchor="middle">N</text>
+  </g>
+  <text x="132" y="27" fill="#000000" font-family="system-ui,-apple-system,sans-serif" font-size="14" font-weight="600" text-anchor="middle">Deploy on Northflank</text>
 </svg>
