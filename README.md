@@ -73,7 +73,7 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release workflow expectation: bump `Cargo.toml` (`workspace.package.version`) and `sdk/python/pyproject.toml` together before tagging.
-- Current in-repo development version: `0.3.1`.
+- Current in-repo development version: `0.3.2`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
@@ -424,6 +424,42 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
   -d '{"query":"What was Acme renewal status before procurement blocked signature?"}'
 ```
 
+## Deployment
+
+Production deployment artifacts are in `deploy/`. Each target is fully falsified (5-gate test: health, write, context, restart-persistence, service status).
+
+| Target | Tooling | Status | Guide |
+|--------|---------|--------|-------|
+| Docker (all-in-one) | `docker compose` | ✅ Falsified | [deploy/docker/DEPLOY.md](deploy/docker/DEPLOY.md) |
+| Bare Metal / VPS | systemd + nginx | ✅ Falsified | [deploy/bare-metal/DEPLOY.md](deploy/bare-metal/DEPLOY.md) |
+| AWS EC2 | CloudFormation | ✅ Falsified | [deploy/aws/cloudformation/DEPLOY.md](deploy/aws/cloudformation/DEPLOY.md) |
+| GCP Compute Engine | Terraform | ✅ Falsified | [deploy/gcp/DEPLOY.md](deploy/gcp/DEPLOY.md) |
+| DigitalOcean | Terraform | 🔄 In progress | — |
+| Render | `render.yaml` | ⏳ Planned | — |
+| Railway | Railway template | ⏳ Planned | — |
+| Elestio | Managed hosting | ⏳ Planned | — |
+| Northflank | Stack definition | ⏳ Planned | — |
+| Linode / Akamai | Terraform | ⏳ Planned | — |
+
+### Quickest path to production
+
+```bash
+# Clone and configure
+git clone https://github.com/anjaustin/mnemo.git
+cd mnemo/deploy/docker
+cp .env.example .env
+# Edit .env — set LLM key, auth keys, etc.
+
+# Start
+docker compose -f docker-compose.prod.yml up -d
+
+# Verify
+curl http://localhost:8080/health
+# {"status":"ok","version":"0.3.2"}
+```
+
+See [deploy/docker/DEPLOY.md](deploy/docker/DEPLOY.md) for full options including the managed-services variant (external Redis + Qdrant Cloud).
+
 ## Production Readiness Checklist
 
 - Enable API auth and provision keys before exposing Mnemo externally.
@@ -437,6 +473,7 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 
 | Document | Description |
 |----------|-------------|
+| [Deployment PRD](docs/PRD_DEPLOY.md) | T1–T10 deployment targets, falsification gates, rollout phasing |
 | [API Reference](docs/API.md) | Every endpoint with request/response examples |
 | [Architecture](docs/ARCHITECTURE.md) | Data model, temporal reasoning, pipeline internals |
 | [Phase 2 PRD](docs/PHASE_2_PRD.md) | Productization plan for temporal memory and proof gates |
@@ -512,6 +549,17 @@ Webhook outbound delivery defaults are configured in `config/default.toml` and c
 - M5 Agent Identity Substrate P0 ✅
 
 See `docs/PHASE_2_PRD.md` for milestones.
+
+**Phase 2 Deployment — Cloud IaC** 🚧 in progress
+
+- T1 Docker production compose ✅
+- T2 Bare Metal systemd + nginx ✅
+- T3 AWS CloudFormation — all 5 gates passed ✅
+- T4 GCP Terraform — all 5 gates passed ✅
+- T5 DigitalOcean Terraform 🔄
+- T6–T10 Render / Railway / Elestio / Northflank / Linode ⏳
+
+See `docs/PRD_DEPLOY.md` for full deployment PRD and falsification gate contract.
 
 **Phase 3 — Operator UX & Control Plane** 🚧 in progress
 

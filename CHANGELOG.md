@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-03-05
+
+### Added
+
+- Production deployment artifacts for T1–T4 (Docker, Bare Metal, AWS CloudFormation, GCP Terraform) — all falsified end-to-end.
+- `deploy/docker/docker-compose.prod.yml` — production-ready Compose file using GHCR images, named volumes, healthchecks, and resource limits.
+- `deploy/docker/docker-compose.managed.yml` — managed-services variant (external Redis + Qdrant); only `mnemo-server` runs locally.
+- `deploy/docker/.env.example` — all required and optional env vars with inline comments.
+- `deploy/docker/DEPLOY.md` — quick-start guide and managed-services walkthrough.
+- `deploy/bare-metal/mnemo.service` — systemd unit with `Restart=always`, `EnvironmentFile=`, and `LimitNOFILE`.
+- `deploy/bare-metal/nginx.conf` — reverse proxy reference with timeout config tuned for long-running context requests.
+- `deploy/bare-metal/update.sh` — binary swap and `systemctl restart` script for in-place upgrades.
+- `deploy/bare-metal/DEPLOY.md` — step-by-step guide: binary download, systemd, nginx, TLS.
+- `deploy/aws/cloudformation/mnemo_cfn.yaml` — hardened CloudFormation template: EC2 t3.medium, EBS gp3 volume (inline `BlockDeviceMappings`, no race condition), Security Group, UserData with AL2023 compatibility fixes, AOF-enabled Redis, and `cfn-signal` with 20-minute timeout. All 5 falsification gates passed.
+- `deploy/aws/cloudformation/DEPLOY.md` — console + CLI deploy instructions, parameter table, cost estimate (~$32/month), SSH access and teardown.
+- `deploy/gcp/terraform/main.tf` — GCP Compute Engine e2-medium, Debian 12, persistent pd-ssd data disk (attached at boot), Docker Compose stack via startup script.
+- `deploy/gcp/terraform/variables.tf`, `outputs.tf`, `terraform.tfvars` — full variable/output surface.
+- `deploy/gcp/DEPLOY.md` — `gcloud auth`, `terraform init/plan/apply`, verify, destroy. All 5 falsification gates passed.
+- `docs/PRD_DEPLOY.md` — Deployment PRD covering T1–T10 targets, resource floors, rollout phasing, and falsification gate contract.
+
+### Fixed
+
+- Root `.gitignore` now excludes `.keys/` (cloud credential directories).
+- `deploy/gcp/terraform/.gitignore` excludes `.terraform/`, `terraform.tfstate*`, and plan files.
+
+### Discovered (deployment falsification)
+
+- **CloudFormation `!Sub` + bash heredocs**: `Fn::Sub` list form required to prevent `${VAR:-default}` bash default syntax from being processed as CloudFormation substitutions.
+- **EBS attach race condition**: Separate `AWS::EC2::Volume` + `VolumeAttachment` resources race against UserData. Fix: inline `BlockDeviceMappings` on the instance.
+- **AL2023 `curl` conflict**: `dnf install curl` conflicts with pre-installed `curl-minimal`. Dropped `curl` from install list.
+- **Redis AOF**: `--save 60 1` alone loses data on restarts within 60s. Fix: `--appendonly yes` alongside RDB.
+- **GCP SSH**: `gcloud compute ssh` uses a non-standard port internally; direct `ssh -p 22` with the generated key works reliably.
+- **GHCR versioned tags**: Only `latest` is currently published. Deployment templates default to `latest`.
+
 ## [0.3.1] — 2026-03-04
 
 ### Added

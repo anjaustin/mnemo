@@ -1,8 +1,8 @@
 # Mnemo Deployment PRD
 
-**Status:** Planning  
-**Version:** 0.3.1  
-**Date:** 2026-03-04
+**Status:** Phase 2 in progress (T1–T4 complete, T5–T10 pending)  
+**Version:** 0.3.2  
+**Date:** 2026-03-05
 
 ---
 
@@ -46,7 +46,7 @@ This means:
 ### T1 — Docker (single host, all-in-one)
 **Priority:** P0 — ships first  
 **Tooling:** `docker compose`  
-**Status:** Partially done (`docker-compose.yml` exists for dev)
+**Status:** ✅ Complete — all 5 falsification gates passed
 
 The production compose file is different from the dev file: it uses GHCR images instead of `build: .`, sets restart policies, adds explicit resource limits, and strips debug logging.
 
@@ -68,7 +68,7 @@ The production compose file is different from the dev file: it uses GHCR images 
 ### T2 — Bare Metal / VPS (systemd)
 **Priority:** P0 — ships with T1  
 **Tooling:** `systemd`, `nginx`  
-**Status:** Not started
+**Status:** ✅ Complete — all 5 falsification gates passed
 
 Mnemo's single Rust binary is ideal for bare-metal. No Node.js runtime, no build step, just download and run. Redis and Qdrant are installed as system services or via Docker.
 
@@ -96,7 +96,7 @@ Mnemo's single Rust binary is ideal for bare-metal. No Node.js runtime, no build
 ### T3 — AWS (CloudFormation)
 **Priority:** P1  
 **Tooling:** AWS CloudFormation  
-**Status:** Not started
+**Status:** ✅ Complete — all 5 falsification gates passed
 
 Single EC2 instance running the full three-service stack via Docker Compose. Equivalent to AnythingLLM's CloudFormation approach.
 
@@ -121,7 +121,7 @@ Single EC2 instance running the full three-service stack via Docker Compose. Equ
 ### T4 — GCP (Deployment Manager or Terraform)
 **Priority:** P1  
 **Tooling:** Terraform (preferred over GCP Deployment Manager — better ecosystem)  
-**Status:** Not started
+**Status:** ✅ Complete — all 5 falsification gates passed
 
 AnythingLLM uses GCP Deployment Manager YAML. We'll use Terraform instead — it's provider-agnostic and sets us up for reuse across T4/T5/T6.
 
@@ -141,7 +141,7 @@ AnythingLLM uses GCP Deployment Manager YAML. We'll use Terraform instead — it
 ### T5 — DigitalOcean (Terraform)
 **Priority:** P1  
 **Tooling:** Terraform  
-**Status:** Not started
+**Status:** 🔄 In progress
 
 Matches AnythingLLM's DigitalOcean target. Uses the same Terraform module structure as T4 for consistency — different provider, same patterns.
 
