@@ -428,18 +428,34 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 
 Production deployment artifacts are in `deploy/`. All 10 targets are fully falsified (5-gate test: health, write, context, list-episodes, delete).
 
-| Target | Tooling | Status | Guide |
-|--------|---------|--------|-------|
-| Docker (all-in-one) | `docker compose` | ✅ Falsified | [deploy/docker/DEPLOY.md](deploy/docker/DEPLOY.md) |
-| Bare Metal / VPS | systemd + nginx | ✅ Falsified | [deploy/bare-metal/DEPLOY.md](deploy/bare-metal/DEPLOY.md) |
-| AWS EC2 | CloudFormation | ✅ Falsified | [deploy/aws/cloudformation/DEPLOY.md](deploy/aws/cloudformation/DEPLOY.md) |
-| GCP Compute Engine | Terraform | ✅ Falsified | [deploy/gcp/DEPLOY.md](deploy/gcp/DEPLOY.md) |
-| DigitalOcean | Terraform | ✅ Falsified | [deploy/digitalocean/DEPLOY.md](deploy/digitalocean/DEPLOY.md) |
-| Render | `render.yaml` | ✅ Falsified | [deploy/render/DEPLOY.md](deploy/render/DEPLOY.md) |
-| Railway | Railway template | ✅ Falsified | [deploy/railway/DEPLOY.md](deploy/railway/DEPLOY.md) |
-| Vultr | Terraform | ✅ Falsified | [deploy/vultr/DEPLOY.md](deploy/vultr/DEPLOY.md) |
-| Northflank | Stack definition | ✅ Falsified | [deploy/northflank/DEPLOY.md](deploy/northflank/DEPLOY.md) |
-| Linode / Akamai | Terraform | ✅ Falsified | [deploy/linode/DEPLOY.md](deploy/linode/DEPLOY.md) |
+| Docker | Bare Metal | AWS | GCP | DigitalOcean |
+|:------:|:----------:|:---:|:---:|:------------:|
+| [![Deploy with Docker][docker-btn]][docker-deploy] | [![Bare Metal / VPS][bare-metal-btn]][bare-metal-deploy] | [![Deploy on AWS][aws-btn]][aws-deploy] | [![Deploy on GCP][gcp-btn]][gcp-deploy] | [![Deploy on DigitalOcean][do-btn]][do-deploy] |
+
+| Render | Railway | Vultr | Northflank | Linode |
+|:------:|:-------:|:-----:|:----------:|:------:|
+| [![Deploy on Render][render-btn]][render-deploy] | [![Deploy on Railway][railway-btn]][railway-deploy] | [![Deploy on Vultr][vultr-btn]][vultr-deploy] | [![Deploy on Northflank][northflank-btn]][northflank-deploy] | [![Deploy on Linode][linode-btn]][linode-deploy] |
+
+[docker-btn]: ./img/deploy/docker.svg
+[docker-deploy]: deploy/docker/DEPLOY.md
+[bare-metal-btn]: ./img/deploy/bare-metal.svg
+[bare-metal-deploy]: deploy/bare-metal/DEPLOY.md
+[aws-btn]: ./img/deploy/aws.svg
+[aws-deploy]: deploy/aws/cloudformation/DEPLOY.md
+[gcp-btn]: ./img/deploy/gcp.svg
+[gcp-deploy]: deploy/gcp/DEPLOY.md
+[do-btn]: ./img/deploy/digitalocean.svg
+[do-deploy]: deploy/digitalocean/DEPLOY.md
+[render-btn]: ./img/deploy/render.svg
+[render-deploy]: deploy/render/DEPLOY.md
+[railway-btn]: ./img/deploy/railway.svg
+[railway-deploy]: deploy/railway/DEPLOY.md
+[vultr-btn]: ./img/deploy/vultr.svg
+[vultr-deploy]: deploy/vultr/DEPLOY.md
+[northflank-btn]: ./img/deploy/northflank.svg
+[northflank-deploy]: deploy/northflank/DEPLOY.md
+[linode-btn]: ./img/deploy/linode.svg
+[linode-deploy]: deploy/linode/DEPLOY.md
 
 ### Quickest path to production
 
