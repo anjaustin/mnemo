@@ -106,7 +106,7 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release workflow expectation: bump `Cargo.toml` (`workspace.package.version`) and `sdk/python/pyproject.toml` together before tagging.
-- Current in-repo development version: `0.3.3`.
+- Current in-repo development version: `0.3.4`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
@@ -523,7 +523,12 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_WEBHOOKS_CIRCUIT_BREAKER_COOLDOWN_MS` | Circuit cooldown before retrying sends | `60000` |
 | `MNEMO_WEBHOOKS_PERSISTENCE_ENABLED` | Persist webhook subscriptions/events in Redis | `true` |
 | `MNEMO_WEBHOOKS_PERSISTENCE_PREFIX` | Redis key suffix for webhook state | `webhooks` |
+| `MNEMO_SERVER_HOST` | Server bind address | `0.0.0.0` |
 | `MNEMO_SERVER_PORT` | Server port | `8080` |
+| `MNEMO_LLM_BASE_URL` | Base URL for LLM provider | Provider default |
+| `MNEMO_EMBEDDING_MODEL` | Model for embedding generation | `text-embedding-3-small` |
+| `MNEMO_EMBEDDING_BASE_URL` | Base URL for embedding provider | Provider default |
+| `MNEMO_EMBEDDING_DIMENSIONS` | Embedding vector dimensions | `1536` |
 
 Webhook outbound delivery defaults are configured in `config/default.toml` and can be overridden with env vars:
 
@@ -571,7 +576,7 @@ See `docs/PRD_DEPLOY.md` for full deployment PRD and falsification gate contract
 - Read/write retention enforcement ✅
 - Operator hero-lane backend (summary, trace, preview, violations) ✅
 - Webhook ops endpoints (dead-letter, replay, retry, stats) ✅
-- Falsification suite: 56 integration tests including 4×4 contract/policy matrix ✅
+- Falsification suite: 78 integration tests including 4×4 contract/policy matrix ✅
 - Raw Vector API (6 endpoints — upsert, search, delete, count, namespace lifecycle) ✅
 - Session Messages API (list, clear, delete-by-index) ✅
 - AnythingLLM vector DB provider (`integrations/anythingllm/`) ✅
@@ -583,6 +588,17 @@ See `docs/PRD_DEPLOY.md` for full deployment PRD and falsification gate contract
 - p95 latency evidence capture 🚧
 
 See `docs/OPERATOR_UX_PRD.md`, `docs/SDK_INTEGRATIONS_PRD.md`, and `docs/OPERATOR_DASHBOARD_PRD.md` for current scope.
+
+**QA/QC Falsification** ✅ complete (3 phases)
+
+- Phase 1: 59 new tests — graph engine, LLM providers, Qdrant store, async SDK, webhook persistence ✅
+- Phase 2: 44 new tests — config parsing (24), session messages (7), raw vectors (1), auth integration (6), request-id/API (5) ✅
+- Phase 3: 6 new tests — rate limiting, circuit breaker, RRF reranker, credential scan script, deploy artifact validation script ✅
+- 109 new tests total, ~226 across the project
+- 3 bugs fixed (Qdrant TOCTOU race, `skip_compatibility_check`, `.gitignore` gaps)
+- 3 new scripts (`credential_scan.sh`, `deploy_artifact_validation.sh`, `docker_build_test.sh`)
+
+See `docs/QA_QC_FALSIFICATION_PRD.md` for the full 25-domain falsification plan.
 
 ## Contributing
 

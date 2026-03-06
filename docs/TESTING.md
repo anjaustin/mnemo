@@ -1,6 +1,27 @@
 # Testing Guide
 
-This project has four practical testing layers.
+## Test Count Summary
+
+| Location | Tests | Type |
+|----------|-------|------|
+| `crates/mnemo-server/tests/memory_api.rs` | 78 | Integration (requires Redis + Qdrant) |
+| `crates/mnemo-server/src/config.rs` | 24 | Unit (inline `#[cfg(test)]`) |
+| `crates/mnemo-server/src/middleware/auth.rs` | 6 | Unit (inline) |
+| `crates/mnemo-graph/src/lib.rs` | 10 | Unit (inline) |
+| `crates/mnemo-llm/src/openai_compat.rs` | 17 | Unit (wiremock) |
+| `crates/mnemo-llm/src/anthropic.rs` | 7 | Unit (wiremock) |
+| `crates/mnemo-retrieval/src/lib.rs` | 11 | Unit (6 existing + 5 RRF) |
+| `crates/mnemo-storage/tests/qdrant.rs` | 6 | Integration (requires Qdrant) |
+| `crates/mnemo-storage/tests/storage.rs` | ~7 | Integration (requires Redis) |
+| `crates/mnemo-ingest/tests/ingest.rs` | ~4 | Integration (requires Redis + Qdrant) |
+| `sdk/python/tests/test_sdk.py` | 65 assertions | Python (requires live server) |
+| `sdk/python/tests/test_async_client.py` | 18 | Python (aioresponses, no server needed) |
+| `tests/credential_scan.sh` | 5 gates | Bash script |
+| `tests/deploy_artifact_validation.sh` | 36 gates | Bash script |
+| `tests/docker_build_test.sh` | 3 gates | Bash script |
+| **Total** | **~226** | |
+
+This project has several practical testing layers.
 
 ## 1) Workspace tests
 
@@ -74,7 +95,83 @@ It verifies:
 - observability checks (`/metrics`, `x-mnemo-request-id`) for telemetry exposure and request correlation propagation
 - governance policy checks (`/api/v1/policies/:user`, `/api/v1/policies/:user/preview`, `/api/v1/policies/:user/violations`) for webhook allowlist enforcement, default contract/retrieval fallback behavior, retention write guards, preview impact estimation, violation-window filtering, and destructive-operation audit trail coverage
 
-## 5) Importer stress harness (large real-world export)
+## 5) QA/QC Falsification Tests
+
+Added across three phases of the [QA/QC Falsification PRD](QA_QC_FALSIFICATION_PRD.md). These tests verify every major feature, endpoint, and claim in the codebase.
+
+### Config parsing (24 unit tests)
+
+```bash
+cargo test -p mnemo-server --lib config -- --test-threads=1
+```
+
+Covers: TOML loading, env var overrides, invalid values, missing required config, auth-enabled-without-keys.
+
+### Graph engine (10 unit tests)
+
+```bash
+cargo test -p mnemo-graph --lib
+```
+
+Covers: BFS traversal (depth, max_nodes), community detection, relevance discount, temporal filtering.
+
+### LLM providers (24 unit tests with wiremock)
+
+```bash
+cargo test -p mnemo-llm --lib
+```
+
+Covers: OpenAI/Anthropic prompt construction, malformed response handling, rate limit (429), empty content, embedding dimension mismatch.
+
+### Qdrant store (6 integration tests)
+
+```bash
+cargo test -p mnemo-storage --test qdrant -- --test-threads=1
+```
+
+Requires Qdrant at `http://localhost:6334`. Covers: upsert/search roundtrip, tenant isolation, GDPR delete, TOCTOU race handling.
+
+### Retrieval engine (5 RRF diversity tests)
+
+```bash
+cargo test -p mnemo-retrieval --lib
+```
+
+Covers: RRF score correctness, overlap boosting, diversity verification, temporal intent resolution.
+
+### Async SDK (18 unit tests)
+
+```bash
+cd sdk/python && python -m pytest tests/test_async_client.py -v
+```
+
+Covers: AsyncMnemo roundtrip, all 27 methods exist, context manager, error handling. Uses `aioresponses` (no live server needed).
+
+### Credential scan
+
+```bash
+bash tests/credential_scan.sh
+```
+
+5 gates: `.keys/` gitignored, sensitive patterns gitignored, terraform state not tracked, no API keys in tracked files, `.env.example` has no real values.
+
+### Deploy artifact validation
+
+```bash
+bash tests/deploy_artifact_validation.sh
+```
+
+36 gates: CloudFormation template validates, Terraform configs validate (4 targets), Render blueprint validates, Railway config validates, Northflank stack validates.
+
+### Docker build test
+
+```bash
+bash tests/docker_build_test.sh
+```
+
+3 gates: `docker build .` succeeds, image size < 50MB, container starts and responds to `/health`.
+
+## 6) Importer stress harness (large real-world export)
 
 ```bash
 python3 eval/import_stress.py --mode dry-run --iterations 2 --base-url http://localhost:8080

@@ -6,12 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-03-05
+
 ### Added
 
 - QA/QC Phase 1: 59 new tests across 5 domains (mnemo-graph, mnemo-llm, Qdrant, AsyncMnemo SDK, webhook persistence).
 - QA/QC Phase 2: 44 additional tests (config parsing, session messages, raw vectors, auth integration, request-id, API consistency).
-- `docs/QA_QC_FALSIFICATION_PRD.md` — comprehensive QA/QC falsification PRD (25 domains, ~170 gates).
+- QA/QC Phase 3: 6 additional tests (webhook rate limiting WH-13, circuit breaker WH-14, RRF reranker diversity RET-08).
+- `docs/QA_QC_FALSIFICATION_PRD.md` — comprehensive QA/QC falsification PRD (25 domains, ~170 gates, 3-phase execution plan).
 - `tests/docker_build_test.sh` — Docker build and startup falsification script (DK-01 through DK-03).
+- `tests/credential_scan.sh` — credential hygiene scanning script (SEC-01 through SEC-05, 5 PASS).
+- `tests/deploy_artifact_validation.sh` — deployment artifact structural validation (DEP-02 through DEP-06, 36 PASS).
+- `sdk/python/tests/test_async_client.py` — 18 async SDK unit tests with aioresponses (SDK-08 through SDK-10).
+- 109 new tests total across all 3 phases, bringing project total to ~226 tests.
 
 ### Fixed
 
@@ -19,6 +26,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Qdrant client `skip_compatibility_check()` — prevent version mismatch errors with older Qdrant servers.
 - Security: added `*.pem`, `credentials.json`, `terraform.tfstate` to `.gitignore` (SEC-02).
 - Doc inconsistencies: API.md version, SDK PRD status, Phase 2 PRD M4 status, CHANGELOG Vultr references.
+- Documentation audit: 25 gaps identified and fixed across README.md, API.md, TESTING.md, CHANGELOG.md, and QA_QC_FALSIFICATION_PRD.md.
+- README.md: added 5 missing env vars (`MNEMO_SERVER_HOST`, `MNEMO_LLM_BASE_URL`, `MNEMO_EMBEDDING_MODEL`, `MNEMO_EMBEDDING_BASE_URL`, `MNEMO_EMBEDDING_DIMENSIONS`).
+- README.md: corrected integration test count (56 → 78) and added QA/QC Falsification section to Project Status.
+- QA_QC_FALSIFICATION_PRD.md: corrected route counts (54/66 → 57/72), updated all resolved gate statuses, fixed Coverage Gap Matrix, marked all 3 phases complete in Execution Plan.
+- TESTING.md: added test count summary table and QA/QC test sections with run commands.
 
 ## [0.3.3] — 2026-03-05
 
