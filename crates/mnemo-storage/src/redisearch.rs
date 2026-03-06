@@ -166,11 +166,15 @@ impl RedisStateStore {
     ) -> StorageResult<Vec<(Uuid, f32)>> {
         let mut conn = self.conn.clone();
 
-        // Escape special RediSearch characters in query
+        // Escape special RediSearch characters in query text
         let escaped_query = escape_redisearch_query(query);
 
+        // Escape hyphens in user_id for RediSearch TAG filter.
+        // UUIDs contain hyphens which are special chars in TAG queries.
+        let escaped_user_id = user_id.replace('-', "\\-");
+
         // Build query: user filter + text search
-        let search_query = format!("@user_id:{{{}}} {}", user_id, escaped_query);
+        let search_query = format!("@user_id:{{{}}} {}", escaped_user_id, escaped_query);
 
         let result: redis::Value = redis::cmd("FT.SEARCH")
             .arg(index_name)
@@ -189,20 +193,76 @@ impl RedisStateStore {
     }
 }
 
+/// Common English stop words that RediSearch would match on every document.
+/// Filtering these out dramatically improves FT precision for natural-language
+/// queries like "Where does Alice work?" → "Alice work".
+const STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+    "being", "have", "has", "had", "do", "does", "did", "will", "would",
+    "could", "should", "may", "might", "shall", "can", "need", "dare",
+    "ought", "used", "it", "its", "this", "that", "these", "those",
+    "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
+    "she", "her", "they", "them", "their", "what", "which", "who", "whom",
+    "where", "when", "why", "how", "all", "each", "every", "both",
+    "few", "more", "most", "other", "some", "such", "no", "not", "only",
+    "same", "so", "than", "too", "very", "just", "any", "about", "up",
+    "out", "if", "because", "as", "while", "although", "since", "though",
+    "into", "through", "during", "before", "after", "above", "below",
+    "between", "then", "once", "here", "there", "s", "t", "don", "didn",
+    "doesn", "isn", "wasn", "aren", "weren", "won", "hasn", "hadn",
+    "does", "did", "do",
+];
+
+/// Strip stop words from a natural-language query and return meaningful keywords.
+/// Falls back to the original query if all words are stop words.
+fn extract_keywords(query: &str) -> String {
+    let words: Vec<&str> = query
+        .split_whitespace()
+        .filter(|w| {
+            let lower = w.to_lowercase();
+            let clean: String = lower.chars().filter(|c| c.is_alphabetic()).collect();
+            !clean.is_empty() && !STOP_WORDS.contains(&clean.as_str())
+        })
+        .collect();
+
+    if words.is_empty() {
+        // All words were stop words — use the original (RediSearch will handle it)
+        query.trim().to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
 /// Escape special characters for RediSearch queries.
 fn escape_redisearch_query(query: &str) -> String {
-    // RediSearch special chars that need escaping
+    // First extract meaningful keywords from natural-language queries
+    let keywords = extract_keywords(query);
+
+    // RediSearch special chars that need escaping in individual tokens
     let special = [
-        '@', '!', '{', '}', '(', ')', '|', '-', '=', '>', '[', ']', ':', ';', '~',
+        '@', '!', '{', '}', '(', ')', '-', '=', '>', '[', ']', ':', ';', '~',
     ];
-    let mut escaped = String::with_capacity(query.len() * 2);
-    for ch in query.chars() {
-        if special.contains(&ch) {
-            escaped.push('\\');
-        }
-        escaped.push(ch);
-    }
-    escaped
+
+    // Join keywords with | (OR) so any single keyword hit returns the document.
+    // AND (default) is too strict for natural-language queries where synonyms
+    // differ between query and stored text ("prefer" vs "favourite").
+    let escaped_tokens: Vec<String> = keywords
+        .split_whitespace()
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut escaped = String::with_capacity(w.len() * 2);
+            for ch in w.chars() {
+                if special.contains(&ch) {
+                    escaped.push('\\');
+                }
+                escaped.push(ch);
+            }
+            escaped
+        })
+        .collect();
+
+    escaped_tokens.join("|")
 }
 
 /// Parse FT.SEARCH results with WITHSCORES into (Uuid, score) pairs.

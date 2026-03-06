@@ -943,8 +943,7 @@ mod tests {
         // RRF's b score (which has no diversity penalty).
         // Verify: MMR score for b < its normalised relevance (penalty is applied)
         let b_mmr = mmr_result.iter().find(|(id, _)| *id == b).map(|(_, s)| *s).unwrap();
-        let b_rel_norm = 0.95 / 0.95; // b's best raw score normalised to [0,1] = 1.0 (it's 0.92/0.95)
-        let b_rel_norm = 0.92_f64 / 0.95_f64;
+        let b_rel_norm = 0.92_f64 / 0.95_f64; // b's raw score normalised to [0,1]
         assert!(
             b_mmr < b_rel_norm * MMR_LAMBDA,
             "MMR score of b ({:.4}) should be below pure-relevance upper bound ({:.4}) due to diversity penalty",

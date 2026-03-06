@@ -69,8 +69,10 @@ impl RedisStateStore {
     async fn set_json<T: Serialize>(&self, key: &str, value: &T) -> StorageResult<()> {
         let json = serde_json::to_string(value)?;
         let mut conn = self.conn.clone();
-        redis::cmd("SET")
+        // Use JSON.SET so that RediSearch ON JSON indexes can scan these documents.
+        redis::cmd("JSON.SET")
             .arg(key)
+            .arg("$")
             .arg(&json)
             .exec_async(&mut conn)
             .await
@@ -80,12 +82,23 @@ impl RedisStateStore {
 
     async fn get_json<T: DeserializeOwned>(&self, key: &str) -> StorageResult<Option<T>> {
         let mut conn = self.conn.clone();
-        let result: Option<String> = conn
-            .get(key)
+        // JSON.GET returns a JSON array wrapping the root value: ["<value>"]
+        // We unwrap the outer array to get the actual document.
+        let result: Option<String> = redis::cmd("JSON.GET")
+            .arg(key)
+            .arg("$")
+            .query_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
         match result {
-            Some(json) => Ok(Some(serde_json::from_str(&json)?)),
+            Some(raw) => {
+                // JSON.GET with path "$" returns an array: [<document>]
+                let arr: Vec<serde_json::Value> = serde_json::from_str(&raw)?;
+                match arr.into_iter().next() {
+                    Some(val) => Ok(Some(serde_json::from_value(val)?)),
+                    None => Ok(None),
+                }
+            }
             None => Ok(None),
         }
     }
