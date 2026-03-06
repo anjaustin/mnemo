@@ -28,6 +28,7 @@ pub struct QdrantVectorStore {
 impl QdrantVectorStore {
     pub async fn new(url: &str, prefix: &str, dimensions: u32) -> Result<Self, MnemoError> {
         let client = Qdrant::from_url(url)
+            .skip_compatibility_check()
             .build()
             .map_err(|e| MnemoError::Qdrant(format!("Failed to connect: {}", e)))?;
 

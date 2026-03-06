@@ -489,6 +489,9 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 | [Thread HEAD](docs/THREAD_HEAD.md) | Git-like current thread state and retrieval modes |
 | [Temporal Vectorization](docs/TEMPORAL_VECTORIZATION.md) | Time-aware retrieval scoring and rollout plan |
 | [Testing Guide](docs/TESTING.md) | Workspace, E2E, and falsification test commands |
+| [QA/QC Falsification PRD](docs/QA_QC_FALSIFICATION_PRD.md) | 25 domains, ~170 falsification gates, 3-phase plan |
+| [Benchmarks](docs/BENCHMARKS.md) | Latency, throughput, and comparison benchmarks |
+| [Metadata Index Layer](docs/METADATA_INDEX_LAYER.md) | App-level metadata prefilter planner design |
 | [Configuration](config/default.toml) | All config options with inline comments |
 | [Contributing](CONTRIBUTING.md) | Dev setup, code style, PR process |
 | [Changelog](CHANGELOG.md) | Release notes |

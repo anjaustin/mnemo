@@ -4697,3 +4697,761 @@ async fn test_webhook_persistence_survives_restart() {
         );
     }
 }
+
+// =============================================================================
+// MSG-07: Session Messages API — Rust integration tests
+// =============================================================================
+
+/// Helper: write a memory episode and return the session_id from the response.
+async fn write_episode(app: &axum::Router, user: &str, session: &str, text: &str) -> String {
+    let (status, body) = json_request(
+        app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": user,
+            "session": session,
+            "text": text,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "write failed: {:?}", body);
+    body["session_id"]
+        .as_str()
+        .expect("response must have session_id")
+        .to_string()
+}
+
+#[tokio::test]
+async fn msg07_get_messages_returns_chronological_order() {
+    let app = build_test_app().await;
+    let session_name = format!("msg07_chrono_{}", Uuid::now_v7());
+    let user = format!("msg07_user_{}", Uuid::now_v7());
+
+    // Write 3 episodes in order
+    let mut session_id = String::new();
+    for i in 1..=3 {
+        session_id = write_episode(&app, &user, &session_name, &format!("message {}", i)).await;
+        // Small delay to ensure distinct created_at timestamps
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // GET messages
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{}/messages", session_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 3);
+
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3);
+
+    // Verify chronological order (ascending created_at)
+    for i in 0..messages.len() - 1 {
+        let t1 = messages[i]["created_at"].as_str().unwrap();
+        let t2 = messages[i + 1]["created_at"].as_str().unwrap();
+        assert!(t1 <= t2, "Messages must be chronological: {} <= {}", t1, t2);
+    }
+
+    // Verify idx values are 0-based sequential
+    for (i, msg) in messages.iter().enumerate() {
+        assert_eq!(msg["idx"].as_u64().unwrap(), i as u64);
+    }
+
+    // Verify content
+    assert!(messages[0]["content"].as_str().unwrap().contains("message 1"));
+    assert!(messages[2]["content"].as_str().unwrap().contains("message 3"));
+}
+
+#[tokio::test]
+async fn msg07_get_messages_with_limit() {
+    let app = build_test_app().await;
+    let session_name = format!("msg07_limit_{}", Uuid::now_v7());
+    let user = format!("msg07_user_{}", Uuid::now_v7());
+
+    let mut session_id = String::new();
+    for i in 1..=5 {
+        session_id = write_episode(&app, &user, &session_name, &format!("msg {}", i)).await;
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+
+    // GET with limit=2
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{}/messages?limit=2", session_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 2);
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+}
+
+#[tokio::test]
+async fn msg07_delete_by_index_removes_correct_message() {
+    let app = build_test_app().await;
+    let session_name = format!("msg07_delidx_{}", Uuid::now_v7());
+    let user = format!("msg07_user_{}", Uuid::now_v7());
+
+    let mut session_id = String::new();
+    for i in 1..=3 {
+        session_id =
+            write_episode(&app, &user, &session_name, &format!("episode_{}", i)).await;
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+
+    // Delete index 1 (the middle message)
+    let (status, body) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/v1/sessions/{}/messages/1", session_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["deleted"].as_bool().unwrap());
+
+    // GET messages — should have 2 left
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{}/messages", session_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 2);
+
+    let messages = body["messages"].as_array().unwrap();
+    // The remaining messages should be episode_1 and episode_3
+    assert!(messages[0]["content"].as_str().unwrap().contains("episode_1"));
+    assert!(messages[1]["content"].as_str().unwrap().contains("episode_3"));
+}
+
+#[tokio::test]
+async fn msg07_delete_by_out_of_bounds_index_returns_400() {
+    let app = build_test_app().await;
+    let session_name = format!("msg07_oob_{}", Uuid::now_v7());
+    let user = format!("msg07_user_{}", Uuid::now_v7());
+
+    let session_id = write_episode(&app, &user, &session_name, "only message").await;
+
+    // Delete index 999 — out of bounds
+    let (status, body) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/v1/sessions/{}/messages/999", session_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "Out-of-bounds index should return 400: {:?}",
+        body
+    );
+}
+
+#[tokio::test]
+async fn msg07_delete_all_messages_clears_without_deleting_session() {
+    let app = build_test_app().await;
+    let session_name = format!("msg07_delall_{}", Uuid::now_v7());
+    let user = format!("msg07_user_{}", Uuid::now_v7());
+
+    let mut session_id = String::new();
+    for i in 1..=3 {
+        session_id =
+            write_episode(&app, &user, &session_name, &format!("msg_{}", i)).await;
+    }
+
+    // DELETE all messages
+    let (status, body) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/v1/sessions/{}/messages", session_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["session_id"].as_str().unwrap(), session_id);
+    // deleted count should be >= 3 (could be more if extraction created additional episodes)
+    assert!(
+        body["deleted"].as_u64().unwrap() >= 3,
+        "Expected at least 3 deleted, got {}",
+        body["deleted"]
+    );
+
+    // Verify session still exists (GET episodes should return empty list, not 404)
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{}/messages", session_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 0);
+    assert!(body["messages"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn msg07_get_messages_for_nonexistent_session_returns_empty() {
+    let app = build_test_app().await;
+    let fake_id = Uuid::now_v7();
+
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{}/messages", fake_id),
+        serde_json::json!({}),
+    )
+    .await;
+    // Should return 200 with empty list (not 404) — list_episodes returns [] for unknown session
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn msg07_messages_have_required_fields() {
+    let app = build_test_app().await;
+    let session_name = format!("msg07_fields_{}", Uuid::now_v7());
+    let user = format!("msg07_user_{}", Uuid::now_v7());
+
+    let session_id = write_episode(&app, &user, &session_name, "field check message").await;
+
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{}/messages", session_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let msg = &body["messages"][0];
+    // Required fields per MessageRecord struct
+    assert!(msg.get("idx").is_some(), "missing idx");
+    assert!(msg.get("id").is_some(), "missing id");
+    assert!(msg.get("content").is_some(), "missing content");
+    assert!(msg.get("created_at").is_some(), "missing created_at");
+    // role may be null but the field should exist
+    assert!(msg.get("role").is_some(), "missing role field");
+    // session_id in response envelope
+    assert_eq!(body["session_id"].as_str().unwrap(), session_id);
+}
+
+// =============================================================================
+// VEC-12: Raw Vector API — Rust integration tests
+//
+// Uses a single shared namespace to avoid Qdrant FD exhaustion from creating
+// too many collections in parallel. Tests run sequentially within this single
+// comprehensive test function.
+// =============================================================================
+
+/// Helper: create a random 1536-dimensional vector (normalized).
+fn random_vector(seed: u64) -> Vec<f32> {
+    let mut v: Vec<f32> = (0..1536)
+        .map(|i| (seed as f32 * 0.31 + i as f32 * 0.73).sin())
+        .collect();
+    let mag = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    for x in v.iter_mut() {
+        *x /= mag;
+    }
+    v
+}
+
+/// Comprehensive VEC-12 test covering all 6 raw vector endpoints.
+/// Runs as a single test to use only 1 namespace (avoids Qdrant FD exhaustion).
+#[tokio::test]
+async fn vec12_raw_vector_api_comprehensive() {
+    let app = build_test_app().await;
+    let ns = format!("vec12_{}", Uuid::now_v7().simple());
+
+    // --- VEC-01: Namespace should not exist initially ---
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/vectors/{}/exists", ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body["exists"].as_bool().unwrap(), "VEC-01: namespace should not exist initially");
+
+    // --- VEC-09: Count returns 0 for non-existent namespace ---
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/vectors/{}/count", ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 0, "VEC-09: count should be 0 for non-existent ns");
+
+    // --- VEC-04: Query non-existent namespace returns empty ---
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/vectors/{}/query", ns),
+        serde_json::json!({
+            "vector": random_vector(300),
+            "top_k": 5,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["results"].as_array().unwrap().is_empty(), "VEC-04: query on non-existent ns should return []");
+
+    // --- Validation: empty vectors array returns 400 ---
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/vectors/{}", ns),
+        serde_json::json!({"vectors": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "Empty vectors should return 400");
+
+    // --- Validation: empty ids array returns 400 ---
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/vectors/{}/delete", ns),
+        serde_json::json!({"ids": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "Empty ids should return 400");
+
+    // --- VEC-01: Upsert creates namespace automatically ---
+    let v1 = random_vector(1);
+    let v2 = random_vector(2);
+    let v3 = random_vector(3);
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/vectors/{}", ns),
+        serde_json::json!({
+            "vectors": [
+                {"id": "v1", "vector": v1.clone(), "metadata": {"key": "a"}},
+                {"id": "v2", "vector": v2.clone(), "metadata": {"key": "b"}},
+                {"id": "v3", "vector": v3, "metadata": {"key": "c"}},
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "VEC-01 upsert failed: {:?}", body);
+    assert!(body["ok"].as_bool().unwrap());
+    assert_eq!(body["upserted"].as_u64().unwrap(), 3);
+
+    // --- VEC-10: Namespace now exists ---
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/vectors/{}/exists", ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["exists"].as_bool().unwrap(), "VEC-10: namespace should exist after upsert");
+
+    // Count should be 3
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/vectors/{}/count", ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 3, "Count should be 3 after upserting 3 vectors");
+
+    // --- VEC-02: Upsert same ID is idempotent (overwrites, count unchanged) ---
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/vectors/{}", ns),
+        serde_json::json!({
+            "vectors": [{"id": "v1", "vector": random_vector(99), "metadata": {"key": "updated"}}]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["ok"].as_bool().unwrap());
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/vectors/{}/count", ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(body["count"].as_u64().unwrap(), 3, "VEC-02: count should remain 3 after idempotent upsert");
+
+    // --- VEC-03: Query returns semantically similar results ---
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/vectors/{}/query", ns),
+        serde_json::json!({
+            "vector": v2,
+            "top_k": 3,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert!(!results.is_empty(), "VEC-03: query should return results");
+    // v2 queried with itself — should be top result with near-perfect score
+    assert_eq!(results[0]["id"].as_str().unwrap(), "v2");
+    assert!(results[0]["score"].as_f64().unwrap() > 0.99, "VEC-03: exact match should have score > 0.99");
+
+    // --- VEC-05: Delete IDs removes specific vectors ---
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/vectors/{}/delete", ns),
+        serde_json::json!({"ids": ["v2"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["ok"].as_bool().unwrap());
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/vectors/{}/count", ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(body["count"].as_u64().unwrap(), 2, "VEC-05: count should be 2 after deleting 1 vector");
+
+    // --- VEC-06: Delete non-existent IDs is no-op ---
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/vectors/{}/delete", ns),
+        serde_json::json!({"ids": ["nonexistent_id_xyz"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["ok"].as_bool().unwrap(), "VEC-06: delete non-existent ID should not error");
+
+    // --- VEC-07: Delete namespace removes all vectors ---
+    let (status, body) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/v1/vectors/{}", ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["ok"].as_bool().unwrap());
+    assert!(body["deleted"].as_bool().unwrap());
+
+    // Namespace should no longer exist
+    let (_, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/vectors/{}/exists", ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(!body["exists"].as_bool().unwrap(), "VEC-07: namespace should not exist after deletion");
+
+    // --- VEC-08: Delete non-existent namespace is no-op ---
+    let fake_ns = format!("vec12_fake_{}", Uuid::now_v7().simple());
+    let (status, body) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/v1/vectors/{}", fake_ns),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["ok"].as_bool().unwrap(), "VEC-08: delete non-existent namespace should be ok");
+}
+
+// =============================================================================
+// AUTH-07: Auth integration test with real server router
+// =============================================================================
+
+use mnemo_server::middleware::{AuthConfig, AuthLayer};
+
+async fn build_authed_test_app(keys: Vec<String>) -> axum::Router {
+    let (base_app, _store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    // Wrap with auth layer (same as main.rs does)
+    base_app.layer(AuthLayer::new(AuthConfig::with_keys(keys)))
+}
+
+#[tokio::test]
+async fn auth07_missing_key_returns_401_on_protected_endpoint() {
+    let app = build_authed_test_app(vec!["test-secret-key".to_string()]).await;
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({"user": "test", "session": "s1", "text": "hello"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"].as_str().unwrap(), "unauthorized");
+}
+
+#[tokio::test]
+async fn auth07_wrong_key_returns_401() {
+    let app = build_authed_test_app(vec!["correct-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "authorization",
+        "Bearer wrong-key",
+        serde_json::json!({"user": "test", "session": "s1", "text": "hello"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"].as_str().unwrap(), "unauthorized");
+}
+
+#[tokio::test]
+async fn auth07_correct_bearer_key_allows_request() {
+    let app = build_authed_test_app(vec!["correct-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "authorization",
+        "Bearer correct-key",
+        serde_json::json!({
+            "user": format!("auth07_{}", Uuid::now_v7()),
+            "session": "s1",
+            "text": "authed write",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "Authed request should succeed: {:?}", body);
+    assert!(body["ok"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn auth07_correct_x_api_key_allows_request() {
+    let app = build_authed_test_app(vec!["x-key-value".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "x-api-key",
+        "x-key-value",
+        serde_json::json!({
+            "user": format!("auth07_{}", Uuid::now_v7()),
+            "session": "s1",
+            "text": "x-api-key write",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "X-API-Key should work: {:?}", body);
+    assert!(body["ok"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn auth07_health_bypasses_auth() {
+    let app = build_authed_test_app(vec!["secret".to_string()]).await;
+
+    // /health without any key should succeed
+    let (status, body) = json_request(&app, "GET", "/health", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"].as_str().unwrap(), "ok");
+
+    // /healthz too
+    let (status, body) = json_request(&app, "GET", "/healthz", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"].as_str().unwrap(), "ok");
+}
+
+#[tokio::test]
+async fn auth07_metrics_bypasses_auth() {
+    let app = build_authed_test_app(vec!["secret".to_string()]).await;
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/metrics")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+// =============================================================================
+// API-01: Request-id header systematically tested across key endpoints
+// =============================================================================
+
+#[tokio::test]
+async fn api01_request_id_header_on_success_endpoints() {
+    let app = build_test_app().await;
+    let user = format!("api01_user_{}", Uuid::now_v7());
+
+    // Test a variety of endpoints for x-mnemo-request-id in response
+    let endpoints: Vec<(&str, &str, Value)> = vec![
+        ("GET", "/health", serde_json::json!({})),
+        ("GET", "/healthz", serde_json::json!({})),
+        (
+            "POST",
+            "/api/v1/memory",
+            serde_json::json!({"user": &user, "session": "api01_s", "text": "hello"}),
+        ),
+    ];
+
+    for (method, path, payload) in &endpoints {
+        let request = Request::builder()
+            .method(*method)
+            .uri(*path)
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        let rid = response
+            .headers()
+            .get("x-mnemo-request-id")
+            .map(|v| v.to_str().unwrap().to_string());
+        assert!(
+            rid.is_some(),
+            "API-01: {} {} should have x-mnemo-request-id header",
+            method,
+            path
+        );
+        // Should be a valid UUID
+        let rid_str = rid.unwrap();
+        assert!(
+            Uuid::parse_str(&rid_str).is_ok(),
+            "API-01: request-id should be a valid UUID, got: {}",
+            rid_str
+        );
+    }
+}
+
+#[tokio::test]
+async fn api01_request_id_header_on_error_endpoints() {
+    let app = build_test_app().await;
+
+    // Test 1: Invalid body → 400/422
+    {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/memory")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"bad": "payload"}).to_string()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        let rid = response.headers().get("x-mnemo-request-id");
+        assert!(
+            rid.is_some(),
+            "API-01: POST /api/v1/memory (invalid body) should have x-mnemo-request-id"
+        );
+    }
+
+    // Test 2: Non-existent user context → should still have request-id
+    {
+        let context_path = format!("/api/v1/memory/{}/context", Uuid::now_v7());
+        let request = Request::builder()
+            .method("POST")
+            .uri(&context_path)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"query": "test"}).to_string()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        let rid = response.headers().get("x-mnemo-request-id");
+        assert!(
+            rid.is_some(),
+            "API-01: POST context (error case) should have x-mnemo-request-id"
+        );
+    }
+}
+
+#[tokio::test]
+async fn api01_client_provided_request_id_is_echoed() {
+    let app = build_test_app().await;
+    let custom_id = "my-custom-request-id-12345";
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/health")
+        .header("x-mnemo-request-id", custom_id)
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    let rid = response
+        .headers()
+        .get("x-mnemo-request-id")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(
+        rid, custom_id,
+        "API-01: client-provided request-id should be echoed back"
+    );
+}
+
+// =============================================================================
+// API-04: /healthz returns same response as /health
+// =============================================================================
+
+#[tokio::test]
+async fn api04_healthz_mirrors_health() {
+    let app = build_test_app().await;
+
+    let (status1, body1) = json_request(&app, "GET", "/health", serde_json::json!({})).await;
+    let (status2, body2) = json_request(&app, "GET", "/healthz", serde_json::json!({})).await;
+
+    assert_eq!(status1, StatusCode::OK);
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(body1["status"], body2["status"]);
+    assert_eq!(body1["version"], body2["version"]);
+}
+
+// =============================================================================
+// API-05: Unknown routes return 404, not 500
+// =============================================================================
+
+#[tokio::test]
+async fn api05_unknown_route_returns_404() {
+    let app = build_test_app().await;
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/nonexistent")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "Unknown routes should return 404, not 500"
+    );
+}

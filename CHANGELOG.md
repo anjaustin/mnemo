@@ -8,23 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- T5 DigitalOcean deployment live-falsified (nyc3, s-2vcpu-4gb, droplet 556194472) — all 5 gates passed, torn down.
-- T6 Render deployment live-falsified (oregon, starter plan, slug mnemo-9z5v) — all 5 gates passed, torn down.
-  - Fixed `render.yaml`: swapped Render managed Redis (no Stack modules) for `redis/redis-stack-server` as private service.
-  - Fixed `render.yaml`: Qdrant changed from `web` to `pserv` (private, no public exposure).
-  - Discovery: Render web services bind to port 10000; set `MNEMO_SERVER_PORT=10000`.
-- T7 Railway deployment live-falsified (oregon, slug mnemo-production-902f) — all 5 gates passed, torn down.
-  - Railway services deployed via GraphQL API with Docker images (redis-stack-server, qdrant, mnemo-server).
-  - Private networking via `<service>.railway.internal` hostnames.
-- T8 Vultr deployment live-falsified (ewr/New Jersey, vc2-2c-4gb, instance 207eff09) — all 5 gates passed, torn down.
-  - Vultr VPS with `user_data` startup script (Docker + Compose). Same pattern as DigitalOcean T5.
-  - `deploy/vultr/terraform/` — full Terraform module (main.tf, variables.tf, outputs.tf, startup.sh.tpl).
-  - Replaced T8 Elestio (blocked on account review) with Vultr.
-- T9 Northflank deployment live-falsified (nf-us-east-ohio, namespace ns-blcxq2rhfzbr) — all 5 gates passed, torn down.
-  - Northflank services deployed via REST API as `deployment` type with external Docker images.
-  - Discovery: `redis/redis-stack` with custom command bypasses module loading — must use `redis/redis-stack-server` and `REDIS_ARGS` env var.
-  - Discovery: internal service DNS uses short names (`mnemo-redis`, `mnemo-qdrant`) within the same project.
-  - Fixed `stack.json` to use `redis/redis-stack-server:7.4.0-v1`.
+- QA/QC Phase 1: 59 new tests across 5 domains (mnemo-graph, mnemo-llm, Qdrant, AsyncMnemo SDK, webhook persistence).
+- QA/QC Phase 2: 44 additional tests (config parsing, session messages, raw vectors, auth integration, request-id, API consistency).
+- `docs/QA_QC_FALSIFICATION_PRD.md` — comprehensive QA/QC falsification PRD (25 domains, ~170 gates).
+- `tests/docker_build_test.sh` — Docker build and startup falsification script (DK-01 through DK-03).
+
+### Fixed
+
+- Qdrant `ensure_collection` TOCTOU race condition — swallow "already exists" errors on concurrent creation.
+- Qdrant client `skip_compatibility_check()` — prevent version mismatch errors with older Qdrant servers.
+- Security: added `*.pem`, `credentials.json`, `terraform.tfstate` to `.gitignore` (SEC-02).
+- Doc inconsistencies: API.md version, SDK PRD status, Phase 2 PRD M4 status, CHANGELOG Vultr references.
 
 ## [0.3.3] — 2026-03-05
 
