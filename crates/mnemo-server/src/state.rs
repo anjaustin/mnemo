@@ -12,6 +12,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+/// Which merge/rerank strategy the retrieval engine uses after parallel search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RerankerMode {
+    /// Reciprocal Rank Fusion — boosts consensus items across ranked lists.
+    Rrf,
+    /// Maximal Marginal Relevance — trades relevance for result diversity.
+    Mmr,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportJobStatus {
@@ -213,6 +222,7 @@ pub struct AppState {
     /// `None` when no LLM is configured (no-op mode).
     pub llm: Option<LlmHandle>,
     pub metadata_prefilter: MetadataPrefilterConfig,
+    pub reranker: RerankerMode,
     pub import_jobs: Arc<RwLock<HashMap<Uuid, ImportJobRecord>>>,
     pub import_idempotency: Arc<RwLock<HashMap<String, Uuid>>>,
     pub memory_webhooks: Arc<RwLock<HashMap<Uuid, MemoryWebhookSubscription>>>,

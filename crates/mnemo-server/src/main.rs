@@ -10,8 +10,9 @@ use mnemo_server::config::MnemoConfig;
 use mnemo_server::middleware::{request_context_middleware, AuthConfig, AuthLayer};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
-    AppState, LlmHandle, MetadataPrefilterConfig, ServerMetrics, WebhookDeliveryConfig,
+    AppState, LlmHandle, MetadataPrefilterConfig, RerankerMode, ServerMetrics, WebhookDeliveryConfig,
 };
+use mnemo_server::config::RerankerConfig;
 
 use mnemo_graph::GraphEngine;
 use mnemo_ingest::{IngestConfig, IngestWorker};
@@ -151,6 +152,10 @@ async fn main() -> anyhow::Result<()> {
             enabled: config.retrieval.metadata_prefilter_enabled,
             scan_limit: config.retrieval.metadata_scan_limit,
             relax_if_empty: config.retrieval.metadata_relax_if_empty,
+        },
+        reranker: match config.retrieval.reranker {
+            RerankerConfig::Mmr => RerankerMode::Mmr,
+            RerankerConfig::Rrf => RerankerMode::Rrf,
         },
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),

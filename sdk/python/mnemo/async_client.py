@@ -17,6 +17,8 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
+import random
 from typing import Any
 
 from mnemo._errors import (  # noqa: F401
@@ -153,7 +155,7 @@ class AsyncMnemo:
 
                     if resp.status == 429:
                         retry_ms = _aio_extract_retry_ms(body)
-                        raise MnemoRateLimitError(
+                        err_429 = MnemoRateLimitError(
                             resp.status,
                             message,
                             retry_after_ms=retry_ms,
@@ -161,6 +163,9 @@ class AsyncMnemo:
                             body=body,
                             request_id=rid,
                         )
+                        if attempt >= self.max_retries:
+                            raise err_429
+                        # Fall through to retry with exponential backoff
                     elif resp.status == 404:
                         raise MnemoNotFoundError(
                             resp.status,
@@ -187,7 +192,7 @@ class AsyncMnemo:
                         )
                         if attempt >= self.max_retries or resp.status < 500:
                             raise err
-            except (MnemoRateLimitError, MnemoNotFoundError, MnemoValidationError):
+            except (MnemoNotFoundError, MnemoValidationError):
                 raise
             except MnemoHttpError:
                 if attempt >= self.max_retries:
@@ -199,7 +204,9 @@ class AsyncMnemo:
                 if attempt >= self.max_retries:
                     raise MnemoConnectionError(f"Connection failed: {exc}") from exc
 
-            await asyncio.sleep(self.retry_backoff_s * (attempt + 1))
+            # Exponential backoff with full jitter: base * 2^attempt * U(0,1)
+            delay = self.retry_backoff_s * math.pow(2, attempt) * random.random()
+            await asyncio.sleep(delay)
 
         raise MnemoError("Exhausted retries")  # unreachable but satisfies type checker
 

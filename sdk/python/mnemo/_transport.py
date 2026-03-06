@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import random
 import time
 import uuid
 from typing import Any
@@ -125,7 +127,10 @@ class SyncTransport:
                     raise MnemoConnectionError(f"Connection failed: {exc}") from exc
 
             attempt += 1
-            time.sleep(self.retry_backoff_s * attempt)
+            # Exponential backoff with full jitter:
+            # delay = base * 2^attempt * uniform(0, 1)
+            delay = self.retry_backoff_s * math.pow(2, attempt) * random.random()
+            time.sleep(delay)
 
 
 def _should_retry(status_code: int, attempt: int, max_retries: int) -> bool:

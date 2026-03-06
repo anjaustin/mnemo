@@ -1,8 +1,9 @@
 use qdrant_client::qdrant::r#match::MatchValue;
 use qdrant_client::qdrant::{
-    value::Kind, CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance,
-    FieldCondition, Filter, Match, PointId, PointStruct, PointsIdsList, SearchPointsBuilder,
-    UpsertPointsBuilder, Value as QdrantValue, VectorParamsBuilder,
+    value::Kind, CountPointsBuilder, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder,
+    DeletePointsBuilder, Distance, FieldCondition, FieldType, Filter, Match, PointId, PointStruct,
+    PointsIdsList, SearchPointsBuilder, UpsertPointsBuilder, Value as QdrantValue,
+    VectorParamsBuilder,
 };
 use qdrant_client::Qdrant;
 use serde_json::Value;
@@ -80,6 +81,47 @@ impl QdrantVectorStore {
                             "Failed to create collection: {}",
                             msg
                         )));
+                    }
+                }
+            }
+
+            // Create payload indexes to accelerate filtered searches.
+            // Without indexes Qdrant falls back to brute-force payload scans.
+            let indexes: &[(&str, FieldType)] = &[
+                ("user_id", FieldType::Keyword),
+                ("session_id", FieldType::Keyword),
+                ("processing_status", FieldType::Keyword),
+                ("created_at", FieldType::Float),
+            ];
+            for (field_name, field_type) in indexes {
+                let result = self
+                    .client
+                    .create_field_index(
+                        CreateFieldIndexCollectionBuilder::new(
+                            &coll_name,
+                            *field_name,
+                            *field_type,
+                        )
+                        .wait(true),
+                    )
+                    .await;
+                match result {
+                    Ok(_) => {
+                        tracing::debug!(
+                            collection = %coll_name,
+                            field = %field_name,
+                            "Created Qdrant payload index"
+                        );
+                    }
+                    Err(e) => {
+                        // Non-fatal: indexes improve latency but are not required for
+                        // correctness. Log and continue.
+                        tracing::warn!(
+                            collection = %coll_name,
+                            field = %field_name,
+                            error = %e,
+                            "Failed to create Qdrant payload index (non-fatal)"
+                        );
                     }
                 }
             }

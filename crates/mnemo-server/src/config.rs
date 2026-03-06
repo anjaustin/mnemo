@@ -165,6 +165,18 @@ impl Default for ExtractionSection {
     }
 }
 
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RerankerConfig {
+    /// Reciprocal Rank Fusion — boosts items that appear in multiple ranked
+    /// lists. Default and recommended for most workloads.
+    #[default]
+    Rrf,
+    /// Maximal Marginal Relevance — trades off relevance against diversity.
+    /// Useful when query results tend to be near-duplicate.
+    Mmr,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct RetrievalSection {
     #[serde(default)]
@@ -173,6 +185,9 @@ pub struct RetrievalSection {
     pub metadata_scan_limit: u32,
     #[serde(default)]
     pub metadata_relax_if_empty: bool,
+    /// Reranking strategy applied after parallel search.
+    #[serde(default)]
+    pub reranker: RerankerConfig,
 }
 
 impl Default for RetrievalSection {
@@ -181,6 +196,7 @@ impl Default for RetrievalSection {
             metadata_prefilter_enabled: true,
             metadata_scan_limit: default_metadata_scan_limit(),
             metadata_relax_if_empty: false,
+            reranker: RerankerConfig::default(),
         }
     }
 }

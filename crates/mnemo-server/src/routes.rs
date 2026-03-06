@@ -39,11 +39,13 @@ use mnemo_core::traits::storage::{
     VectorStore,
 };
 
+use mnemo_retrieval::Reranker;
+
 use crate::middleware::RequestContext;
 use crate::state::{
     AppState, GovernanceAuditRecord, ImportJobRecord, ImportJobStatus, MemoryWebhookAuditRecord,
-    MemoryWebhookEventRecord, MemoryWebhookEventType, MemoryWebhookSubscription, UserPolicyRecord,
-    WebhookRuntimeState,
+    MemoryWebhookEventRecord, MemoryWebhookEventType, MemoryWebhookSubscription, RerankerMode,
+    UserPolicyRecord, WebhookRuntimeState,
 };
 
 // ─── Error handling ────────────────────────────────────────────────
@@ -159,6 +161,15 @@ fn metadata_with_request_id(
             "request_id": request_id,
             "_raw_metadata": other
         }),
+    }
+}
+
+/// Convert the server-side `RerankerMode` config enum to the retrieval
+/// engine's `Reranker` type.
+fn reranker_for_state(state: &AppState) -> Reranker {
+    match state.reranker {
+        RerankerMode::Rrf => Reranker::Rrf,
+        RerankerMode::Mmr => Reranker::Mmr,
     }
 }
 
@@ -2355,7 +2366,7 @@ async fn get_context(
     Path(user_id): Path<Uuid>,
     Json(req): Json<ContextRequest>,
 ) -> Result<Json<ContextBlock>, AppError> {
-    let context = state.retrieval.get_context(user_id, &req).await?;
+    let context = state.retrieval.get_context(user_id, &req, reranker_for_state(&state)).await?;
     Ok(Json(context))
 }
 
@@ -3595,7 +3606,7 @@ async fn get_memory_context(
         min_relevance,
     };
 
-    let mut context = state.retrieval.get_context(user.id, &context_req).await?;
+    let mut context = state.retrieval.get_context(user.id, &context_req, reranker_for_state(&state)).await?;
     maybe_attach_recent_episode_fallback(
         &state,
         user.id,
@@ -4007,7 +4018,7 @@ async fn time_travel_trace(
 
     let mut context_from = state
         .retrieval
-        .get_context(user.id, &make_context_req(req.from))
+        .get_context(user.id, &make_context_req(req.from), reranker_for_state(&state))
         .await?;
     maybe_attach_recent_episode_fallback(
         &state,
@@ -4026,7 +4037,7 @@ async fn time_travel_trace(
 
     let mut context_to = state
         .retrieval
-        .get_context(user.id, &make_context_req(req.to))
+        .get_context(user.id, &make_context_req(req.to), reranker_for_state(&state))
         .await?;
     maybe_attach_recent_episode_fallback(
         &state,
@@ -4435,7 +4446,7 @@ async fn time_travel_summary(
 
     let mut context_from = state
         .retrieval
-        .get_context(user.id, &make_context_req(req.from))
+        .get_context(user.id, &make_context_req(req.from), reranker_for_state(&state))
         .await?;
     maybe_attach_recent_episode_fallback(
         &state,
@@ -4454,7 +4465,7 @@ async fn time_travel_summary(
 
     let mut context_to = state
         .retrieval
-        .get_context(user.id, &make_context_req(req.to))
+        .get_context(user.id, &make_context_req(req.to), reranker_for_state(&state))
         .await?;
     maybe_attach_recent_episode_fallback(
         &state,
@@ -4698,7 +4709,7 @@ async fn causal_recall_chains(
         min_relevance: 0.3,
     };
 
-    let mut context = state.retrieval.get_context(user.id, &context_req).await?;
+    let mut context = state.retrieval.get_context(user.id, &context_req, reranker_for_state(&state)).await?;
     maybe_attach_recent_episode_fallback(
         &state,
         user.id,
@@ -5546,7 +5557,7 @@ async fn get_agent_context(
         min_relevance: req.min_relevance.unwrap_or(0.3),
     };
 
-    let mut context = state.retrieval.get_context(user.id, &context_req).await?;
+    let mut context = state.retrieval.get_context(user.id, &context_req, reranker_for_state(&state)).await?;
     maybe_attach_recent_episode_fallback(
         &state,
         user.id,

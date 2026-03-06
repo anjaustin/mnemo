@@ -26,7 +26,7 @@ use mnemo_retrieval::RetrievalEngine;
 use mnemo_server::middleware::{request_context_middleware, REQUEST_ID_HEADER};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
-    AppState, MetadataPrefilterConfig, ServerMetrics, WebhookDeliveryConfig,
+    AppState, MetadataPrefilterConfig, RerankerMode, ServerMetrics, WebhookDeliveryConfig,
 };
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
@@ -121,6 +121,7 @@ async fn build_test_harness_with_prefilter_and_webhooks(
         graph,
         llm: None,
         metadata_prefilter: prefilter,
+        reranker: RerankerMode::Rrf,
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -4597,6 +4598,7 @@ async fn test_webhook_persistence_survives_restart() {
             scan_limit: 400,
             relax_if_empty: false,
         },
+        reranker: RerankerMode::Rrf,
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -4684,6 +4686,7 @@ async fn test_webhook_persistence_survives_restart() {
             scan_limit: 400,
             relax_if_empty: false,
         },
+        reranker: RerankerMode::Rrf,
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),

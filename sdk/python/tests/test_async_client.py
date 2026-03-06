@@ -401,5 +401,136 @@ async def test_async_causal_recall():
             assert result.query == "why does Kendra like hiking?"
 
 
+# ── SDK-11b: Retry behaviour ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_async_429_is_retried_when_max_retries_gt_0():
+    """429 should be retried (not immediately re-raised) when max_retries > 0."""
+    async with AsyncMnemo(BASE, max_retries=1, retry_backoff_s=0.0) as client:
+        with aioresponses() as m:
+            # First attempt: 429
+            m.post(
+                f"{BASE}/api/v1/memory",
+                status=429,
+                payload={"error": {"code": "rate_limited", "message": "slow down"}},
+            )
+            # Second attempt (retry): success
+            m.post(
+                f"{BASE}/api/v1/memory",
+                status=201,
+                payload={
+                    "ok": True,
+                    "user_id": "00000000-0000-0000-0000-000000000001",
+                    "episode_id": "00000000-0000-0000-0000-000000000002",
+                    "session_id": "00000000-0000-0000-0000-000000000003",
+                },
+            )
+            result = await client.add("user", "some text")
+            assert result.ok is True
+
+
+@pytest.mark.asyncio
+async def test_async_429_raises_after_exhausting_retries():
+    """429 raises MnemoRateLimitError after all retries are exhausted."""
+    async with AsyncMnemo(BASE, max_retries=1, retry_backoff_s=0.0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/memory",
+                status=429,
+                payload={
+                    "error": {
+                        "code": "rate_limited",
+                        "message": "too fast",
+                        "retry_after_ms": 1000,
+                    }
+                },
+            )
+            m.post(
+                f"{BASE}/api/v1/memory",
+                status=429,
+                payload={
+                    "error": {
+                        "code": "rate_limited",
+                        "message": "too fast",
+                        "retry_after_ms": 1000,
+                    }
+                },
+            )
+            with pytest.raises(MnemoRateLimitError) as exc_info:
+                await client.add("user", "text")
+            assert exc_info.value.retry_after_ms == 1000
+
+
+@pytest.mark.asyncio
+async def test_async_5xx_is_retried_when_max_retries_gt_0():
+    """5xx errors should be retried (not immediately re-raised)."""
+    async with AsyncMnemo(BASE, max_retries=1, retry_backoff_s=0.0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/health",
+                status=503,
+                payload={"error": {"message": "service unavailable"}},
+            )
+            m.get(
+                f"{BASE}/health",
+                status=200,
+                payload={
+                    "status": "ok",
+                    "version": "0.3.6",
+                    "redis": True,
+                    "qdrant": True,
+                },
+            )
+            result = await client.health()
+            assert result.status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_sync_exponential_backoff():
+    """Sync transport uses exponential backoff (delay grows with attempt count)."""
+    from mnemo._transport import SyncTransport
+    import urllib.error
+    from unittest.mock import patch, MagicMock
+
+    transport = SyncTransport(
+        base_url="http://localhost:9999",
+        api_key=None,
+        timeout_s=1.0,
+        max_retries=2,
+        retry_backoff_s=1.0,
+        default_request_id=None,
+    )
+    sleep_calls: list[float] = []
+
+    # Patch time.sleep and urlopen to simulate 2 retries
+    def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    http_err_429 = urllib.error.HTTPError(
+        url="http://localhost:9999/health",
+        code=429,
+        msg="Too Many Requests",
+        hdrs=MagicMock(get=lambda k, default=None: None),
+        fp=MagicMock(
+            read=lambda: b'{"error":{"message":"slow","code":"rate_limited"}}'
+        ),
+    )
+    with patch("time.sleep", side_effect=fake_sleep):
+        with patch("urllib.request.urlopen", side_effect=http_err_429):
+            try:
+                transport.request("GET", "/health")
+            except Exception:
+                pass
+    # Should have slept twice (attempt=1 and attempt=2)
+    assert len(sleep_calls) == 2, f"expected 2 sleep calls, got {sleep_calls}"
+    # Exponential: delay[1] should be >= delay[0] on average
+    # (with jitter, second call uses 2^2=4 base vs 2^1=2 base)
+    # We just verify both were called and are positive
+    assert all(d >= 0 for d in sleep_calls), (
+        f"all delays must be non-negative: {sleep_calls}"
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

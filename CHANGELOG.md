@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.6] — 2026-03-06
+
+### Added
+
+- **MMR reranker** (`mnemo-retrieval`): implemented `mmr_merge()` — Maximal Marginal Relevance selection that iteratively picks the next result maximising `λ·relevance − (1−λ)·sim_to_selected` (λ=0.7). Reduces near-duplicate results when queries return highly similar items.
+- **`RerankerConfig` enum** in `config.rs`: `reranker = "rrf" | "mmr"` in `[retrieval]` TOML section is now parsed and respected. Previously the key was silently ignored. `RerankerMode` in `state.rs` propagates the setting to every `get_context()` call.
+- **`Reranker` enum** in `mnemo-retrieval`: `Rrf` | `Mmr`. `get_context()` now takes an explicit `reranker: Reranker` argument. All 8 call sites in `routes.rs` pass `reranker_for_state(&state)`.
+- **5 new MMR falsification tests** in `mnemo-retrieval`: `ret_mmr_selects_highest_relevance_first_with_no_prior_selections`, `ret_mmr_penalises_near_duplicate_after_first_selection`, `ret_mmr_empty_input_returns_empty`, `ret_mmr_preserves_all_unique_items`, `ret_mmr_vs_rrf_scores_differ_on_duplicate_heavy_input`.
+- **Qdrant payload indexes** (`mnemo-storage`): `ensure_collection()` now creates `CreateFieldIndexCollectionBuilder` indexes on `user_id` (Keyword), `session_id` (Keyword), `processing_status` (Keyword), and `created_at` (Float) after collection creation. Eliminates brute-force payload scans on filtered searches. Non-fatal on failure (logs warn, continues).
+- **SDK exponential backoff** (`mnemo-client`): sync `SyncTransport` and async `AsyncMnemo._req()` now use exponential backoff with full jitter (`base * 2^attempt * U(0,1)`) instead of linear delay.
+- **Async SDK 429 retry** (`mnemo-client`): `AsyncMnemo._req()` now retries HTTP 429 responses (previously re-raised immediately, unlike the sync client). `MnemoRateLimitError` is raised only after all retries are exhausted.
+- **4 new SDK retry falsification tests**: `test_async_429_is_retried_when_max_retries_gt_0`, `test_async_429_raises_after_exhausting_retries`, `test_async_5xx_is_retried_when_max_retries_gt_0`, `test_sync_exponential_backoff`.
+- **`tests/eval_recall_quality.py`**: recall quality evaluation harness. 40-fact gold dataset across 4 synthetic users + 3 temporal correctness cases. Three quality gates: factual recall >= 85%, temporal query return rate >= 90%, p95 latency <= 500ms. Run with `python tests/eval_recall_quality.py [--server URL]`.
+
 ## [0.3.5] — 2026-03-06
 
 ### Added
