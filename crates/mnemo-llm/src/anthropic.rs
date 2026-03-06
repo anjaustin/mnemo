@@ -289,3 +289,203 @@ impl LlmProvider for AnthropicProvider {
         &self.config.model
     }
 }
+
+// ─── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mnemo_core::traits::llm::{LlmConfig, LlmProvider};
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn anthropic_config(base_url: &str) -> LlmConfig {
+        LlmConfig {
+            provider: "anthropic".to_string(),
+            api_key: Some("test-ant-key".to_string()),
+            model: "claude-sonnet-4-20250514".to_string(),
+            base_url: Some(base_url.to_string()),
+            temperature: 0.0,
+            max_tokens: 2048,
+        }
+    }
+
+    fn anthropic_response(text: &str) -> String {
+        serde_json::json!({
+            "content": [{"type": "text", "text": text}]
+        })
+        .to_string()
+    }
+
+    fn valid_extraction_json() -> &'static str {
+        r#"{
+            "entities": [
+                {"name": "Alice", "type": "person", "summary": "An engineer"}
+            ],
+            "relationships": [
+                {"source": "Alice", "target": "Acme Corp", "label": "works_at", "fact": "Alice works at Acme Corp", "confidence": 0.9}
+            ]
+        }"#
+    }
+
+    // ── LLM-02: Anthropic provider constructs valid prompts ──
+
+    #[tokio::test]
+    async fn test_anthropic_extraction_constructs_valid_prompt() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "test-ant-key"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .and(body_string_contains("Extract entities and relationships"))
+            .and(body_string_contains("Alice joined Acme Corp"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(anthropic_response(valid_extraction_json())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let provider = AnthropicProvider::new(anthropic_config(&server.uri()));
+        let result = provider
+            .extract_entities_and_relationships("Alice joined Acme Corp", &[])
+            .await
+            .expect("extraction should succeed");
+
+        assert_eq!(result.entities.len(), 1);
+        assert_eq!(result.entities[0].name, "Alice");
+        assert_eq!(result.relationships.len(), 1);
+        assert_eq!(result.relationships[0].label, "works_at");
+    }
+
+    // ── LLM-02b: Anthropic requires API key ──
+
+    #[tokio::test]
+    async fn test_anthropic_requires_api_key() {
+        let config = LlmConfig {
+            provider: "anthropic".to_string(),
+            api_key: None,
+            model: "claude-sonnet-4-20250514".to_string(),
+            base_url: Some("http://unused:1234".to_string()),
+            temperature: 0.0,
+            max_tokens: 2048,
+        };
+
+        let provider = AnthropicProvider::new(config);
+        let result = provider.summarize("text", 100).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            MnemoError::LlmProvider { message, .. } => {
+                assert!(message.contains("API key"), "should mention API key: {}", message);
+            }
+            other => panic!("expected LlmProvider error, got {:?}", other),
+        }
+    }
+
+    // ── LLM-03 (Anthropic): Handles malformed JSON ──
+
+    #[tokio::test]
+    async fn test_anthropic_handles_malformed_json() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(anthropic_response("not valid json {{")),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = AnthropicProvider::new(anthropic_config(&server.uri()));
+        let result = provider
+            .extract_entities_and_relationships("test", &[])
+            .await;
+
+        assert!(result.is_err(), "malformed JSON should error, not panic");
+        match result.unwrap_err() {
+            MnemoError::ExtractionFailed(_) => {}
+            other => panic!("expected ExtractionFailed, got {:?}", other),
+        }
+    }
+
+    // ── LLM-04 (Anthropic): Handles 429 rate limit ──
+
+    #[tokio::test]
+    async fn test_anthropic_handles_429_rate_limit() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "30"),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = AnthropicProvider::new(anthropic_config(&server.uri()));
+        let result = provider.summarize("text", 100).await;
+
+        match result.unwrap_err() {
+            MnemoError::RateLimited { retry_after_ms } => {
+                assert_eq!(retry_after_ms, 30_000);
+            }
+            other => panic!("expected RateLimited, got {:?}", other),
+        }
+    }
+
+    // ── Anthropic handles empty content response ──
+
+    #[tokio::test]
+    async fn test_anthropic_handles_empty_content() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"content":[]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = AnthropicProvider::new(anthropic_config(&server.uri()));
+        let result = provider.summarize("text", 100).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            MnemoError::LlmProvider { message, .. } => {
+                assert!(message.contains("No text content"), "error: {}", message);
+            }
+            other => panic!("expected LlmProvider, got {:?}", other),
+        }
+    }
+
+    // ── Provider name and model name ──
+
+    #[tokio::test]
+    async fn test_anthropic_provider_name_and_model() {
+        let provider = AnthropicProvider::new(anthropic_config("http://unused:1234"));
+        assert_eq!(provider.provider_name(), "anthropic");
+        assert_eq!(provider.model_name(), "claude-sonnet-4-20250514");
+    }
+
+    // ── Base URL default ──
+
+    #[test]
+    fn test_anthropic_base_url_default() {
+        let config = LlmConfig {
+            provider: "anthropic".into(),
+            api_key: Some("key".into()),
+            model: "claude-sonnet-4-20250514".into(),
+            base_url: None,
+            temperature: 0.0,
+            max_tokens: 2048,
+        };
+        let provider = AnthropicProvider::new(config);
+        assert_eq!(provider.base_url, "https://api.anthropic.com");
+    }
+}

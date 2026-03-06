@@ -30,12 +30,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Production deployment artifacts for T5–T10 (DigitalOcean, Render, Railway, Elestio, Northflank, Linode) — T10 Linode falsified end-to-end; T5–T9 artifacts written and ready.
+- Production deployment artifacts for T5–T10 (DigitalOcean, Render, Railway, Vultr, Northflank, Linode) — all falsified end-to-end.
 - `deploy/digitalocean/terraform/` — Droplet + Firewall Terraform, Ubuntu 24.04, Docker Compose via user-data. Same startup script pattern as T4 GCP.
 - `deploy/render/render.yaml` — Render Blueprint: mnemo web service + managed Redis + Qdrant web service with persistent disk.
 - `deploy/render/DEPLOY.md` — Blueprint and manual deploy instructions; cost notes (Redis Stack module caveat documented).
 - `deploy/railway/railway.json` + `DEPLOY.md` — Railway template manifest and deploy guide; private networking wiring documented.
-- `deploy/elestio/docker-compose.yml` + `DEPLOY.md` — Elestio-compatible compose; port mapping convention and env var panel instructions.
+- `deploy/vultr/terraform/` + `DEPLOY.md` — Vultr Terraform IaC (vc2-2c-4gb, Ubuntu 24.04, Docker Compose via user-data startup script).
 - `deploy/northflank/stack.json` + `DEPLOY.md` — Northflank stack definition (3 services, persistent volumes); CLI and dashboard deploy paths.
 - `deploy/linode/terraform/` — Linode instance + Firewall Terraform, `startup.sh.tpl`, variables, outputs. Ubuntu 24.04, Docker Compose stack.
 - `deploy/linode/DEPLOY.md` — full guide; cost callout (~$18/month, lowest of IaaS targets).

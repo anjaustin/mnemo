@@ -15,3 +15,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true, features = ["rt", "macros"] }

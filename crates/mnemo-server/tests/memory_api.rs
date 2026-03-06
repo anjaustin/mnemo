@@ -24,7 +24,7 @@ use mnemo_graph::GraphEngine;
 use mnemo_llm::OpenAiCompatibleEmbedder;
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_server::middleware::{request_context_middleware, REQUEST_ID_HEADER};
-use mnemo_server::routes::build_router;
+use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
     AppState, MetadataPrefilterConfig, ServerMetrics, WebhookDeliveryConfig,
 };
@@ -4501,4 +4501,199 @@ async fn test_time_travel_trace_contract_retrieval_policy_combinations() {
         "historical",
         "Stability + HistoricalStrict should preserve temporal_intent as historical"
     );
+}
+
+// ── WH-15: Webhook persistence survives simulated restart ─────────
+
+#[tokio::test]
+async fn test_webhook_persistence_survives_restart() {
+    // Phase 1: Build state with persistence_enabled=true and real Redis
+    let redis_url = std::env::var("MNEMO_TEST_REDIS_URL")
+        .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+    let qdrant_url = std::env::var("MNEMO_TEST_QDRANT_URL")
+        .unwrap_or_else(|_| "http://localhost:6334".to_string());
+
+    let uid = Uuid::now_v7();
+    let redis_prefix = format!("wh15_test:{}:", uid);
+    let qdrant_prefix =
+        std::env::var("MNEMO_TEST_QDRANT_PREFIX").unwrap_or_else(|_| "mnemo_".to_string());
+    let webhook_redis_prefix = format!("wh15_test:{}:webhooks", uid);
+
+    let state_store = Arc::new(
+        RedisStateStore::new(&redis_url, &redis_prefix)
+            .await
+            .expect("Redis required for WH-15 test"),
+    );
+    state_store.ensure_indexes().await.unwrap();
+
+    let vector_store = Arc::new(
+        QdrantVectorStore::new(&qdrant_url, &qdrant_prefix, 1536)
+            .await
+            .expect("Qdrant required for WH-15 test"),
+    );
+
+    let embedder = Arc::new(OpenAiCompatibleEmbedder::new(
+        mnemo_core::traits::llm::EmbeddingConfig {
+            provider: "openai".to_string(),
+            api_key: None,
+            model: "text-embedding-3-small".to_string(),
+            base_url: None,
+            dimensions: 1536,
+        },
+    ));
+
+    let retrieval = Arc::new(RetrievalEngine::new(
+        state_store.clone(),
+        vector_store.clone(),
+        embedder,
+    ));
+    let graph = Arc::new(GraphEngine::new(state_store.clone()));
+
+    // Create Redis connection for webhook persistence
+    let redis_client = redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
+    let webhook_conn = redis::aio::ConnectionManager::new(redis_client)
+        .await
+        .expect("Failed to create Redis connection for webhooks");
+
+    let webhook_config = WebhookDeliveryConfig {
+        enabled: true,
+        max_attempts: 3,
+        base_backoff_ms: 20,
+        request_timeout_ms: 150,
+        max_events_per_webhook: 1000,
+        rate_limit_per_minute: 120,
+        circuit_breaker_threshold: 5,
+        circuit_breaker_cooldown_ms: 200,
+        persistence_enabled: true,
+    };
+
+    let state1 = AppState {
+        state_store: state_store.clone(),
+        vector_store: vector_store.clone(),
+        retrieval: retrieval.clone(),
+        graph: graph.clone(),
+        metadata_prefilter: MetadataPrefilterConfig {
+            enabled: false,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        user_policies: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        governance_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        webhook_delivery: webhook_config.clone(),
+        webhook_http: Arc::new(reqwest::Client::new()),
+        webhook_redis: Some(webhook_conn.clone()),
+        webhook_redis_prefix: webhook_redis_prefix.clone(),
+        metrics: Arc::new(ServerMetrics::default()),
+    };
+
+    let app1 = build_router(state1.clone())
+        .layer(from_fn_with_state(state1.clone(), request_context_middleware));
+
+    // First create a user by writing memory
+    let user_name = format!("wh15_user_{}", uid);
+    let (mem_status, mem_body) = json_request(
+        &app1,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": user_name,
+            "text": "Test message for WH-15",
+            "role": "user"
+        }),
+    )
+    .await;
+    assert!(
+        mem_status == StatusCode::OK || mem_status == StatusCode::CREATED,
+        "memory write should succeed: {:?}", mem_body,
+    );
+
+    // Register a webhook via the API
+    let (status, body) = json_request(
+        &app1,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": user_name,
+            "target_url": "https://example.com/webhook",
+            "events": ["fact_added"],
+            "signing_secret": "test-secret-123"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "webhook registration should succeed: {:?}", body);
+    let webhook_id = body["webhook"]["id"].as_str().expect("webhook should have an id");
+
+    // Verify the webhook is in state1's memory
+    {
+        let hooks = state1.memory_webhooks.read().await;
+        assert_eq!(hooks.len(), 1, "state1 should have 1 webhook");
+    }
+
+    // Phase 2: Build a SECOND AppState with EMPTY in-memory maps (simulating restart)
+    let redis_client2 = redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
+    let webhook_conn2 = redis::aio::ConnectionManager::new(redis_client2)
+        .await
+        .expect("Failed to create Redis connection for webhooks");
+
+    let state2 = AppState {
+        state_store: state_store.clone(),
+        vector_store: vector_store.clone(),
+        retrieval: retrieval.clone(),
+        graph: graph.clone(),
+        metadata_prefilter: MetadataPrefilterConfig {
+            enabled: false,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        user_policies: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        governance_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        webhook_delivery: webhook_config,
+        webhook_http: Arc::new(reqwest::Client::new()),
+        webhook_redis: Some(webhook_conn2),
+        webhook_redis_prefix: webhook_redis_prefix.clone(),
+        metrics: Arc::new(ServerMetrics::default()),
+    };
+
+    // Verify state2 starts empty
+    {
+        let hooks2 = state2.memory_webhooks.read().await;
+        assert!(hooks2.is_empty(), "state2 should start with empty webhooks");
+    }
+
+    // Call restore — this simulates what main.rs does on startup
+    restore_webhook_state(&state2)
+        .await
+        .expect("restore_webhook_state should succeed");
+
+    // Phase 3: Verify state2 now has the webhook from state1
+    {
+        let hooks2 = state2.memory_webhooks.read().await;
+        assert_eq!(
+            hooks2.len(),
+            1,
+            "after restore, state2 should have 1 webhook (WH-15: persistence survives restart)"
+        );
+
+        let webhook_uuid: Uuid = webhook_id.parse().expect("webhook_id should be valid UUID");
+        let webhook = hooks2
+            .get(&webhook_uuid)
+            .expect("restored webhook should have the same UUID");
+        assert_eq!(
+            webhook.target_url, "https://example.com/webhook",
+            "restored webhook should have correct target_url"
+        );
+    }
 }

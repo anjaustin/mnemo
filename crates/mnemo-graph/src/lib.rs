@@ -206,3 +206,528 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
         Ok(labels)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use mnemo_core::error::MnemoError;
+    use mnemo_core::models::edge::Edge;
+    use mnemo_core::models::edge::EdgeFilter;
+    use mnemo_core::models::entity::{Entity, EntityType};
+    use std::collections::HashMap as StdHashMap;
+    use std::sync::Mutex;
+    use uuid::Uuid;
+
+    // ── In-memory mock store ───────────────────────────────────────
+
+    struct MockGraphStore {
+        entities: Mutex<StdHashMap<Uuid, Entity>>,
+        edges: Mutex<Vec<Edge>>,
+    }
+
+    impl MockGraphStore {
+        fn new() -> Self {
+            Self {
+                entities: Mutex::new(StdHashMap::new()),
+                edges: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn add_entity(&self, entity: Entity) {
+            self.entities.lock().unwrap().insert(entity.id, entity);
+        }
+
+        fn add_edge(&self, edge: Edge) {
+            self.edges.lock().unwrap().push(edge);
+        }
+    }
+
+    fn make_entity(name: &str, user_id: Uuid) -> Entity {
+        let now = Utc::now();
+        Entity {
+            id: Uuid::now_v7(),
+            user_id,
+            name: name.to_string(),
+            entity_type: EntityType::Concept,
+            summary: None,
+            aliases: vec![],
+            metadata: serde_json::Value::Null,
+            mention_count: 1,
+            community_id: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn make_edge(source: Uuid, target: Uuid, user_id: Uuid, valid: bool) -> Edge {
+        let now = Utc::now();
+        Edge {
+            id: Uuid::now_v7(),
+            user_id,
+            source_entity_id: source,
+            target_entity_id: target,
+            label: "related_to".to_string(),
+            fact: format!("{} is related to {}", source, target),
+            valid_at: now,
+            invalid_at: if valid { None } else { Some(now) },
+            ingested_at: now,
+            source_episode_id: Uuid::now_v7(),
+            invalidated_by_episode_id: None,
+            confidence: 0.9,
+            corroboration_count: 1,
+            metadata: serde_json::Value::Null,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    impl EntityStore for MockGraphStore {
+        async fn create_entity(&self, entity: Entity) -> StorageResult<Entity> {
+            self.entities.lock().unwrap().insert(entity.id, entity.clone());
+            Ok(entity)
+        }
+
+        async fn get_entity(&self, id: Uuid) -> StorageResult<Entity> {
+            self.entities
+                .lock()
+                .unwrap()
+                .get(&id)
+                .cloned()
+                .ok_or(MnemoError::EntityNotFound(id))
+        }
+
+        async fn update_entity(&self, entity: &Entity) -> StorageResult<()> {
+            self.entities.lock().unwrap().insert(entity.id, entity.clone());
+            Ok(())
+        }
+
+        async fn delete_entity(&self, id: Uuid) -> StorageResult<()> {
+            self.entities.lock().unwrap().remove(&id);
+            Ok(())
+        }
+
+        async fn find_entity_by_name(
+            &self,
+            user_id: Uuid,
+            name: &str,
+        ) -> StorageResult<Option<Entity>> {
+            let entities = self.entities.lock().unwrap();
+            Ok(entities
+                .values()
+                .find(|e| e.user_id == user_id && e.name.to_lowercase() == name.to_lowercase())
+                .cloned())
+        }
+
+        async fn list_entities(
+            &self,
+            user_id: Uuid,
+            limit: u32,
+            _after: Option<Uuid>,
+        ) -> StorageResult<Vec<Entity>> {
+            let entities = self.entities.lock().unwrap();
+            Ok(entities
+                .values()
+                .filter(|e| e.user_id == user_id)
+                .take(limit as usize)
+                .cloned()
+                .collect())
+        }
+    }
+
+    impl EdgeStore for MockGraphStore {
+        async fn create_edge(&self, edge: Edge) -> StorageResult<Edge> {
+            self.edges.lock().unwrap().push(edge.clone());
+            Ok(edge)
+        }
+
+        async fn get_edge(&self, id: Uuid) -> StorageResult<Edge> {
+            self.edges
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|e| e.id == id)
+                .cloned()
+                .ok_or(MnemoError::EdgeNotFound(id))
+        }
+
+        async fn update_edge(&self, edge: &Edge) -> StorageResult<()> {
+            let mut edges = self.edges.lock().unwrap();
+            if let Some(e) = edges.iter_mut().find(|e| e.id == edge.id) {
+                *e = edge.clone();
+            }
+            Ok(())
+        }
+
+        async fn delete_edge(&self, id: Uuid) -> StorageResult<()> {
+            self.edges.lock().unwrap().retain(|e| e.id != id);
+            Ok(())
+        }
+
+        async fn query_edges(&self, user_id: Uuid, _filter: EdgeFilter) -> StorageResult<Vec<Edge>> {
+            Ok(self
+                .edges
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.user_id == user_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_outgoing_edges(&self, entity_id: Uuid) -> StorageResult<Vec<Edge>> {
+            Ok(self
+                .edges
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.source_entity_id == entity_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_incoming_edges(&self, entity_id: Uuid) -> StorageResult<Vec<Edge>> {
+            Ok(self
+                .edges
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.target_entity_id == entity_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn find_conflicting_edges(
+            &self,
+            user_id: Uuid,
+            source_entity_id: Uuid,
+            target_entity_id: Uuid,
+            label: &str,
+        ) -> StorageResult<Vec<Edge>> {
+            Ok(self
+                .edges
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| {
+                    e.user_id == user_id
+                        && e.source_entity_id == source_entity_id
+                        && e.target_entity_id == target_entity_id
+                        && e.label == label
+                })
+                .cloned()
+                .collect())
+        }
+    }
+
+    // ── GR-01: BFS returns correct subgraph at depth=1 ────────────
+
+    #[tokio::test]
+    async fn test_bfs_depth_1_returns_direct_neighbors() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // Build: A -> B -> C (chain)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_entity(c.clone());
+
+        store.add_edge(make_edge(a.id, b.id, user_id, true));
+        store.add_edge(make_edge(b.id, c.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+        let result = engine.traverse_bfs(a.id, 1, 100, false).await.unwrap();
+
+        // At depth 1 from A, we should see A (depth=0) and B (depth=1), but NOT C
+        let node_ids: HashSet<Uuid> = result.nodes.iter().map(|n| n.entity.id).collect();
+        assert!(node_ids.contains(&a.id), "seed entity A must be present");
+        assert!(node_ids.contains(&b.id), "direct neighbor B must be present");
+        assert!(!node_ids.contains(&c.id), "2-hop neighbor C must NOT be present at depth=1");
+        assert_eq!(result.nodes.len(), 2);
+    }
+
+    // ── GR-02: BFS respects max_nodes limit ───────────────────────
+
+    #[tokio::test]
+    async fn test_bfs_respects_max_nodes_limit() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // Build: A -> B, A -> C, A -> D, A -> E (star topology)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        let d = make_entity("D", user_id);
+        let e = make_entity("E", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_entity(c.clone());
+        store.add_entity(d.clone());
+        store.add_entity(e.clone());
+
+        store.add_edge(make_edge(a.id, b.id, user_id, true));
+        store.add_edge(make_edge(a.id, c.id, user_id, true));
+        store.add_edge(make_edge(a.id, d.id, user_id, true));
+        store.add_edge(make_edge(a.id, e.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+        let result = engine.traverse_bfs(a.id, 10, 3, false).await.unwrap();
+
+        // max_nodes=3 should cap at 3 nodes
+        assert!(
+            result.nodes.len() <= 3,
+            "max_nodes=3 but got {} nodes",
+            result.nodes.len()
+        );
+    }
+
+    // ── GR-03: BFS respects depth parameter ───────────────────────
+
+    #[tokio::test]
+    async fn test_bfs_respects_depth_parameter() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // Build: A -> B -> C -> D -> E (chain of 5)
+        let entities: Vec<Entity> = (0..5)
+            .map(|i| make_entity(&format!("node_{}", i), user_id))
+            .collect();
+        for e in &entities {
+            store.add_entity(e.clone());
+        }
+        for i in 0..4 {
+            store.add_edge(make_edge(entities[i].id, entities[i + 1].id, user_id, true));
+        }
+
+        let engine = GraphEngine::new(store);
+        let result = engine
+            .traverse_bfs(entities[0].id, 2, 100, false)
+            .await
+            .unwrap();
+
+        // depth=2: should see node_0 (depth=0), node_1 (depth=1), node_2 (depth=2)
+        let node_ids: HashSet<Uuid> = result.nodes.iter().map(|n| n.entity.id).collect();
+        assert!(node_ids.contains(&entities[0].id), "seed must be present");
+        assert!(node_ids.contains(&entities[1].id), "1-hop must be present");
+        assert!(node_ids.contains(&entities[2].id), "2-hop must be present");
+        assert!(
+            !node_ids.contains(&entities[3].id),
+            "3-hop must NOT be present at depth=2"
+        );
+        assert!(
+            !node_ids.contains(&entities[4].id),
+            "4-hop must NOT be present at depth=2"
+        );
+    }
+
+    // ── GR-04: valid_only filters out invalidated edges ───────────
+
+    #[tokio::test]
+    async fn test_bfs_valid_only_filters_invalidated_edges() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // A -> B (valid), A -> C (invalidated)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_entity(c.clone());
+
+        store.add_edge(make_edge(a.id, b.id, user_id, true));
+        store.add_edge(make_edge(a.id, c.id, user_id, false)); // invalidated
+
+        let engine = GraphEngine::new(store);
+
+        // valid_only=true should only follow valid edges
+        let result = engine.traverse_bfs(a.id, 10, 100, true).await.unwrap();
+        let node_ids: HashSet<Uuid> = result.nodes.iter().map(|n| n.entity.id).collect();
+        assert!(node_ids.contains(&a.id));
+        assert!(node_ids.contains(&b.id), "valid edge target must be present");
+        assert!(
+            !node_ids.contains(&c.id),
+            "invalidated edge target must NOT be present with valid_only=true"
+        );
+
+        // valid_only=false should follow all edges — rebuild fresh store
+        let store2 = Arc::new(MockGraphStore::new());
+        store2.add_entity(a.clone());
+        store2.add_entity(b.clone());
+        store2.add_entity(c.clone());
+        store2.add_edge(make_edge(a.id, b.id, user_id, true));
+        store2.add_edge(make_edge(a.id, c.id, user_id, false));
+        let engine2 = GraphEngine::new(store2);
+        let result2 = engine2.traverse_bfs(a.id, 10, 100, false).await.unwrap();
+        let node_ids2: HashSet<Uuid> = result2.nodes.iter().map(|n| n.entity.id).collect();
+        assert!(
+            node_ids2.contains(&c.id),
+            "invalidated edge target MUST be present with valid_only=false"
+        );
+    }
+
+    // ── GR-05: Community detection produces non-trivial partitions ─
+
+    #[tokio::test]
+    async fn test_community_detection_finds_clusters() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // Cluster 1: A -- B -- C (fully connected)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        // Cluster 2: D -- E (isolated pair)
+        let d = make_entity("D", user_id);
+        let e = make_entity("E", user_id);
+
+        for ent in [&a, &b, &c, &d, &e] {
+            store.add_entity(ent.clone());
+        }
+
+        // Cluster 1 edges
+        store.add_edge(make_edge(a.id, b.id, user_id, true));
+        store.add_edge(make_edge(b.id, c.id, user_id, true));
+        store.add_edge(make_edge(a.id, c.id, user_id, true));
+        // Cluster 2 edges
+        store.add_edge(make_edge(d.id, e.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+        let communities = engine.detect_communities(user_id, 10).await.unwrap();
+
+        // All 5 entities should have community labels
+        assert_eq!(communities.len(), 5);
+
+        // Cluster 1 should share a label
+        let label_a = communities[&a.id];
+        let label_b = communities[&b.id];
+        let label_c = communities[&c.id];
+        assert_eq!(label_a, label_b, "A and B should be in same community");
+        assert_eq!(label_b, label_c, "B and C should be in same community");
+
+        // Cluster 2 should share a label
+        let label_d = communities[&d.id];
+        let label_e = communities[&e.id];
+        assert_eq!(label_d, label_e, "D and E should be in same community");
+
+        // Clusters should be different
+        assert_ne!(
+            label_a, label_d,
+            "Cluster 1 and Cluster 2 should have different community labels"
+        );
+    }
+
+    // ── GR-06: Empty graph returns empty subgraph ─────────────────
+
+    #[tokio::test]
+    async fn test_bfs_nonexistent_seed_returns_empty_subgraph() {
+        let store = Arc::new(MockGraphStore::new());
+        let engine = GraphEngine::new(store);
+        let result = engine
+            .traverse_bfs(Uuid::now_v7(), 5, 100, false)
+            .await
+            .unwrap();
+        assert!(result.nodes.is_empty(), "nonexistent seed should yield empty subgraph");
+        assert!(result.edges.is_empty());
+    }
+
+    // ── GR-07: Community detection on empty graph returns empty ────
+
+    #[tokio::test]
+    async fn test_community_detection_empty_graph() {
+        let store = Arc::new(MockGraphStore::new());
+        let engine = GraphEngine::new(store);
+        let communities = engine
+            .detect_communities(Uuid::now_v7(), 10)
+            .await
+            .unwrap();
+        assert!(communities.is_empty());
+    }
+
+    // ── GR-08: BFS incoming edges are followed bidirectionally ─────
+
+    #[tokio::test]
+    async fn test_bfs_follows_incoming_edges() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // B -> A (A only has incoming edge, not outgoing)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_edge(make_edge(b.id, a.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+        let result = engine.traverse_bfs(a.id, 1, 100, false).await.unwrap();
+
+        let node_ids: HashSet<Uuid> = result.nodes.iter().map(|n| n.entity.id).collect();
+        assert!(
+            node_ids.contains(&b.id),
+            "BFS must follow incoming edges (B -> A means A's traversal finds B)"
+        );
+    }
+
+    // ── GR-09: BFS edge deduplication ─────────────────────────────
+
+    #[tokio::test]
+    async fn test_bfs_deduplicates_edges() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // A -> B, B -> A (bidirectional — same edge seen from both sides)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+
+        let edge = make_edge(a.id, b.id, user_id, true);
+        store.add_edge(edge.clone());
+
+        let engine = GraphEngine::new(store);
+        let result = engine.traverse_bfs(a.id, 1, 100, false).await.unwrap();
+
+        // The same edge should appear only once despite being visible from both A (outgoing) and B (incoming)
+        let edge_ids: Vec<Uuid> = result.edges.iter().map(|e| e.id).collect();
+        let unique: HashSet<Uuid> = edge_ids.iter().cloned().collect();
+        assert_eq!(
+            edge_ids.len(),
+            unique.len(),
+            "edges must be deduplicated in subgraph result"
+        );
+    }
+
+    // ── GR-10: Node depth is correctly recorded ───────────────────
+
+    #[tokio::test]
+    async fn test_bfs_records_correct_depth() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // A -> B -> C
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_entity(c.clone());
+        store.add_edge(make_edge(a.id, b.id, user_id, true));
+        store.add_edge(make_edge(b.id, c.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+        let result = engine.traverse_bfs(a.id, 5, 100, false).await.unwrap();
+
+        for node in &result.nodes {
+            if node.entity.id == a.id {
+                assert_eq!(node.depth, 0, "seed entity depth must be 0");
+            } else if node.entity.id == b.id {
+                assert_eq!(node.depth, 1, "direct neighbor depth must be 1");
+            } else if node.entity.id == c.id {
+                assert_eq!(node.depth, 2, "2-hop neighbor depth must be 2");
+            }
+        }
+    }
+}

@@ -1,6 +1,6 @@
 # SDK Integrations PRD
 
-Status: P0 active
+Status: complete
 Owner: Platform / DX
 Priority: P0
 Last updated: 2026-03-04
@@ -290,7 +290,7 @@ class MnemoChatStore(BaseChatStore):
 |--------|-------------|---------------|
 | S1-1 | `GET /api/v1/sessions/:id/messages` — returns `[{role, content, created_at, episode_id}]` ordered by `created_at` ASC. Paginated with `?limit=&after=`. | Integration test: create 3 episodes, verify messages returns them in order with correct roles. |
 | S1-2 | `DELETE /api/v1/sessions/:id/messages` — deletes all episodes for the session, emits `session_messages_cleared` governance audit. | Integration test: add messages, clear, verify get_messages returns empty. Verify audit record. |
-| S1-3 | `DELETE /api/v1/sessions/:id/messages/:idx` — deletes the episode at ordinal index `idx` (0-based). Returns 404 if out of bounds. | Integration test: add 3 messages, delete index 1, verify remaining 2 messages are correct. |
+| S1-3 | `DELETE /api/v1/sessions/:id/messages/:idx` — deletes the episode at ordinal index `idx` (0-based). Returns 400 (`validation_error`) if out of bounds. | Integration test: add 3 messages, delete index 1, verify remaining 2 messages are correct. |
 
 ### Milestone S2: Python SDK Core Rebuild (2 days)
 

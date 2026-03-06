@@ -58,14 +58,27 @@ impl QdrantVectorStore {
             .map_err(|e| MnemoError::Qdrant(e.to_string()))?;
 
         if !exists {
-            self.client
+            match self
+                .client
                 .create_collection(CreateCollectionBuilder::new(&coll_name).vectors_config(
                     VectorParamsBuilder::new(self.dimensions as u64, Distance::Cosine),
                 ))
                 .await
-                .map_err(|e| MnemoError::Qdrant(format!("Failed to create collection: {}", e)))?;
-
-            tracing::info!(collection = %coll_name, "Created Qdrant collection");
+            {
+                Ok(_) => {
+                    tracing::info!(collection = %coll_name, "Created Qdrant collection");
+                }
+                Err(e) => {
+                    // Handle TOCTOU race: another process may have created the collection
+                    // between our existence check and create call.
+                    let msg = e.to_string();
+                    if msg.contains("already exists") {
+                        tracing::debug!(collection = %coll_name, "Collection already exists (concurrent creation)");
+                    } else {
+                        return Err(MnemoError::Qdrant(format!("Failed to create collection: {}", msg)));
+                    }
+                }
+            }
         }
 
         Ok(())

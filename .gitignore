@@ -9,6 +9,12 @@ Cargo.lock
 
 # Credentials / cloud keys — never commit
 .keys/
+*.pem
+credentials.json
+
+# Terraform state (defense-in-depth — also covered by subdirectory .gitignore)
+terraform.tfstate
+terraform.tfstate.backup
 
 # Python
 __pycache__/
