@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mnemo Dashboard</title>
+  <link rel="stylesheet" href="/_/static/style.css">
+</head>
+<body>
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-name">Mnemo</span>
+      <span class="brand-version" id="nav-version"></span>
+    </div>
+    <ul class="nav-list">
+      <li><a href="/_/" class="nav-link active" data-page="home">Home</a></li>
+      <li><a href="/_/webhooks" class="nav-link" data-page="webhooks">Webhooks</a></li>
+      <li><a href="/_/rca" class="nav-link" data-page="rca">RCA</a></li>
+      <li><a href="/_/governance" class="nav-link" data-page="governance">Governance</a></li>
+      <li><a href="/_/traces" class="nav-link" data-page="traces">Traces</a></li>
+      <li><a href="/_/explorer" class="nav-link" data-page="explorer">Explorer</a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <span class="health-dot" id="health-dot"></span>
+      <span class="health-label" id="health-label">connecting...</span>
+    </div>
+  </nav>
+
+  <main class="content" id="content">
+    <div class="page" id="page-home">
+      <h1>System Overview</h1>
+      <div class="card-grid" id="metric-cards">
+        <div class="card">
+          <div class="card-label">Status</div>
+          <div class="card-value" id="card-status">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Version</div>
+          <div class="card-value" id="card-version">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">HTTP Requests</div>
+          <div class="card-value" id="card-http-requests">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Webhooks</div>
+          <div class="card-value" id="card-webhooks">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Dead-Letter</div>
+          <div class="card-value" id="card-dead-letter">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Policy Violations</div>
+          <div class="card-value" id="card-violations">--</div>
+        </div>
+      </div>
+
+      <h2>Webhook Status</h2>
+      <div id="webhook-status-panel" class="panel">
+        <p class="muted">Loading...</p>
+      </div>
+
+      <h2>Recent Activity</h2>
+      <div id="recent-activity-panel" class="panel">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <div class="page hidden" id="page-webhooks">
+      <h1>Webhook Operations</h1>
+      <div id="webhooks-grid" class="panel">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <div class="page hidden" id="page-rca">
+      <h1>Why-Changed RCA</h1>
+      <form id="rca-form" class="form-panel">
+        <div class="form-row">
+          <label>User<input type="text" id="rca-user" placeholder="username or UUID"></label>
+          <label>Query<input type="text" id="rca-query" placeholder="What changed?"></label>
+        </div>
+        <div class="form-row">
+          <label>From<input type="datetime-local" id="rca-from"></label>
+          <label>To<input type="datetime-local" id="rca-to"></label>
+        </div>
+        <div class="form-row">
+          <label>Contract
+            <select id="rca-contract">
+              <option value="default">default</option>
+              <option value="support_safe">support_safe</option>
+              <option value="current_strict">current_strict</option>
+              <option value="historical_strict">historical_strict</option>
+            </select>
+          </label>
+          <label>Policy
+            <select id="rca-policy">
+              <option value="balanced">balanced</option>
+              <option value="precision">precision</option>
+              <option value="recall">recall</option>
+              <option value="stability">stability</option>
+            </select>
+          </label>
+          <button type="submit" class="btn">Run Trace</button>
+        </div>
+      </form>
+      <div id="rca-results" class="panel hidden"></div>
+    </div>
+
+    <div class="page hidden" id="page-governance">
+      <h1>Governance Center</h1>
+      <div class="form-panel">
+        <div class="form-row">
+          <label>User<input type="text" id="gov-user" placeholder="username or UUID"></label>
+          <button type="button" class="btn" id="gov-load-btn">Load Policy</button>
+        </div>
+      </div>
+      <div id="gov-policy-panel" class="panel hidden"></div>
+      <div id="gov-violations-panel" class="panel hidden"></div>
+      <div id="gov-audit-panel" class="panel hidden"></div>
+    </div>
+
+    <div class="page hidden" id="page-traces">
+      <h1>Request Trace Viewer</h1>
+      <div class="form-panel">
+        <div class="form-row">
+          <label>Request ID<input type="text" id="trace-request-id" placeholder="req-abc-123"></label>
+          <button type="button" class="btn" id="trace-lookup-btn">Lookup</button>
+        </div>
+      </div>
+      <div id="trace-results" class="panel hidden"></div>
+    </div>
+
+    <div class="page hidden" id="page-explorer">
+      <h1>Data Explorer</h1>
+      <div class="form-panel">
+        <div class="form-row">
+          <label>User<input type="text" id="explorer-user" placeholder="username or UUID"></label>
+          <button type="button" class="btn" id="explorer-load-btn">Load</button>
+        </div>
+      </div>
+      <div id="explorer-entities" class="panel hidden"></div>
+      <div id="explorer-graph" class="panel hidden">
+        <canvas id="graph-canvas" width="800" height="500"></canvas>
+      </div>
+    </div>
+  </main>
+
+  <script src="/_/static/app.js"></script>
+</body>
+</html>

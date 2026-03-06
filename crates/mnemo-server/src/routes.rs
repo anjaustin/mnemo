@@ -1075,7 +1075,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/memory/:user/time_travel/summary",
             post(time_travel_summary),
         )
-        .route("/api/v1/memory/webhooks", post(register_memory_webhook))
+        .route(
+            "/api/v1/memory/webhooks",
+            post(register_memory_webhook).get(list_memory_webhooks),
+        )
         .route(
             "/api/v1/memory/webhooks/:id",
             get(get_memory_webhook).delete(delete_memory_webhook),
@@ -1159,6 +1162,8 @@ pub fn build_router(state: AppState) -> Router {
         // Allow larger request bodies for import payloads.
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state)
+        // Dashboard (no state needed — serves embedded static files)
+        .merge(crate::dashboard::dashboard_routes())
 }
 
 // ─── Health ────────────────────────────────────────────────────────
@@ -4636,6 +4641,15 @@ async fn register_memory_webhook(
         StatusCode::CREATED,
         Json(RegisterMemoryWebhookResponse { ok: true, webhook }),
     ))
+}
+
+async fn list_memory_webhooks(
+    State(state): State<AppState>,
+) -> Json<ListResponse<MemoryWebhookSubscription>> {
+    let hooks = state.memory_webhooks.read().await;
+    let mut webhooks: Vec<MemoryWebhookSubscription> = hooks.values().cloned().collect();
+    webhooks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Json(ListResponse::new(webhooks))
 }
 
 async fn get_memory_webhook(

@@ -4,7 +4,7 @@
 
 | Location | Tests | Type |
 |----------|-------|------|
-| `crates/mnemo-server/tests/memory_api.rs` | 78 | Integration (requires Redis + Qdrant) |
+| `crates/mnemo-server/tests/memory_api.rs` | 80 | Integration (requires Redis + Qdrant) |
 | `crates/mnemo-server/src/config.rs` | 24 | Unit (inline `#[cfg(test)]`) |
 | `crates/mnemo-server/src/middleware/auth.rs` | 6 | Unit (inline) |
 | `crates/mnemo-graph/src/lib.rs` | 10 | Unit (inline) |
@@ -19,7 +19,8 @@
 | `tests/credential_scan.sh` | 5 gates | Bash script |
 | `tests/deploy_artifact_validation.sh` | 36 gates | Bash script |
 | `tests/docker_build_test.sh` | 3 gates | Bash script |
-| **Total** | **~226** | |
+| `tests/dashboard_smoke.sh` | 11 gates | Bash script (requires running server) |
+| **Total** | **~239** | |
 
 This project has several practical testing layers.
 
@@ -170,6 +171,14 @@ bash tests/docker_build_test.sh
 ```
 
 3 gates: `docker build .` succeeds, image size < 50MB, container starts and responds to `/health`.
+
+### Dashboard smoke test
+
+```bash
+bash tests/dashboard_smoke.sh
+```
+
+11 gates: `/health`, `/_/` index, `/_/static/style.css`, `/_/static/app.js`, 5 SPA routes, 404 for missing static asset, `GET /api/v1/memory/webhooks`. Requires a running server on `http://localhost:8080` (override with `MNEMO_URL`).
 
 ## 6) Importer stress harness (large real-world export)
 

@@ -5778,3 +5778,188 @@ async fn wh14_circuit_breaker_opens_after_threshold_failures() {
         dead_count,
     );
 }
+
+// ─── List Webhooks ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_list_memory_webhooks_returns_all_registered() {
+    let (app, _) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: false,
+            max_attempts: 3,
+            base_backoff_ms: 20,
+            request_timeout_ms: 150,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
+        },
+    )
+    .await;
+
+    // Initially, list should be empty.
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 0);
+    assert!(body["data"].as_array().unwrap().is_empty());
+
+    // Create users by writing a memory (webhook registration requires existing users).
+    for user in &["list-wh-user-a", "list-wh-user-b"] {
+        let (s, _) = json_request(
+            &app,
+            "POST",
+            "/api/v1/memory",
+            serde_json::json!({
+                "user": user,
+                "session": "default",
+                "text": "seed"
+            }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED, "seeding user {user} failed");
+    }
+
+    // Register two webhooks for different users.
+    let (s1, r1) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "list-wh-user-a",
+            "target_url": "http://example.com/hook-a",
+            "signing_secret": "secret_a",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(s1, StatusCode::CREATED);
+    let id_a = r1["webhook"]["id"].as_str().unwrap().to_string();
+
+    let (s2, r2) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "list-wh-user-b",
+            "target_url": "http://example.com/hook-b",
+            "signing_secret": "secret_b",
+            "events": ["conflict_detected"]
+        }),
+    )
+    .await;
+    assert_eq!(s2, StatusCode::CREATED);
+    let id_b = r2["webhook"]["id"].as_str().unwrap().to_string();
+
+    // List should now contain both webhooks.
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 2);
+    let data = body["data"].as_array().unwrap();
+    let ids: Vec<&str> = data.iter().map(|w| w["id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&id_a.as_str()), "webhook A missing from list");
+    assert!(ids.contains(&id_b.as_str()), "webhook B missing from list");
+
+    // signing_secret must NOT appear in the listing (serde skip_serializing).
+    for wh in data {
+        assert!(
+            wh.get("signing_secret").is_none(),
+            "signing_secret leaked in list response"
+        );
+    }
+
+    // Sorted newest-first: B registered after A, so B should be first.
+    assert_eq!(data[0]["id"].as_str().unwrap(), id_b);
+    assert_eq!(data[1]["id"].as_str().unwrap(), id_a);
+}
+
+// ─── Dashboard Smoke ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_dashboard_serves_index_and_static_assets() {
+    let app = build_test_app().await;
+
+    // Index page
+    let request = Request::builder()
+        .method("GET")
+        .uri("/_/")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(
+        html.contains("Mnemo"),
+        "dashboard index should contain 'Mnemo'"
+    );
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "dashboard should serve valid HTML"
+    );
+
+    // Static CSS
+    let request = Request::builder()
+        .method("GET")
+        .uri("/_/static/style.css")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let css = String::from_utf8_lossy(&body);
+    assert!(css.contains(":root"), "CSS should contain :root variables");
+
+    // Static JS
+    let request = Request::builder()
+        .method("GET")
+        .uri("/_/static/app.js")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let js = String::from_utf8_lossy(&body);
+    assert!(js.contains("use strict"), "JS should contain 'use strict'");
+
+    // SPA catch-all: /_/webhooks should serve index.html
+    let request = Request::builder()
+        .method("GET")
+        .uri("/_/webhooks")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "SPA route should serve index"
+    );
+
+    // Non-existent static asset should 404
+    let request = Request::builder()
+        .method("GET")
+        .uri("/_/static/nonexistent.xyz")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

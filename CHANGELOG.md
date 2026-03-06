@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Operator Dashboard Phase A**: embedded zero-deployment web UI served at `/_/` via `rust-embed`.
+  - Dark-themed SPA with 6 pages: Home, Webhooks, RCA, Governance, Traces, Explorer.
+  - Home page live-polls `/health`, `/api/v1/ops/summary`, and `/api/v1/memory/webhooks` to display system status, metric cards, and webhook grid.
+  - Static assets (HTML, CSS, JS) compiled into the server binary — no separate web server or build step needed.
+- `GET /api/v1/memory/webhooks` — list all registered webhook subscriptions (sorted newest-first, `signing_secret` excluded).
+- `tests/dashboard_smoke.sh` — 11-gate dashboard and list-webhooks smoke test script.
+- Integration tests: `test_list_memory_webhooks_returns_all_registered` (list endpoint), `test_dashboard_serves_index_and_static_assets` (embedded asset serving + SPA routing).
+- Dependencies: `rust-embed v8`, `mime_guess v2`.
+
 ## [0.3.4] — 2026-03-05
 
 ### Added

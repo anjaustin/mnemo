@@ -470,6 +470,31 @@ Lightweight compare endpoint for fast RCA render paths.
 }
 ```
 
+### `GET /api/v1/memory/webhooks`
+
+List all registered webhook subscriptions, sorted newest-first.
+
+```json
+// Response 200
+{
+  "data": [
+    {
+      "id": "019cba8c-4929-7cd0-...",
+      "user_id": "019cba8c-44b6-7653-...",
+      "user_identifier": "kendra",
+      "target_url": "https://example.com/hooks/memory",
+      "events": ["head_advanced", "conflict_detected"],
+      "enabled": true,
+      "created_at": "2026-03-04T20:31:21Z",
+      "updated_at": "2026-03-04T20:31:21Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+> **Note:** `signing_secret` is never included in list responses.
+
 ### `POST /api/v1/memory/webhooks`
 
 Register a per-user webhook subscription for memory lifecycle events.
@@ -1480,3 +1505,21 @@ Results are ordered newest-first (by `created_at`). To page forward, pass the `i
 ```
 
 When `count < limit`, you've reached the last page.
+
+---
+
+## Operator Dashboard
+
+The embedded operator dashboard is served at `/_/`. No deployment or configuration is needed — the static assets (HTML, CSS, JS) are compiled into the server binary via `rust-embed`.
+
+| Route | Description |
+|-------|-------------|
+| `GET /_/` | Dashboard home page (SPA index) |
+| `GET /_/static/*` | Embedded CSS, JS assets |
+| `GET /_/webhooks` | Webhook operations page (SPA route) |
+| `GET /_/rca` | Root cause analysis page (SPA route) |
+| `GET /_/governance` | Governance policies page (SPA route) |
+| `GET /_/traces` | Request traces page (SPA route) |
+| `GET /_/explorer` | Knowledge graph explorer page (SPA route) |
+
+All `/_/*` routes that don't match a static asset serve the SPA index; client-side JavaScript handles routing.
