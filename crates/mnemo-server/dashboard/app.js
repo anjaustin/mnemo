@@ -75,7 +75,8 @@ const toast = (() => {
     const dismiss = () => {
       el.classList.remove('toast-visible');
       el.classList.add('toast-out');
-      el.addEventListener('animationend', () => el.remove(), { once: true });
+      // Use setTimeout fallback — animationend is unreliable when tab is backgrounded
+      setTimeout(() => el.remove(), 350);
     };
     el.querySelector('.toast-close').addEventListener('click', dismiss);
     setTimeout(dismiss, type === 'error' ? 8000 : 4000);
@@ -169,10 +170,10 @@ function initNav() {
   const links = document.querySelectorAll('.nav-link');
   const pages = document.querySelectorAll('.page');
 
-  window._navigate = function navigate(pageName) {
+  window._navigate = function navigate(pageName, pushUrl) {
     currentPage = pageName;
     pages.forEach(p => p.classList.add('hidden'));
-    links.forEach(l => l.classList.remove('active'));
+    links.forEach(l => { l.classList.remove('active'); l.removeAttribute('aria-current'); });
     const page = document.getElementById('page-' + pageName);
     const link = document.querySelector(`[data-page="${pageName}"]`);
     if (page) {
@@ -180,7 +181,16 @@ function initNav() {
       page.classList.add('page-in');
       page.addEventListener('animationend', () => page.classList.remove('page-in'), { once: true });
     }
-    if (link) link.classList.add('active');
+    if (link) {
+      link.classList.add('active');
+      link.setAttribute('aria-current', 'page');
+    }
+
+    // Always update URL (unless explicitly suppressed for popstate handler)
+    if (pushUrl !== false) {
+      const url = pageName === 'home' ? '/_/' : `/_/${pageName}`;
+      history.pushState({ page: pageName }, '', url);
+    }
 
     // Lazy init
     if (_pageInits[pageName] && !_pageInits[pageName]._done) {
@@ -192,19 +202,17 @@ function initNav() {
   links.forEach(link => {
     link.addEventListener('click', e => {
       e.preventDefault();
-      const page = link.dataset.page;
-      _navigate(page);
-      history.pushState({ page }, '', link.href);
+      _navigate(link.dataset.page);
     });
   });
 
   window.addEventListener('popstate', () => {
     const page = location.pathname.replace(/^\/_\/?/, '').split('/')[0] || 'home';
-    _navigate(page);
+    _navigate(page, false);
   });
 
   const path = location.pathname.replace(/^\/_\/?/, '').split('/')[0] || 'home';
-  _navigate(path);
+  _navigate(path, false);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -268,26 +276,77 @@ function initHome() {
       const data = await mnemo.api('GET', '/api/v1/memory/webhooks');
       const hooks = data.data || [];
       if (hooks.length === 0) {
-        mnemo.setHtml('webhook-status-panel', '<p class="muted">No webhooks registered.</p>');
+        mnemo.setHtml('webhook-status-panel', '<p class="muted">No webhooks registered. <a class="link" href="/_/webhooks" onclick="event.preventDefault();_navigate(\'webhooks\')">Go to Webhooks →</a></p>');
+        mnemo.setHtml('circuit-state-panel', '<p class="muted">No webhooks.</p>');
         return;
       }
-      const rows = hooks.map(h => {
+
+      // Fetch stats for circuit state (parallel, best-effort)
+      const statsArr = await Promise.all(
+        hooks.map(h => mnemo.api('GET', `/api/v1/memory/webhooks/${h.id}/stats`).catch(() => null))
+      );
+
+      // Webhook status table
+      const rows = hooks.map((h, i) => {
+        const s = statsArr[i] || {};
         const st = h.enabled ? badge('enabled', 'green') : badge('disabled', 'yellow');
-        return `<tr>
+        const circ = s.circuit_open ? badge('open','red') : badge('closed','green');
+        return `<tr class="clickable-row" onclick="_navigate('webhooks')">
           <td><code>${escapeHtml(truncId(h.id))}</code></td>
           <td>${escapeHtml(h.target_url)}</td>
           <td>${st}</td>
-          <td>${escapeHtml(h.user_identifier)}</td>
-          <td style="font-size:11px;color:var(--text-muted)">${escapeHtml((h.events||[]).join(', '))}</td>
+          <td>${circ}</td>
+          <td>${s.dead_letter_events > 0 ? `<span style="color:var(--yellow)">${s.dead_letter_events}</span>` : 0}</td>
         </tr>`;
       }).join('');
-      mnemo.setHtml('webhook-status-panel', `<div class="table-wrap"><table>
-        <thead><tr><th>ID</th><th>Target</th><th>Status</th><th>User</th><th>Events</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>`);
+      mnemo.setHtml('webhook-status-panel', `
+        <div class="detail-header" style="margin-bottom:8px">
+          <span style="font-size:12px;color:var(--text-muted)">${hooks.length} webhook${hooks.length !== 1 ? 's' : ''}</span>
+          <a class="link" href="/_/webhooks" onclick="event.preventDefault();_navigate('webhooks')">Manage →</a>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>ID</th><th>Target</th><th>Status</th><th>Circuit</th><th>Dead</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`);
+
+      // Circuit state panel
+      const circuitRows = hooks.map((h, i) => {
+        const s = statsArr[i] || {};
+        const dot = s.circuit_open ? '○' : '●';
+        const col = s.circuit_open ? 'var(--red)' : 'var(--green)';
+        const state = s.circuit_open
+          ? `open — until ${fmtDateAgo(s.circuit_open_until)}`
+          : `closed (healthy)`;
+        return `<div class="circuit-row">
+          <span class="circuit-dot" style="color:${col}">${dot}</span>
+          <span class="circuit-url">${escapeHtml(h.target_url)}</span>
+          <span class="circuit-state" style="color:${col}">${state}</span>
+        </div>`;
+      }).join('');
+      mnemo.setHtml('circuit-state-panel', circuitRows);
     } catch (e) {
       mnemo.setHtml('webhook-status-panel', '<p class="muted">Could not load webhooks.</p>');
     }
   }, 15000);
+
+  // Make metric cards clickable as deep-links
+  const cardActions = {
+    'card-webhooks':     'webhooks',
+    'card-dead-letter':  'webhooks',
+    'card-violations':   'governance',
+    'card-http-requests': null,
+    'card-status':       null,
+    'card-version':      null,
+  };
+  Object.entries(cardActions).forEach(([id, target]) => {
+    if (!target) return;
+    const card = document.getElementById(id)?.closest('.card');
+    if (card) {
+      card.style.cursor = 'pointer';
+      card.title = `Go to ${target}`;
+      card.addEventListener('click', () => _navigate(target));
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -470,6 +529,18 @@ async function deleteWebhook(whId) {
 // RCA PAGE
 // ═══════════════════════════════════════════════════════════════════
 function initRca() {
+  // Default to/from: last 7 days
+  const now = new Date();
+  const week = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const toLocal = d => {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const fromEl = document.getElementById('rca-from');
+  const toEl   = document.getElementById('rca-to');
+  if (fromEl && !fromEl.value) fromEl.value = toLocal(week);
+  if (toEl   && !toEl.value)   toEl.value   = toLocal(now);
+
   document.getElementById('rca-form').addEventListener('submit', async e => {
     e.preventDefault();
     const user = document.getElementById('rca-user').value.trim();
@@ -780,8 +851,20 @@ async function loadGovernanceAudit(user) {
 // TRACES PAGE
 // ═══════════════════════════════════════════════════════════════════
 function initTraces() {
-  const btn = document.getElementById('trace-lookup-btn');
+  const btn   = document.getElementById('trace-lookup-btn');
   const input = document.getElementById('trace-request-id');
+
+  // Set default window: last 30 days
+  const now  = new Date();
+  const ago30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const toLocal = d => {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const trFrom = document.getElementById('trace-from');
+  const trTo   = document.getElementById('trace-to');
+  if (trFrom && !trFrom.value) trFrom.value = toLocal(ago30);
+  if (trTo   && !trTo.value)   trTo.value   = toLocal(now);
 
   async function doLookup() {
     const reqId = input.value.trim();
@@ -789,7 +872,20 @@ function initTraces() {
     mnemo.loading('trace-results');
     mnemo.show('trace-results');
     try {
-      const data = await mnemo.api('GET', `/api/v1/traces/${encodeURIComponent(reqId)}`);
+      // Build query params from source filter checkboxes + time window
+      const params = new URLSearchParams();
+      const fromVal = trFrom && trFrom.value ? toIso(trFrom.value) : null;
+      const toVal   = trTo   && trTo.value   ? toIso(trTo.value)   : null;
+      if (fromVal) params.set('from', fromVal);
+      if (toVal)   params.set('to', toVal);
+      const chkEps  = document.getElementById('trace-chk-episodes');
+      const chkWh   = document.getElementById('trace-chk-webhooks');
+      const chkGov  = document.getElementById('trace-chk-governance');
+      if (chkEps  && !chkEps.checked)  params.set('include_episodes', 'false');
+      if (chkWh   && !chkWh.checked)   params.set('include_webhook_events', 'false');
+      if (chkGov  && !chkGov.checked)  params.set('include_governance_audit', 'false');
+      const qs = params.toString();
+      const data = await mnemo.api('GET', `/api/v1/traces/${encodeURIComponent(reqId)}${qs ? '?' + qs : ''}`);
       renderTraceResults(data);
     } catch (e) {
       mnemo.error('trace-results', 'Trace lookup failed: ' + e.message);
@@ -983,8 +1079,9 @@ function renderD3Graph(data, seedId) {
   const canvas = document.getElementById('graph-canvas');
   if (!canvas) return;
 
-  _graphW = canvas.width = canvas.clientWidth || 800;
-  _graphH = canvas.height = canvas.clientHeight || 500;
+  // CSS-sized canvas: clientWidth/Height are set by the .graph-container rule (520px)
+  _graphW = canvas.width  = canvas.offsetWidth  || 800;
+  _graphH = canvas.height = canvas.offsetHeight || 520;
   _graphTransform = { x: 0, y: 0, k: 1 };
   _selectedNode = null;
   mnemo.hide('node-detail-panel');
