@@ -380,8 +380,10 @@ class EvalResult:
         return statistics.median(self.latencies_ms)
 
 
-def ingest_fact(base: str, user: str, text: str) -> None:
-    _post(base, "/api/v1/memory", {"user": user, "text": text})
+def ingest_fact(base: str, user: str, text: str) -> str:
+    """Ingest a fact and return the episode_id."""
+    body = _post(base, "/api/v1/memory", {"user": user, "text": text})
+    return body.get("episode_id", "")
 
 
 def query_context(base: str, user: str, query: str) -> tuple[str, float]:
@@ -414,7 +416,7 @@ def query_context(base: str, user: str, query: str) -> tuple[str, float]:
     return context, latency_ms
 
 
-def run_factual_recall(base: str) -> EvalResult:
+def run_factual_recall(base: str, ingest_wait_s: float = 5.0) -> EvalResult:
     """Ingest gold facts, query each one, measure hit rate and latency."""
     result = EvalResult()
 
@@ -423,8 +425,11 @@ def run_factual_recall(base: str) -> EvalResult:
     for fact in GOLD_FACTS:
         ingest_fact(base, fact.user, fact.episode)
 
-    # Brief pause — extraction is async; allow ingest worker to process all facts
-    time.sleep(5.0)
+    # Wait for async ingest worker to process facts.
+    # With a fast API embedder: 5s is sufficient.
+    # With a local LLM (e.g. LFM2-24B): ~30s per episode; use --ingest-wait accordingly.
+    print(f"  Waiting {ingest_wait_s:.0f}s for ingest pipeline...")
+    time.sleep(ingest_wait_s)
 
     # Query each fact
     print(f"  Querying {len(GOLD_FACTS)} facts...")
@@ -442,7 +447,7 @@ def run_factual_recall(base: str) -> EvalResult:
     return result
 
 
-def run_temporal_correctness(base: str) -> EvalResult:
+def run_temporal_correctness(base: str, ingest_wait_s: float = 5.0) -> EvalResult:
     """Ingest sequential facts and verify historical queries return prior values."""
     result = EvalResult()
 
@@ -451,7 +456,7 @@ def run_temporal_correctness(base: str) -> EvalResult:
         # First ingest an older fact (seed), then the current state
         ingest_fact(base, tf.user, tf.current_episode)
 
-    time.sleep(1.0)
+    time.sleep(min(ingest_wait_s, 10.0))
 
     print(f"  Querying {len(TEMPORAL_FACTS)} historical queries...")
     for tf in TEMPORAL_FACTS:
@@ -491,14 +496,18 @@ def probe_embeddings(base: str) -> bool:
     probe_user = f"__embed_probe_{uuid.uuid4().hex[:8]}"
     try:
         ingest_fact(base, probe_user, "The probe entity is called Zephyr.")
-        time.sleep(2.0)
-        body = _post(
-            base,
-            f"/api/v1/memory/{probe_user}/context",
-            {"query": "What is Zephyr?", "max_tokens": 500, "min_relevance": 0.0},
-        )
-        # If entities or facts came back from vector search, embeddings are live
-        return bool(body.get("entities") or body.get("facts"))
+        # Poll up to 60s — local LLMs take 20-40s per episode
+        for _ in range(12):
+            time.sleep(5.0)
+            body = _post(
+                base,
+                f"/api/v1/memory/{probe_user}/context",
+                {"query": "What is Zephyr?", "max_tokens": 500, "min_relevance": 0.0},
+            )
+            # If entities or facts came back from vector search, embeddings are live
+            if body.get("entities") or body.get("facts"):
+                return True
+        return False
     except Exception:
         return False
 
@@ -512,6 +521,18 @@ def main() -> int:
         "--no-embedding-gate",
         action="store_true",
         help="Use relaxed Gate 1 threshold when embeddings are unavailable",
+    )
+    parser.add_argument(
+        "--ingest-wait",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help=(
+            "Seconds to wait after ingesting facts before querying. "
+            "Default 5s (fast API embedder). "
+            "For local LLMs (e.g. LFM2-24B at ~30s/episode x 40 facts = ~1200s): "
+            "pass --ingest-wait 1400"
+        ),
     )
     args = parser.parse_args()
     base = args.server.rstrip("/")
@@ -553,7 +574,7 @@ def main() -> int:
 
     # ── Gate 1: Factual recall ─────────────────────────────────────────────────
     print("=== Gate 1: Factual Recall Accuracy ===")
-    recall = run_factual_recall(base)
+    recall = run_factual_recall(base, ingest_wait_s=args.ingest_wait)
     print(f"  Accuracy : {recall.accuracy:.1%}  ({recall.hits}/{recall.total})")
     print(f"  p50      : {recall.p50_ms:.0f}ms")
     print(f"  p95      : {recall.p95_ms:.0f}ms")
@@ -573,7 +594,7 @@ def main() -> int:
 
     # ── Gate 2: Temporal correctness ──────────────────────────────────────────
     print("=== Gate 2: Temporal Query Correctness ===")
-    temporal = run_temporal_correctness(base)
+    temporal = run_temporal_correctness(base, ingest_wait_s=args.ingest_wait)
     print(f"  Accuracy : {temporal.accuracy:.1%}  ({temporal.hits}/{temporal.total})")
     if temporal.misses:
         for miss in temporal.misses:

@@ -288,6 +288,57 @@ All collections use cosine distance. Dimensions match the configured embedding m
 
 ---
 
+## LLM Provider Configuration
+
+Mnemo separates the **extraction LLM** (entity/relationship extraction from episodes) from the **embedding model** (vector generation for semantic search). Each is configured independently.
+
+### Supported Providers
+
+| Role | Env Var | Supported Values |
+|------|---------|-----------------|
+| LLM provider | `MNEMO_LLM_PROVIDER` | `anthropic`, `openai`, `ollama`, `liquid` |
+| LLM API key | `MNEMO_LLM_API_KEY` | provider key |
+| LLM model | `MNEMO_LLM_MODEL` | e.g. `claude-haiku-4-5` |
+| Embedding base URL | `MNEMO_EMBEDDING_BASE_URL` | OpenAI-compatible endpoint |
+| Embedding model | `MNEMO_EMBEDDING_MODEL` | e.g. `nomic-embed-text`, `text-embedding-3-small` |
+| Embedding dimensions | `MNEMO_EMBEDDING_DIMENSIONS` | integer matching the model |
+
+### Inference Policy
+
+**Online (API-backed):** Use Anthropic with the project API key. Preferred extraction model: `claude-haiku-4-5` (fast, cheap) or `claude-sonnet-4-6` (higher quality).
+
+**Local / offline:** Use **Liquid AI LFM2-24B-A2B** exclusively via Ollama (`MNEMO_LLM_PROVIDER=ollama`, `MNEMO_LLM_MODEL=hf.co/LiquidAI/LFM2-24B-A2B-GGUF`). Do not use other local models for extraction — LFM2-24B is the only validated local model for this workload.
+
+**Embeddings:** Use `nomic-embed-text` via Ollama for local/offline. Set `MNEMO_EMBEDDING_DIMENSIONS=768`. For production with API access, `text-embedding-3-small` (1536 dims) via OpenAI is the default.
+
+### Example: Local-only stack
+
+```bash
+MNEMO_AUTH_ENABLED=false \
+MNEMO_LLM_PROVIDER=ollama \
+MNEMO_LLM_BASE_URL=http://localhost:11434/v1 \
+MNEMO_LLM_MODEL=hf.co/LiquidAI/LFM2-24B-A2B-GGUF \
+MNEMO_EMBEDDING_BASE_URL=http://localhost:11434/v1 \
+MNEMO_EMBEDDING_MODEL=nomic-embed-text \
+MNEMO_EMBEDDING_DIMENSIONS=768 \
+cargo run -p mnemo-server
+```
+
+### Example: Anthropic LLM + local embeddings
+
+```bash
+MNEMO_AUTH_ENABLED=false \
+MNEMO_LLM_PROVIDER=anthropic \
+MNEMO_LLM_API_KEY=<key> \
+MNEMO_LLM_MODEL=claude-haiku-4-5 \
+MNEMO_EMBEDDING_BASE_URL=http://localhost:11434/v1 \
+MNEMO_EMBEDDING_MODEL=nomic-embed-text \
+MNEMO_EMBEDDING_DIMENSIONS=768 \
+cargo run -p mnemo-server
+```
+
+---
+
 ## Deployment
 
 ### Development
