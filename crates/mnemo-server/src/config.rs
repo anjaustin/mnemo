@@ -764,7 +764,8 @@ mod tests {
 
         // Every env var documented in README.md's Configuration table.
         // We set each to a unique sentinel value, load config, verify it landed.
-        let env_expectations: Vec<(&str, &str, Box<dyn Fn(&MnemoConfig) -> bool>)> = vec![
+        type EnvCheck<'a> = (&'a str, &'a str, Box<dyn Fn(&MnemoConfig) -> bool>);
+        let env_expectations: Vec<EnvCheck> = vec![
             (
                 "MNEMO_LLM_API_KEY",
                 "sentinel_llm_key",

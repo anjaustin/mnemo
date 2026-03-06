@@ -498,8 +498,7 @@ mod tests {
             .and(body_string_contains("Extract entities and relationships"))
             .and(body_string_contains("Kendra bought Nike shoes yesterday"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(chat_response(valid_extraction_json())),
+                ResponseTemplate::new(200).set_body_string(chat_response(valid_extraction_json())),
             )
             .expect(1)
             .mount(&server)
@@ -529,8 +528,7 @@ mod tests {
             .and(body_string_contains("Existing entities"))
             .and(body_string_contains("Kendra"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(chat_response(valid_extraction_json())),
+                ResponseTemplate::new(200).set_body_string(chat_response(valid_extraction_json())),
             )
             .expect(1)
             .mount(&server)
@@ -559,7 +557,7 @@ mod tests {
             .and(path("/chat/completions"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_string(chat_response("this is not valid json at all {{{"))
+                    .set_body_string(chat_response("this is not valid json at all {{{")),
             )
             .mount(&server)
             .await;
@@ -569,11 +567,18 @@ mod tests {
             .extract_entities_and_relationships("some text", &[])
             .await;
 
-        assert!(result.is_err(), "malformed JSON should return an error, not panic");
+        assert!(
+            result.is_err(),
+            "malformed JSON should return an error, not panic"
+        );
         let err = result.unwrap_err();
         match err {
             MnemoError::ExtractionFailed(msg) => {
-                assert!(msg.contains("parse"), "error should mention parsing: {}", msg);
+                assert!(
+                    msg.contains("parse"),
+                    "error should mention parsing: {}",
+                    msg
+                );
             }
             other => panic!("expected ExtractionFailed, got {:?}", other),
         }
@@ -587,10 +592,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(r#"{"choices":[]}"#),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"choices":[]}"#))
             .mount(&server)
             .await;
 
@@ -613,10 +615,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .respond_with(
-                ResponseTemplate::new(429)
-                    .insert_header("retry-after", "10"),
-            )
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "10"))
             .mount(&server)
             .await;
 
@@ -626,7 +625,10 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             MnemoError::RateLimited { retry_after_ms } => {
-                assert_eq!(retry_after_ms, 10_000, "retry-after: 10 should become 10000ms");
+                assert_eq!(
+                    retry_after_ms, 10_000,
+                    "retry-after: 10 should become 10000ms"
+                );
             }
             other => panic!("expected RateLimited, got {:?}", other),
         }
@@ -671,13 +673,19 @@ mod tests {
             .await;
 
         let provider = OpenAiCompatibleProvider::new(openai_config(&server.uri()));
-        let result = provider.summarize("x".repeat(1_000_000).as_str(), 100).await;
+        let result = provider
+            .summarize("x".repeat(1_000_000).as_str(), 100)
+            .await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
             MnemoError::LlmProvider { provider, message } => {
                 assert_eq!(provider, "openai-test");
-                assert!(message.contains("400"), "should contain status: {}", message);
+                assert!(
+                    message.contains("400"),
+                    "should contain status: {}",
+                    message
+                );
             }
             other => panic!("expected LlmProvider error, got {:?}", other),
         }
@@ -701,7 +709,11 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             MnemoError::LlmProvider { message, .. } => {
-                assert!(message.contains("500"), "should contain status: {}", message);
+                assert!(
+                    message.contains("500"),
+                    "should contain status: {}",
+                    message
+                );
             }
             other => panic!("expected LlmProvider, got {:?}", other),
         }
@@ -717,9 +729,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string(chat_response(&fenced)),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string(chat_response(&fenced)))
             .mount(&server)
             .await;
 
@@ -727,7 +737,11 @@ mod tests {
         let result = provider
             .extract_entities_and_relationships("test text", &[])
             .await;
-        assert!(result.is_ok(), "code-fenced JSON should parse correctly: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "code-fenced JSON should parse correctly: {:?}",
+            result.err()
+        );
         assert_eq!(result.unwrap().entities.len(), 2);
     }
 
@@ -740,8 +754,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(chat_response("This is a summary.")),
+                ResponseTemplate::new(200).set_body_string(chat_response("This is a summary.")),
             )
             .mount(&server)
             .await;
@@ -759,10 +772,9 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(chat_response(r#"["Kendra now prefers Adidas, contradicting her Nike preference"]"#)),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string(chat_response(
+                r#"["Kendra now prefers Adidas, contradicting her Nike preference"]"#,
+            )))
             .mount(&server)
             .await;
 
@@ -813,9 +825,10 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/embeddings"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"data":[{"embedding":[0.1, 0.2, 0.3]}]}"#,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"data":[{"embedding":[0.1, 0.2, 0.3]}]}"#),
+            )
             .mount(&server)
             .await;
 
@@ -833,9 +846,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/embeddings"))
-            .respond_with(
-                ResponseTemplate::new(400).set_body_string("dimension mismatch"),
-            )
+            .respond_with(ResponseTemplate::new(400).set_body_string("dimension mismatch"))
             .mount(&server)
             .await;
 
@@ -844,7 +855,11 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             MnemoError::EmbeddingProvider { message, .. } => {
-                assert!(message.contains("400"), "should contain status: {}", message);
+                assert!(
+                    message.contains("400"),
+                    "should contain status: {}",
+                    message
+                );
             }
             other => panic!("expected EmbeddingProvider error, got {:?}", other),
         }

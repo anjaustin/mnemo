@@ -33,7 +33,10 @@ async fn get_qdrant_store() -> QdrantVectorStore {
     match QdrantVectorStore::new(&url, prefix, TEST_DIMS).await {
         Ok(store) => store,
         Err(e) => {
-            eprintln!("Skipping Qdrant integration test (Qdrant not available): {}", e);
+            eprintln!(
+                "Skipping Qdrant integration test (Qdrant not available): {}",
+                e
+            );
             panic!("Qdrant required for integration tests. Run: docker compose up -d qdrant");
         }
     }
@@ -239,13 +242,22 @@ async fn test_qdrant_delete_user_vectors() {
         .unwrap();
 
     // Verify they exist
-    let entities = store.search_entities(user_id, vec1.clone(), 10, 0.0).await.unwrap();
+    let entities = store
+        .search_entities(user_id, vec1.clone(), 10, 0.0)
+        .await
+        .unwrap();
     assert!(!entities.is_empty(), "entity should exist before delete");
 
-    let edges = store.search_edges(user_id, vec2.clone(), 10, 0.0).await.unwrap();
+    let edges = store
+        .search_edges(user_id, vec2.clone(), 10, 0.0)
+        .await
+        .unwrap();
     assert!(!edges.is_empty(), "edge should exist before delete");
 
-    let episodes = store.search_episodes(user_id, vec3.clone(), 10, 0.0).await.unwrap();
+    let episodes = store
+        .search_episodes(user_id, vec3.clone(), 10, 0.0)
+        .await
+        .unwrap();
     assert!(!episodes.is_empty(), "episode should exist before delete");
 
     // GDPR hard delete
@@ -255,19 +267,28 @@ async fn test_qdrant_delete_user_vectors() {
         .expect("delete_user_vectors should succeed");
 
     // Verify all gone
-    let entities_after = store.search_entities(user_id, vec1.clone(), 10, 0.0).await.unwrap();
+    let entities_after = store
+        .search_entities(user_id, vec1.clone(), 10, 0.0)
+        .await
+        .unwrap();
     assert!(
         entities_after.is_empty(),
         "entity vectors should be gone after delete_user_vectors"
     );
 
-    let edges_after = store.search_edges(user_id, vec2.clone(), 10, 0.0).await.unwrap();
+    let edges_after = store
+        .search_edges(user_id, vec2.clone(), 10, 0.0)
+        .await
+        .unwrap();
     assert!(
         edges_after.is_empty(),
         "edge vectors should be gone after delete_user_vectors"
     );
 
-    let episodes_after = store.search_episodes(user_id, vec3.clone(), 10, 0.0).await.unwrap();
+    let episodes_after = store
+        .search_episodes(user_id, vec3.clone(), 10, 0.0)
+        .await
+        .unwrap();
     assert!(
         episodes_after.is_empty(),
         "episode vectors should be gone after delete_user_vectors"
@@ -291,7 +312,12 @@ async fn test_qdrant_delete_preserves_other_users() {
 
     // Upsert for both users
     store
-        .upsert_entity_embedding(entity_delete, user_delete, vec1.clone(), serde_json::json!({}))
+        .upsert_entity_embedding(
+            entity_delete,
+            user_delete,
+            vec1.clone(),
+            serde_json::json!({}),
+        )
         .await
         .unwrap();
     store
@@ -303,11 +329,17 @@ async fn test_qdrant_delete_preserves_other_users() {
     store.delete_user_vectors(user_delete).await.unwrap();
 
     // Deleted user should have no results
-    let gone = store.search_entities(user_delete, vec1.clone(), 10, 0.0).await.unwrap();
+    let gone = store
+        .search_entities(user_delete, vec1.clone(), 10, 0.0)
+        .await
+        .unwrap();
     assert!(gone.is_empty(), "deleted user's vectors should be gone");
 
     // Other user's data should be intact
-    let kept = store.search_entities(user_keep, vec2.clone(), 10, 0.0).await.unwrap();
+    let kept = store
+        .search_entities(user_keep, vec2.clone(), 10, 0.0)
+        .await
+        .unwrap();
     assert!(
         !kept.is_empty(),
         "other user's vectors must survive a different user's deletion"
@@ -331,8 +363,16 @@ async fn test_qdrant_raw_namespace_lifecycle() {
 
     // Upsert vectors
     let vectors = vec![
-        ("doc1".to_string(), test_vector(1.0), serde_json::json!({"title": "First"})),
-        ("doc2".to_string(), test_vector(2.0), serde_json::json!({"title": "Second"})),
+        (
+            "doc1".to_string(),
+            test_vector(1.0),
+            serde_json::json!({"title": "First"}),
+        ),
+        (
+            "doc2".to_string(),
+            test_vector(2.0),
+            serde_json::json!({"title": "Second"}),
+        ),
     ];
     store.upsert_vectors(&ns, vectors).await.unwrap();
 
@@ -341,16 +381,28 @@ async fn test_qdrant_raw_namespace_lifecycle() {
     assert_eq!(count, 2, "should have 2 vectors after upsert");
 
     // Search
-    let hits = store.search_vectors(&ns, test_vector(1.0), 10, 0.0).await.unwrap();
+    let hits = store
+        .search_vectors(&ns, test_vector(1.0), 10, 0.0)
+        .await
+        .unwrap();
     assert!(!hits.is_empty(), "search should return results");
-    assert_eq!(hits[0].id, "doc1", "top hit should be the most similar vector");
+    assert_eq!(
+        hits[0].id, "doc1",
+        "top hit should be the most similar vector"
+    );
 
     // Delete specific vector
-    store.delete_vectors(&ns, vec!["doc1".to_string()]).await.unwrap();
+    store
+        .delete_vectors(&ns, vec!["doc1".to_string()])
+        .await
+        .unwrap();
     let count_after = store.count_vectors(&ns).await.unwrap();
     assert_eq!(count_after, 1, "should have 1 vector after deleting doc1");
 
     // Delete namespace
     store.delete_namespace(&ns).await.unwrap();
-    assert!(!store.has_namespace(&ns).await.unwrap(), "namespace should be gone");
+    assert!(
+        !store.has_namespace(&ns).await.unwrap(),
+        "namespace should be gone"
+    );
 }

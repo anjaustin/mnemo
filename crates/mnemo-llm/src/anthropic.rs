@@ -379,7 +379,11 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             MnemoError::LlmProvider { message, .. } => {
-                assert!(message.contains("API key"), "should mention API key: {}", message);
+                assert!(
+                    message.contains("API key"),
+                    "should mention API key: {}",
+                    message
+                );
             }
             other => panic!("expected LlmProvider error, got {:?}", other),
         }
@@ -394,8 +398,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(anthropic_response("not valid json {{")),
+                ResponseTemplate::new(200).set_body_string(anthropic_response("not valid json {{")),
             )
             .mount(&server)
             .await;
@@ -420,10 +423,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
-            .respond_with(
-                ResponseTemplate::new(429)
-                    .insert_header("retry-after", "30"),
-            )
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "30"))
             .mount(&server)
             .await;
 
@@ -446,10 +446,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(r#"{"content":[]}"#),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"content":[]}"#))
             .mount(&server)
             .await;
 

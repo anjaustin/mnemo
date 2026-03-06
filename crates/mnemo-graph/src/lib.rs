@@ -284,7 +284,10 @@ mod tests {
 
     impl EntityStore for MockGraphStore {
         async fn create_entity(&self, entity: Entity) -> StorageResult<Entity> {
-            self.entities.lock().unwrap().insert(entity.id, entity.clone());
+            self.entities
+                .lock()
+                .unwrap()
+                .insert(entity.id, entity.clone());
             Ok(entity)
         }
 
@@ -298,7 +301,10 @@ mod tests {
         }
 
         async fn update_entity(&self, entity: &Entity) -> StorageResult<()> {
-            self.entities.lock().unwrap().insert(entity.id, entity.clone());
+            self.entities
+                .lock()
+                .unwrap()
+                .insert(entity.id, entity.clone());
             Ok(())
         }
 
@@ -364,7 +370,11 @@ mod tests {
             Ok(())
         }
 
-        async fn query_edges(&self, user_id: Uuid, _filter: EdgeFilter) -> StorageResult<Vec<Edge>> {
+        async fn query_edges(
+            &self,
+            user_id: Uuid,
+            _filter: EdgeFilter,
+        ) -> StorageResult<Vec<Edge>> {
             Ok(self
                 .edges
                 .lock()
@@ -444,8 +454,14 @@ mod tests {
         // At depth 1 from A, we should see A (depth=0) and B (depth=1), but NOT C
         let node_ids: HashSet<Uuid> = result.nodes.iter().map(|n| n.entity.id).collect();
         assert!(node_ids.contains(&a.id), "seed entity A must be present");
-        assert!(node_ids.contains(&b.id), "direct neighbor B must be present");
-        assert!(!node_ids.contains(&c.id), "2-hop neighbor C must NOT be present at depth=1");
+        assert!(
+            node_ids.contains(&b.id),
+            "direct neighbor B must be present"
+        );
+        assert!(
+            !node_ids.contains(&c.id),
+            "2-hop neighbor C must NOT be present at depth=1"
+        );
         assert_eq!(result.nodes.len(), 2);
     }
 
@@ -547,7 +563,10 @@ mod tests {
         let result = engine.traverse_bfs(a.id, 10, 100, true).await.unwrap();
         let node_ids: HashSet<Uuid> = result.nodes.iter().map(|n| n.entity.id).collect();
         assert!(node_ids.contains(&a.id));
-        assert!(node_ids.contains(&b.id), "valid edge target must be present");
+        assert!(
+            node_ids.contains(&b.id),
+            "valid edge target must be present"
+        );
         assert!(
             !node_ids.contains(&c.id),
             "invalidated edge target must NOT be present with valid_only=true"
@@ -630,7 +649,10 @@ mod tests {
             .traverse_bfs(Uuid::now_v7(), 5, 100, false)
             .await
             .unwrap();
-        assert!(result.nodes.is_empty(), "nonexistent seed should yield empty subgraph");
+        assert!(
+            result.nodes.is_empty(),
+            "nonexistent seed should yield empty subgraph"
+        );
         assert!(result.edges.is_empty());
     }
 
@@ -640,10 +662,7 @@ mod tests {
     async fn test_community_detection_empty_graph() {
         let store = Arc::new(MockGraphStore::new());
         let engine = GraphEngine::new(store);
-        let communities = engine
-            .detect_communities(Uuid::now_v7(), 10)
-            .await
-            .unwrap();
+        let communities = engine.detect_communities(Uuid::now_v7(), 10).await.unwrap();
         assert!(communities.is_empty());
     }
 

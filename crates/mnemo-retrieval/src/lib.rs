@@ -642,7 +642,8 @@ mod tests {
         let result = rrf_merge(vec![s1, s2]);
         assert_eq!(result.len(), 10, "All 10 unique items should be preserved");
 
-        let result_ids: std::collections::HashSet<Uuid> = result.iter().map(|(id, _)| *id).collect();
+        let result_ids: std::collections::HashSet<Uuid> =
+            result.iter().map(|(id, _)| *id).collect();
         for id in &ids {
             assert!(result_ids.contains(id), "Item {:?} should be in result", id);
         }

@@ -4550,7 +4550,8 @@ async fn test_webhook_persistence_survives_restart() {
     let graph = Arc::new(GraphEngine::new(state_store.clone()));
 
     // Create Redis connection for webhook persistence
-    let redis_client = redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
+    let redis_client =
+        redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
     let webhook_conn = redis::aio::ConnectionManager::new(redis_client)
         .await
         .expect("Failed to create Redis connection for webhooks");
@@ -4585,15 +4586,17 @@ async fn test_webhook_persistence_survives_restart() {
         user_policies: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         governance_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        webhook_delivery: webhook_config.clone(),
+        webhook_delivery: webhook_config,
         webhook_http: Arc::new(reqwest::Client::new()),
         webhook_redis: Some(webhook_conn.clone()),
         webhook_redis_prefix: webhook_redis_prefix.clone(),
         metrics: Arc::new(ServerMetrics::default()),
     };
 
-    let app1 = build_router(state1.clone())
-        .layer(from_fn_with_state(state1.clone(), request_context_middleware));
+    let app1 = build_router(state1.clone()).layer(from_fn_with_state(
+        state1.clone(),
+        request_context_middleware,
+    ));
 
     // First create a user by writing memory
     let user_name = format!("wh15_user_{}", uid);
@@ -4610,7 +4613,8 @@ async fn test_webhook_persistence_survives_restart() {
     .await;
     assert!(
         mem_status == StatusCode::OK || mem_status == StatusCode::CREATED,
-        "memory write should succeed: {:?}", mem_body,
+        "memory write should succeed: {:?}",
+        mem_body,
     );
 
     // Register a webhook via the API
@@ -4627,8 +4631,15 @@ async fn test_webhook_persistence_survives_restart() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::CREATED, "webhook registration should succeed: {:?}", body);
-    let webhook_id = body["webhook"]["id"].as_str().expect("webhook should have an id");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "webhook registration should succeed: {:?}",
+        body
+    );
+    let webhook_id = body["webhook"]["id"]
+        .as_str()
+        .expect("webhook should have an id");
 
     // Verify the webhook is in state1's memory
     {
@@ -4637,7 +4648,8 @@ async fn test_webhook_persistence_survives_restart() {
     }
 
     // Phase 2: Build a SECOND AppState with EMPTY in-memory maps (simulating restart)
-    let redis_client2 = redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
+    let redis_client2 =
+        redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
     let webhook_conn2 = redis::aio::ConnectionManager::new(redis_client2)
         .await
         .expect("Failed to create Redis connection for webhooks");
@@ -4763,8 +4775,14 @@ async fn msg07_get_messages_returns_chronological_order() {
     }
 
     // Verify content
-    assert!(messages[0]["content"].as_str().unwrap().contains("message 1"));
-    assert!(messages[2]["content"].as_str().unwrap().contains("message 3"));
+    assert!(messages[0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("message 1"));
+    assert!(messages[2]["content"]
+        .as_str()
+        .unwrap()
+        .contains("message 3"));
 }
 
 #[tokio::test]
@@ -4801,8 +4819,7 @@ async fn msg07_delete_by_index_removes_correct_message() {
 
     let mut session_id = String::new();
     for i in 1..=3 {
-        session_id =
-            write_episode(&app, &user, &session_name, &format!("episode_{}", i)).await;
+        session_id = write_episode(&app, &user, &session_name, &format!("episode_{}", i)).await;
         tokio::time::sleep(Duration::from_millis(15)).await;
     }
 
@@ -4830,8 +4847,14 @@ async fn msg07_delete_by_index_removes_correct_message() {
 
     let messages = body["messages"].as_array().unwrap();
     // The remaining messages should be episode_1 and episode_3
-    assert!(messages[0]["content"].as_str().unwrap().contains("episode_1"));
-    assert!(messages[1]["content"].as_str().unwrap().contains("episode_3"));
+    assert!(messages[0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("episode_1"));
+    assert!(messages[1]["content"]
+        .as_str()
+        .unwrap()
+        .contains("episode_3"));
 }
 
 #[tokio::test]
@@ -4866,8 +4889,7 @@ async fn msg07_delete_all_messages_clears_without_deleting_session() {
 
     let mut session_id = String::new();
     for i in 1..=3 {
-        session_id =
-            write_episode(&app, &user, &session_name, &format!("msg_{}", i)).await;
+        session_id = write_episode(&app, &user, &session_name, &format!("msg_{}", i)).await;
     }
 
     // DELETE all messages
@@ -4982,7 +5004,10 @@ async fn vec12_raw_vector_api_comprehensive() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(!body["exists"].as_bool().unwrap(), "VEC-01: namespace should not exist initially");
+    assert!(
+        !body["exists"].as_bool().unwrap(),
+        "VEC-01: namespace should not exist initially"
+    );
 
     // --- VEC-09: Count returns 0 for non-existent namespace ---
     let (status, body) = json_request(
@@ -4993,7 +5018,11 @@ async fn vec12_raw_vector_api_comprehensive() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["count"].as_u64().unwrap(), 0, "VEC-09: count should be 0 for non-existent ns");
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        0,
+        "VEC-09: count should be 0 for non-existent ns"
+    );
 
     // --- VEC-04: Query non-existent namespace returns empty ---
     let (status, body) = json_request(
@@ -5007,7 +5036,10 @@ async fn vec12_raw_vector_api_comprehensive() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["results"].as_array().unwrap().is_empty(), "VEC-04: query on non-existent ns should return []");
+    assert!(
+        body["results"].as_array().unwrap().is_empty(),
+        "VEC-04: query on non-existent ns should return []"
+    );
 
     // --- Validation: empty vectors array returns 400 ---
     let (status, _) = json_request(
@@ -5017,7 +5049,11 @@ async fn vec12_raw_vector_api_comprehensive() {
         serde_json::json!({"vectors": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "Empty vectors should return 400");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "Empty vectors should return 400"
+    );
 
     // --- Validation: empty ids array returns 400 ---
     let (status, _) = json_request(
@@ -5027,7 +5063,11 @@ async fn vec12_raw_vector_api_comprehensive() {
         serde_json::json!({"ids": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "Empty ids should return 400");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "Empty ids should return 400"
+    );
 
     // --- VEC-01: Upsert creates namespace automatically ---
     let v1 = random_vector(1);
@@ -5060,7 +5100,10 @@ async fn vec12_raw_vector_api_comprehensive() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["exists"].as_bool().unwrap(), "VEC-10: namespace should exist after upsert");
+    assert!(
+        body["exists"].as_bool().unwrap(),
+        "VEC-10: namespace should exist after upsert"
+    );
 
     // Count should be 3
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -5072,7 +5115,11 @@ async fn vec12_raw_vector_api_comprehensive() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["count"].as_u64().unwrap(), 3, "Count should be 3 after upserting 3 vectors");
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        3,
+        "Count should be 3 after upserting 3 vectors"
+    );
 
     // --- VEC-02: Upsert same ID is idempotent (overwrites, count unchanged) ---
     let (status, body) = json_request(
@@ -5095,7 +5142,11 @@ async fn vec12_raw_vector_api_comprehensive() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(body["count"].as_u64().unwrap(), 3, "VEC-02: count should remain 3 after idempotent upsert");
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        3,
+        "VEC-02: count should remain 3 after idempotent upsert"
+    );
 
     // --- VEC-03: Query returns semantically similar results ---
     let (status, body) = json_request(
@@ -5113,7 +5164,10 @@ async fn vec12_raw_vector_api_comprehensive() {
     assert!(!results.is_empty(), "VEC-03: query should return results");
     // v2 queried with itself — should be top result with near-perfect score
     assert_eq!(results[0]["id"].as_str().unwrap(), "v2");
-    assert!(results[0]["score"].as_f64().unwrap() > 0.99, "VEC-03: exact match should have score > 0.99");
+    assert!(
+        results[0]["score"].as_f64().unwrap() > 0.99,
+        "VEC-03: exact match should have score > 0.99"
+    );
 
     // --- VEC-05: Delete IDs removes specific vectors ---
     let (status, body) = json_request(
@@ -5134,7 +5188,11 @@ async fn vec12_raw_vector_api_comprehensive() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(body["count"].as_u64().unwrap(), 2, "VEC-05: count should be 2 after deleting 1 vector");
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        2,
+        "VEC-05: count should be 2 after deleting 1 vector"
+    );
 
     // --- VEC-06: Delete non-existent IDs is no-op ---
     let (status, body) = json_request(
@@ -5145,7 +5203,10 @@ async fn vec12_raw_vector_api_comprehensive() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["ok"].as_bool().unwrap(), "VEC-06: delete non-existent ID should not error");
+    assert!(
+        body["ok"].as_bool().unwrap(),
+        "VEC-06: delete non-existent ID should not error"
+    );
 
     // --- VEC-07: Delete namespace removes all vectors ---
     let (status, body) = json_request(
@@ -5167,7 +5228,10 @@ async fn vec12_raw_vector_api_comprehensive() {
         serde_json::json!({}),
     )
     .await;
-    assert!(!body["exists"].as_bool().unwrap(), "VEC-07: namespace should not exist after deletion");
+    assert!(
+        !body["exists"].as_bool().unwrap(),
+        "VEC-07: namespace should not exist after deletion"
+    );
 
     // --- VEC-08: Delete non-existent namespace is no-op ---
     let fake_ns = format!("vec12_fake_{}", Uuid::now_v7().simple());
@@ -5179,7 +5243,10 @@ async fn vec12_raw_vector_api_comprehensive() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["ok"].as_bool().unwrap(), "VEC-08: delete non-existent namespace should be ok");
+    assert!(
+        body["ok"].as_bool().unwrap(),
+        "VEC-08: delete non-existent namespace should be ok"
+    );
 }
 
 // =============================================================================
@@ -5249,7 +5316,12 @@ async fn auth07_correct_bearer_key_allows_request() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "Authed request should succeed: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "Authed request should succeed: {:?}",
+        body
+    );
     assert!(body["ok"].as_bool().unwrap());
 }
 
@@ -5270,7 +5342,12 @@ async fn auth07_correct_x_api_key_allows_request() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "X-API-Key should work: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "X-API-Key should work: {:?}",
+        body
+    );
     assert!(body["ok"].as_bool().unwrap());
 }
 
@@ -5362,7 +5439,9 @@ async fn api01_request_id_header_on_error_endpoints() {
             .method("POST")
             .uri("/api/v1/memory")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::json!({"bad": "payload"}).to_string()))
+            .body(Body::from(
+                serde_json::json!({"bad": "payload"}).to_string(),
+            ))
             .unwrap();
 
         let response = app.clone().oneshot(request).await.unwrap();
@@ -5488,7 +5567,12 @@ async fn register_webhook(app: &axum::Router, user: &str, sink_url: &str) -> Str
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "webhook registration failed: {:?}", registered);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "webhook registration failed: {:?}",
+        registered
+    );
     registered["webhook"]["id"]
         .as_str()
         .expect("webhook id")

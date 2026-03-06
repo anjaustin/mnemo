@@ -76,7 +76,10 @@ impl QdrantVectorStore {
                     if msg.contains("already exists") {
                         tracing::debug!(collection = %coll_name, "Collection already exists (concurrent creation)");
                     } else {
-                        return Err(MnemoError::Qdrant(format!("Failed to create collection: {}", msg)));
+                        return Err(MnemoError::Qdrant(format!(
+                            "Failed to create collection: {}",
+                            msg
+                        )));
                     }
                 }
             }
