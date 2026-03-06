@@ -1407,41 +1407,81 @@ async fn get_trace_by_request_id(
 
     let mut matched_episodes = Vec::new();
     if query.include_episodes {
-        for user in users {
-            if let Some(filter) = user_filter.as_deref() {
-                let external_id = user
-                    .external_id
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                let user_id = user.id.to_string();
-                if user_id != filter && external_id != filter {
-                    continue;
+        // Filter users first before any Redis I/O
+        let candidate_users: Vec<_> = users
+            .into_iter()
+            .filter(|user| {
+                if let Some(filter) = user_filter.as_deref() {
+                    let external_id = user
+                        .external_id
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    let user_id = user.id.to_string();
+                    user_id == filter || external_id == filter
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        // Process users concurrently with a JoinSet, bounded to 8 at a time
+        let mut join_set: tokio::task::JoinSet<Result<Vec<TraceEpisodeRef>, MnemoError>> =
+            tokio::task::JoinSet::new();
+        let state_ref = &state;
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(10);
+
+        for user in candidate_users {
+            // Abort if we already hit the deadline
+            if std::time::Instant::now() > deadline {
+                break;
+            }
+            // Drain completed tasks when we have 8 in flight
+            while join_set.len() >= 8 {
+                if let Some(Ok(Ok(hits))) = join_set.join_next().await {
+                    matched_episodes.extend(hits);
                 }
             }
-
-            let sessions = list_all_sessions_for_user(&state, user.id).await?;
-            for session in sessions {
-                let episodes = list_all_episodes_for_session(&state, session.id).await?;
-                for episode in episodes {
-                    if episode.created_at < query.from || episode.created_at > query.to {
-                        continue;
-                    }
-                    if extract_request_id_from_metadata(&episode.metadata)
-                        .as_deref()
-                        .is_some_and(|rid| rid == request_id)
-                    {
-                        matched_episodes.push(TraceEpisodeRef {
-                            user_id: user.id,
-                            session_id: session.id,
-                            episode_id: episode.id,
-                            created_at: episode.created_at,
-                            preview: preview_text(&episode.content, 140),
-                        });
+            let state_clone = state_ref.clone();
+            let request_id_clone = request_id.clone();
+            let from = query.from;
+            let to = query.to;
+            let uid = user.id;
+            join_set.spawn(async move {
+                let mut hits = Vec::new();
+                let sessions = list_all_sessions_for_user(&state_clone, uid).await?;
+                for session in sessions {
+                    let episodes =
+                        list_all_episodes_for_session(&state_clone, session.id).await?;
+                    for episode in episodes {
+                        if episode.created_at < from || episode.created_at > to {
+                            continue;
+                        }
+                        if extract_request_id_from_metadata(&episode.metadata)
+                            .as_deref()
+                            .is_some_and(|rid| rid == request_id_clone)
+                        {
+                            hits.push(TraceEpisodeRef {
+                                user_id: uid,
+                                session_id: session.id,
+                                episode_id: episode.id,
+                                created_at: episode.created_at,
+                                preview: preview_text(&episode.content, 140),
+                            });
+                        }
                     }
                 }
+                Ok(hits)
+            });
+        }
+        // Drain remaining tasks
+        while let Some(result) = join_set.join_next().await {
+            if let Ok(Ok(hits)) = result {
+                matched_episodes.extend(hits);
             }
         }
+
         matched_episodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         matched_episodes.truncate(max_matches);
     }
