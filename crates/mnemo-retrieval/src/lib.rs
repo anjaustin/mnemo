@@ -582,4 +582,113 @@ mod tests {
         assert_eq!(diag.facts_scored, 0);
         assert_eq!(diag.episodes_scored, 0);
     }
+
+    // =========================================================================
+    // RET-08: Reranker diversity tests (RRF — MMR is not yet implemented)
+    //
+    // Note: The config mentions MMR as a future option (default.toml line 91:
+    // `reranker = "rrf"`), but only RRF is implemented. These tests verify
+    // the RRF reranker produces expected diversity behavior — items appearing
+    // in multiple ranked lists are boosted, ensuring result diversity.
+    // =========================================================================
+
+    #[test]
+    fn ret08_rrf_three_sources_boosts_consensus() {
+        let a = Uuid::now_v7();
+        let b = Uuid::now_v7();
+        let c = Uuid::now_v7();
+
+        // a appears in all 3 sources, b in 2, c in 1
+        let s1 = vec![ScoredHit { id: a }, ScoredHit { id: b }];
+        let s2 = vec![ScoredHit { id: a }, ScoredHit { id: c }];
+        let s3 = vec![ScoredHit { id: a }, ScoredHit { id: b }];
+
+        let result = rrf_merge(vec![s1, s2, s3]);
+        assert_eq!(result[0].0, a, "a (in all 3 sources) should be #1");
+        assert_eq!(result[1].0, b, "b (in 2 sources) should be #2");
+        assert_eq!(result[2].0, c, "c (in 1 source) should be #3");
+        // Score ordering should be strictly decreasing
+        assert!(result[0].1 > result[1].1);
+        assert!(result[1].1 > result[2].1);
+    }
+
+    #[test]
+    fn ret08_rrf_rank_position_matters() {
+        let first = Uuid::now_v7();
+        let second = Uuid::now_v7();
+
+        // Both appear in 1 source each, but 'first' is rank 0 and 'second' is rank 1
+        let s1 = vec![ScoredHit { id: first }, ScoredHit { id: second }];
+
+        let result = rrf_merge(vec![s1]);
+        assert_eq!(result[0].0, first);
+        assert_eq!(result[1].0, second);
+        // Rank 0 should have higher RRF score than rank 1
+        let score_diff = result[0].1 - result[1].1;
+        assert!(
+            score_diff > 0.0,
+            "Higher rank should have higher RRF score (diff={})",
+            score_diff
+        );
+    }
+
+    #[test]
+    fn ret08_rrf_preserves_all_unique_items() {
+        // Ensure no items are lost during merge
+        let ids: Vec<Uuid> = (0..10).map(|_| Uuid::now_v7()).collect();
+        let s1: Vec<ScoredHit> = ids[0..5].iter().map(|id| ScoredHit { id: *id }).collect();
+        let s2: Vec<ScoredHit> = ids[5..10].iter().map(|id| ScoredHit { id: *id }).collect();
+
+        let result = rrf_merge(vec![s1, s2]);
+        assert_eq!(result.len(), 10, "All 10 unique items should be preserved");
+
+        let result_ids: std::collections::HashSet<Uuid> = result.iter().map(|(id, _)| *id).collect();
+        for id in &ids {
+            assert!(result_ids.contains(id), "Item {:?} should be in result", id);
+        }
+    }
+
+    #[test]
+    fn ret08_rrf_score_is_deterministic() {
+        let a = Uuid::now_v7();
+        let b = Uuid::now_v7();
+
+        let r1 = rrf_merge(vec![
+            vec![ScoredHit { id: a }, ScoredHit { id: b }],
+            vec![ScoredHit { id: b }, ScoredHit { id: a }],
+        ]);
+        let r2 = rrf_merge(vec![
+            vec![ScoredHit { id: a }, ScoredHit { id: b }],
+            vec![ScoredHit { id: b }, ScoredHit { id: a }],
+        ]);
+
+        // Same inputs should produce identical scores
+        assert_eq!(r1.len(), r2.len());
+        for i in 0..r1.len() {
+            assert_eq!(r1[i].0, r2[i].0);
+            assert!((r1[i].1 - r2[i].1).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn ret08_rrf_symmetric_overlap_produces_equal_scores() {
+        let a = Uuid::now_v7();
+        let b = Uuid::now_v7();
+
+        // a is rank 0 in s1, rank 1 in s2
+        // b is rank 1 in s1, rank 0 in s2
+        // Both appear in both sources with mirror positions → equal RRF scores
+        let s1 = vec![ScoredHit { id: a }, ScoredHit { id: b }];
+        let s2 = vec![ScoredHit { id: b }, ScoredHit { id: a }];
+
+        let result = rrf_merge(vec![s1, s2]);
+        assert_eq!(result.len(), 2);
+        // Both should have identical scores (symmetric overlap)
+        assert!(
+            (result[0].1 - result[1].1).abs() < f64::EPSILON,
+            "Symmetric overlap should produce equal scores: {} vs {}",
+            result[0].1,
+            result[1].1
+        );
+    }
 }

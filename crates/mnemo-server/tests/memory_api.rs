@@ -5455,3 +5455,242 @@ async fn api05_unknown_route_returns_404() {
         "Unknown routes should return 404, not 500"
     );
 }
+
+// =============================================================================
+// WH-13: Webhook rate limiting protects downstream
+// =============================================================================
+
+/// Helper: register a webhook for a user and return the webhook_id.
+async fn register_webhook(app: &axum::Router, user: &str, sink_url: &str) -> String {
+    // Ensure user exists
+    let (status, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({
+            "user": user,
+            "session": "default",
+            "text": "seed for webhook"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, registered) = json_request(
+        app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": user,
+            "target_url": sink_url,
+            "signing_secret": "whsec_test",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "webhook registration failed: {:?}", registered);
+    registered["webhook"]["id"]
+        .as_str()
+        .expect("webhook id")
+        .to_string()
+}
+
+#[tokio::test]
+async fn wh13_rate_limiting_throttles_excess_deliveries() {
+    // Set rate limit to 2 per minute — the 3rd webhook delivery should be throttled
+    let (sink_url, attempts, _deliveries) = start_webhook_sink_server(0).await;
+    let (app, _) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 1, // single attempt so failures are immediate
+            base_backoff_ms: 10,
+            request_timeout_ms: 500,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 2, // Very low — only 2 allowed per minute
+            circuit_breaker_threshold: 100, // High so circuit doesn't trip
+            circuit_breaker_cooldown_ms: 60_000,
+            persistence_enabled: false,
+        },
+    )
+    .await;
+
+    let user = format!("wh13_user_{}", Uuid::now_v7());
+    let webhook_id = register_webhook(&app, &user, &sink_url).await;
+
+    // Fire 4 events rapidly — only 2 should be delivered, rest rate-limited
+    for i in 1..=4 {
+        let (status, _) = json_request(
+            &app,
+            "POST",
+            "/api/v1/memory",
+            serde_json::json!({
+                "user": &user,
+                "session": "default",
+                "text": format!("message {} for rate limit test", i)
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    // Wait for deliveries to complete/fail
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // The sink should have received at most 2 successful deliveries
+    let sink_attempts = attempts.load(Ordering::SeqCst);
+    assert!(
+        sink_attempts <= 2,
+        "WH-13: Sink should receive at most 2 deliveries (rate limit), got {}",
+        sink_attempts,
+    );
+
+    // Check stats — rate_limit_per_minute should be reflected
+    let (status, stats) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{}/stats", webhook_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stats["rate_limit_per_minute"].as_u64().unwrap(),
+        2,
+        "WH-13: stats should show configured rate limit"
+    );
+
+    // Check that some events were dead-lettered or had delivery failures
+    let (_, events) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{}/events?limit=10", webhook_id),
+        serde_json::json!({}),
+    )
+    .await;
+    let all_events = events["events"].as_array().unwrap();
+    let delivered_count = all_events
+        .iter()
+        .filter(|e| e["delivered"].as_bool().unwrap_or(false))
+        .count();
+    let dead_count = all_events
+        .iter()
+        .filter(|e| e["dead_letter"].as_bool().unwrap_or(false))
+        .count();
+
+    assert!(
+        delivered_count <= 2,
+        "WH-13: at most 2 events should be delivered, got {}",
+        delivered_count,
+    );
+    assert!(
+        dead_count >= 1,
+        "WH-13: at least 1 event should be dead-lettered due to rate limit, got {}",
+        dead_count,
+    );
+}
+
+// =============================================================================
+// WH-14: Circuit breaker opens after threshold failures
+// =============================================================================
+
+#[tokio::test]
+async fn wh14_circuit_breaker_opens_after_threshold_failures() {
+    // Sink always fails → circuit should trip after 2 consecutive failures
+    let (sink_url, attempts, _) = start_webhook_sink_server(9999).await;
+    let (app, _) = build_test_harness_with_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: true,
+            max_attempts: 1, // single attempt, so each event produces exactly 1 failure
+            base_backoff_ms: 10,
+            request_timeout_ms: 200,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120, // High so rate limit doesn't interfere
+            circuit_breaker_threshold: 2, // Opens after 2 consecutive failures
+            circuit_breaker_cooldown_ms: 30_000, // 30s — long enough that circuit stays open during test
+            persistence_enabled: false,
+        },
+    )
+    .await;
+
+    let user = format!("wh14_user_{}", Uuid::now_v7());
+    let webhook_id = register_webhook(&app, &user, &sink_url).await;
+
+    // Fire 3 events — first 2 should attempt delivery (and fail), 3rd should be circuit-blocked
+    for i in 1..=3 {
+        let (status, _) = json_request(
+            &app,
+            "POST",
+            "/api/v1/memory",
+            serde_json::json!({
+                "user": &user,
+                "session": "default",
+                "text": format!("message {} for circuit breaker test", i)
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        // Small gap to allow delivery processing
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    // Wait for all delivery attempts to complete
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+
+    // Check stats — circuit should be open
+    let (status, stats) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{}/stats", webhook_id),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        stats["circuit_open"].as_bool().unwrap_or(false),
+        "WH-14: circuit should be open after {} consecutive failures. Stats: {:?}",
+        2,
+        stats,
+    );
+    assert!(
+        stats["circuit_open_until"].as_str().is_some(),
+        "WH-14: circuit_open_until should be set"
+    );
+
+    // The sink should have received at most 2 actual HTTP attempts
+    // (the 3rd+ events should be rejected by the circuit breaker without making HTTP calls)
+    let total_attempts = attempts.load(Ordering::SeqCst);
+    assert!(
+        total_attempts <= 2,
+        "WH-14: Sink should receive at most 2 HTTP attempts before circuit opens, got {}",
+        total_attempts,
+    );
+
+    // Verify that at least one event was dead-lettered
+    let (_, events) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{}/events?limit=10", webhook_id),
+        serde_json::json!({}),
+    )
+    .await;
+    let all_events = events["events"].as_array().unwrap();
+    let dead_count = all_events
+        .iter()
+        .filter(|e| e["dead_letter"].as_bool().unwrap_or(false))
+        .count();
+    assert!(
+        dead_count >= 1,
+        "WH-14: at least 1 event should be dead-lettered, got {}",
+        dead_count,
+    );
+}

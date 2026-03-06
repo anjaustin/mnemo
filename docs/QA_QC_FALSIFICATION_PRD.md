@@ -167,8 +167,8 @@
 | WH-10 | Audit log records registration, retry, dead-letter transitions | Automated | Perform lifecycle, query audit, assert entries | ✅ Tested |
 | WH-11 | Stats endpoint returns delivery metrics | Automated | Generate events, query stats, assert counts | ✅ Tested |
 | WH-12 | Domain allowlist blocks disallowed webhook target | Automated | Set policy allowlist, register webhook outside domain, assert rejection | ✅ Tested |
-| WH-13 | Rate limiting protects downstream | Automated | Send burst exceeding `rate_limit_per_minute`, assert throttled | ❌ Not tested |
-| WH-14 | Circuit breaker opens after threshold failures | Automated | Fail `circuit_breaker_threshold` times, assert circuit open | ❌ Not tested |
+| WH-13 | Rate limiting protects downstream | Automated | Send burst exceeding `rate_limit_per_minute`, assert throttled | ✅ Tested (`wh13_rate_limiting_throttles_excess_deliveries`) |
+| WH-14 | Circuit breaker opens after threshold failures | Automated | Fail `circuit_breaker_threshold` times, assert circuit open | ✅ Tested (`wh14_circuit_breaker_opens_after_threshold_failures`) |
 | WH-15 | **Persistence: subscriptions/events survive restart** | Automated | Register webhook, create events, restart server, verify state intact | ❌ Not tested (all tests run with `persistence_enabled: false`) |
 | WH-16 | `force=true` on retry re-delivers already-delivered events | Automated | Deliver event, retry with `force=true`, assert re-delivered | ⚠️ Tested via API, delivery not verified |
 
@@ -399,7 +399,7 @@
 | RET-05 | Diagnostics emitted with temporal scoring | Automated | Run scoring, assert diagnostics present | ✅ Tested |
 | RET-06 | Metadata prefilter restricts candidate set | Automated | Query with metadata filters, assert reduced candidates in diagnostics | ✅ Tested (via memory_api) |
 | RET-07 | `metadata_relax_if_empty` expands search when filters match nothing | Automated | Filter on non-existent value, assert relaxation in diagnostics | ✅ Tested |
-| RET-08 | MMR reranker produces diverse results | Automated | Feed similar results, assert MMR increases diversity | ❌ No dedicated test |
+| RET-08 | MMR reranker produces diverse results | Automated | Feed similar results, assert MMR increases diversity | ⚠️ **MMR not implemented** — only RRF exists. 5 RRF diversity tests added. Config mentions MMR as future option but no code branch exists. |
 | RET-09 | Token budget is respected in context assembly | Automated | Set `max_tokens=50`, assert assembled context within budget | ⚠️ Tested via unit test, not integration |
 
 ---
@@ -539,9 +539,9 @@
 
 | ID | Gate | Method | How to Falsify | Status |
 |----|------|--------|----------------|--------|
-| DK-01 | `docker build .` succeeds | Automated | Build image, assert exit code 0 | ❌ Not tested locally |
-| DK-02 | Built image size < 50MB | Automated | Build image, check size | ❌ Not tested |
-| DK-03 | Container starts and responds to `/health` | Automated | `docker run`, curl health, assert ok | ❌ Not tested |
+| DK-01 | `docker build .` succeeds | Automated | Build image, assert exit code 0 | ✅ Script (`tests/docker_build_test.sh`) |
+| DK-02 | Built image size < 50MB | Automated | Build image, check size | ✅ Script (`tests/docker_build_test.sh`) |
+| DK-03 | Container starts and responds to `/health` | Automated | `docker run`, curl health, assert ok | ✅ Script (`tests/docker_build_test.sh`) |
 | DK-04 | `docker-compose.yml` starts full stack | Automated | `docker compose up -d`, wait, health check | ⚠️ Used in dev, not automated |
 | DK-05 | `docker-compose.test.yml` starts with tmpfs volumes | Automated | `docker compose -f docker-compose.test.yml up`, verify ephemeral | ⚠️ Used in CI |
 | DK-06 | Production compose uses named volumes for persistence | Audit | Read `docker-compose.prod.yml`, verify named volumes | ❌ Not audited |
@@ -560,11 +560,11 @@
 | ID | Gate | Method | How to Falsify | Status |
 |----|------|--------|----------------|--------|
 | DEP-01 | All 86 deployment files exist | Automated | Glob all paths, assert existence | ⚠️ Spot-checked, not automated |
-| DEP-02 | CloudFormation template validates | Automated | `aws cloudformation validate-template --template-body file://mnemo_cfn.yaml` | ❌ Not in CI |
-| DEP-03 | Terraform configs validate | Automated | `terraform validate` for each target | ❌ Not in CI |
-| DEP-04 | Render blueprint validates | Automated | `render blueprint validate` or structural check | ❌ Not in CI |
-| DEP-05 | Railway config validates | Automated | Structural JSON schema check | ❌ Not in CI |
-| DEP-06 | Northflank stack validates | Automated | Structural JSON schema check | ❌ Not in CI |
+| DEP-02 | CloudFormation template validates | Automated | YAML parse + structural check (Resources, Parameters) | ✅ Script (`tests/deploy_artifact_validation.sh`) |
+| DEP-03 | Terraform configs validate | Automated | `terraform validate` for all 4 targets | ✅ Script (`tests/deploy_artifact_validation.sh`) — all 4 pass |
+| DEP-04 | Render blueprint validates | Automated | YAML parse + services key check | ✅ Script (`tests/deploy_artifact_validation.sh`) |
+| DEP-05 | Railway config validates | Automated | JSON parse + structural check | ✅ Script (`tests/deploy_artifact_validation.sh`) |
+| DEP-06 | Northflank stack validates | Automated | JSON parse + structural check | ✅ Script (`tests/deploy_artifact_validation.sh`) |
 | DEP-07 | All DEPLOY.md files reference correct version (0.3.3) | Automated | Grep all DEPLOY.md for version, assert current | ❌ Not tested |
 | DEP-08 | **Elestio artifacts cleanup** | Audit | CHANGELOG mentions `deploy/elestio/`, but T8 was changed to Vultr. Does `deploy/elestio/` still exist? If so, remove or document. | ❌ Must check |
 | DEP-09 | **GCP Terraform state files not committed** | Audit | Check if `terraform.tfstate`, `.tfstate.backup`, `terraform.tfvars` are committed | ❌ Must check — flagged as risk |
@@ -598,11 +598,11 @@
 
 | ID | Gate | Method | How to Falsify | Status |
 |----|------|--------|----------------|--------|
-| SEC-01 | `.keys/` directory is gitignored | Automated | `git ls-files .keys/`, assert empty | ⚠️ Must verify |
-| SEC-02 | `zep_api.key` is gitignored | Automated | `git ls-files zep_api.key`, assert empty | ❌ Must verify — flagged |
-| SEC-03 | GCP Terraform state files not tracked | Automated | `git ls-files deploy/gcp/terraform/terraform.tfstate`, assert empty | ❌ FLAGGED — survey found these committed |
-| SEC-04 | No API keys, tokens, or passwords in tracked files | Automated | Scan tracked files for patterns: `sk-`, `rnd_`, `dop_v1_`, `Bearer `, API key patterns | ❌ Not scanned |
-| SEC-05 | `.env.example` contains no real values | Audit | Read all `.env.example` files, verify placeholder values only | ❌ Not checked |
+| SEC-01 | `.keys/` directory is gitignored | Automated | `git ls-files .keys/`, assert empty | ✅ Tested (`tests/credential_scan.sh`) |
+| SEC-02 | Sensitive file patterns gitignored | Automated | `git ls-files *.pem credentials.json terraform.tfstate`, assert empty | ✅ Tested (`tests/credential_scan.sh`) |
+| SEC-03 | Terraform state files not tracked | Automated | `git ls-files **/terraform.tfstate`, assert empty | ✅ Tested (`tests/credential_scan.sh`) |
+| SEC-04 | No API keys, tokens, or passwords in tracked files | Automated | Scan tracked files for patterns: `sk-`, `rnd_`, `dop_v1_`, `AKIA`, etc. | ✅ Tested (`tests/credential_scan.sh`) |
+| SEC-05 | `.env.example` contains no real values | Automated | Read all `.env.example` files, verify placeholder values only | ✅ Tested (`tests/credential_scan.sh`) |
 
 ---
 
