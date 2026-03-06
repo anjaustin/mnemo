@@ -1,6 +1,6 @@
 use axum::{
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::get,
     Router,
 };
@@ -50,6 +50,7 @@ async fn dashboard_static(axum::extract::Path(filename): axum::extract::Path<Str
 /// - `/_/{*path}`              → SPA catch-all (client-side routing)
 pub fn dashboard_routes() -> Router {
     Router::new()
+        .route("/_", get(|| async { Redirect::permanent("/_/") }))
         .route("/_/", get(dashboard_index))
         .route("/_/static/*path", get(dashboard_static))
         .route("/_/*path", get(dashboard_spa_catch_all))

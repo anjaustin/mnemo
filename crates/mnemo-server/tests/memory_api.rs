@@ -5962,4 +5962,24 @@ async fn test_dashboard_serves_index_and_static_assets() {
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // Bare /_ without trailing slash should redirect to /_/
+    let request = Request::builder()
+        .method("GET")
+        .uri("/_")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert!(
+        response.status().is_redirection(),
+        "/_ should redirect, got {}",
+        response.status()
+    );
+    let location = response
+        .headers()
+        .get("location")
+        .expect("/_ redirect should have Location header")
+        .to_str()
+        .unwrap();
+    assert_eq!(location, "/_/", "redirect should point to /_/");
 }

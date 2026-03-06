@@ -69,8 +69,14 @@ function initNav() {
       e.preventDefault();
       const page = link.dataset.page;
       navigate(page);
-      history.pushState(null, '', link.href);
+      history.pushState({ page }, '', link.href);
     });
+  });
+
+  // Handle browser back/forward buttons
+  window.addEventListener('popstate', () => {
+    const page = location.pathname.replace(/^\/_\/?/, '').split('/')[0] || 'home';
+    navigate(page);
   });
 
   // Handle initial route
@@ -137,9 +143,9 @@ function initHome() {
       }
       let rows = hooks.map(h => {
         const status = h.enabled ? '<span class="status-ok">enabled</span>' : '<span class="status-warn">disabled</span>';
-        const events = (h.events || []).join(', ');
+        const events = escapeHtml((h.events || []).join(', '));
         return `<tr>
-          <td><code>${h.id.substring(0, 8)}</code></td>
+          <td><code>${escapeHtml(h.id.substring(0, 8))}</code></td>
           <td>${escapeHtml(h.target_url)}</td>
           <td>${status}</td>
           <td>${escapeHtml(h.user_identifier)}</td>

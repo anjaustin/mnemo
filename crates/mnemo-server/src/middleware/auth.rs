@@ -87,7 +87,12 @@ where
         }
 
         let path = req.uri().path();
-        if path == "/health" || path == "/healthz" || path == "/metrics" {
+        if path == "/health"
+            || path == "/healthz"
+            || path == "/metrics"
+            || path.starts_with("/_/")
+            || path == "/_"
+        {
             let mut inner = self.inner.clone();
             return Box::pin(async move { inner.call(req).await });
         }
@@ -216,5 +221,38 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    fn test_app_with_dashboard(config: AuthConfig) -> Router {
+        Router::new()
+            .route("/private", get(|| async { StatusCode::OK }))
+            .route("/health", get(|| async { StatusCode::OK }))
+            .route("/_/", get(|| async { StatusCode::OK }))
+            .route("/_/static/style.css", get(|| async { StatusCode::OK }))
+            .route("/_/webhooks", get(|| async { StatusCode::OK }))
+            .layer(AuthLayer::new(config))
+    }
+
+    #[tokio::test]
+    async fn bypasses_dashboard_routes_without_api_key() {
+        let app = test_app_with_dashboard(AuthConfig::with_keys(vec!["secret".to_string()]));
+
+        for path in &["/_/", "/_/static/style.css", "/_/webhooks"] {
+            let req = Request::builder().uri(*path).body(Body::empty()).unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::OK,
+                "dashboard path {path} should bypass auth"
+            );
+        }
+
+        // API routes should still require auth
+        let req = Request::builder()
+            .uri("/private")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

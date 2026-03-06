@@ -6,7 +6,7 @@
 |----------|-------|------|
 | `crates/mnemo-server/tests/memory_api.rs` | 80 | Integration (requires Redis + Qdrant) |
 | `crates/mnemo-server/src/config.rs` | 24 | Unit (inline `#[cfg(test)]`) |
-| `crates/mnemo-server/src/middleware/auth.rs` | 6 | Unit (inline) |
+| `crates/mnemo-server/src/middleware/auth.rs` | 7 | Unit (inline) |
 | `crates/mnemo-graph/src/lib.rs` | 10 | Unit (inline) |
 | `crates/mnemo-llm/src/openai_compat.rs` | 17 | Unit (wiremock) |
 | `crates/mnemo-llm/src/anthropic.rs` | 7 | Unit (wiremock) |
@@ -19,8 +19,8 @@
 | `tests/credential_scan.sh` | 5 gates | Bash script |
 | `tests/deploy_artifact_validation.sh` | 36 gates | Bash script |
 | `tests/docker_build_test.sh` | 3 gates | Bash script |
-| `tests/dashboard_smoke.sh` | 11 gates | Bash script (requires running server) |
-| **Total** | **~239** | |
+| `tests/dashboard_smoke.sh` | 12 gates | Bash script (requires running server) |
+| **Total** | **~240** | |
 
 This project has several practical testing layers.
 

@@ -36,6 +36,9 @@ check "GET /health"            "$BASE/health"            200 '"status":"ok"'
 # Dashboard index
 check "GET /_/"                "$BASE/_/"                200 '<!DOCTYPE html>'
 
+# Bare /_ redirects to /_/
+check "GET /_ (redirect)"     "$BASE/_"                 308 ''
+
 # Static assets
 check "GET /_/static/style.css"  "$BASE/_/static/style.css"  200 ':root'
 check "GET /_/static/app.js"     "$BASE/_/static/app.js"     200 'use strict'
