@@ -1,0 +1,76 @@
+# ============================================================================
+# Mnemo SDK Test Stack
+#
+# Starts Redis, Qdrant, and a freshly-built Mnemo server so the Python SDK
+# test suite can run against a real server.
+#
+# Usage:
+#   make test                         # recommended — handles full lifecycle
+#
+#   # or manually:
+#   docker compose -f docker-compose.test.yml up -d --build
+#   MNEMO_BASE_URL=http://localhost:8181 pytest tests/ -v
+#   docker compose -f docker-compose.test.yml down -v
+#
+# Ports are offset from the dev stack (8181 instead of 8080, 6380 instead of
+# 6379, 6335/6336 instead of 6333/6334) to avoid collision when both stacks
+# run on the same host.
+# ============================================================================
+
+services:
+  # ── Redis ────────────────────────────────────────────────────────────────
+  test-redis:
+    image: redis/redis-stack:7.4.0-v1
+    container_name: mnemo-test-redis
+    ports:
+      - "6380:6379"
+    environment:
+      - REDIS_ARGS=--save "" --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  # ── Qdrant ───────────────────────────────────────────────────────────────
+  test-qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: mnemo-test-qdrant
+    ports:
+      - "6335:6333"
+      - "6336:6334"
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__LOG_LEVEL=WARN
+    healthcheck:
+      test: ["CMD-SHELL", "pidof qdrant || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  # ── Mnemo Server ─────────────────────────────────────────────────────────
+  test-mnemo:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: mnemo-test-server
+    ports:
+      - "8181:8080"
+    environment:
+      - MNEMO_SERVER_HOST=0.0.0.0
+      - MNEMO_SERVER_PORT=8080
+      - MNEMO_REDIS_URL=redis://test-redis:6379
+      - MNEMO_QDRANT_URL=http://test-qdrant:6334
+      - MNEMO_AUTH_ENABLED=false
+      - RUST_LOG=mnemo=warn,tower_http=warn
+    depends_on:
+      test-redis:
+        condition: service_healthy
+      test-qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s

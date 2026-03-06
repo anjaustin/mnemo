@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Python SDK — full production release** (`sdk/python`).
+  - **Full API coverage**: `Mnemo` sync client and `AsyncMnemo` async client cover all memory, governance, webhook, operator, import, and session-message endpoints. Zero runtime dependencies for the sync client (stdlib only).
+  - **Async client** (`AsyncMnemo`) via `aiohttp` (optional extra: `pip install mnemo-client[async]`). Mirrors the sync interface exactly with `async def` methods and `async with` context manager support.
+  - **LangChain adapter** (`mnemo.ext.langchain.MnemoChatMessageHistory`): drop-in `BaseChatMessageHistory` implementation. Lazy-imports `langchain-core` so the core SDK stays zero-dependency. Handles session name→UUID caching, multimodal content flattening, and all message role mappings (`HumanMessage`, `AIMessage`, `SystemMessage`, `ToolMessage`, `ChatMessage`). Supports sync and async variants (`aget_messages`, `aadd_messages`, `aclear`).
+  - **LlamaIndex adapter** (`mnemo.ext.llamaindex.MnemoChatStore`): drop-in `BaseChatStore` implementation. All 7 abstract methods implemented (`set_messages`, `get_messages`, `add_message`, `delete_messages`, `delete_message`, `delete_last_message`, `get_keys`). Async variants for all methods. Session key→UUID caching. Graceful out-of-bounds handling on `delete_message`.
+  - **Request-ID propagation**: every SDK call accepts and returns `x-mnemo-request-id` for end-to-end distributed tracing through `trace_lookup()`.
+  - **Typed result models**: all methods return dataclasses (`RememberResult`, `ContextResult`, `MessagesResult`, `PolicyResult`, `WebhookResult`, `WebhookStats`, `WebhookEvent`, `TimeTravelTraceResult`, `TimeTravelSummaryResult`, `ChangesSinceResult`, `ConflictRadarResult`, `CausalRecallResult`, `OpsSummaryResult`, `TraceLookupResult`, `ImportJobResult`, `AuditRecord`, `Message`, `DeleteResult`, `ReplayResult`, `RetryResult`, `HealthResult`).
+  - **Error hierarchy**: `MnemoError` → `MnemoHttpError`, `MnemoRateLimitError`, `MnemoNotFoundError`, `MnemoValidationError`, `MnemoConnectionError`, `MnemoTimeoutError`. Rate-limit errors carry `retry_after_ms` from server headers.
+  - **Session message endpoints** on server: `GET /api/v1/sessions/:id/messages` (chronological, paginated), `DELETE /api/v1/sessions/:id/messages` (clear all), `DELETE /api/v1/sessions/:id/messages/:idx` (delete by ordinal index). Required by framework adapters.
+  - **Docker test infrastructure**: `sdk/python/docker-compose.test.yml` starts Redis Stack + Qdrant + built Mnemo server on offset ports (8181/6380/6335-6336) to avoid collision with the dev stack.
+  - **`sdk/python/Makefile`**: `make test` builds the server image, starts the stack, polls for health, runs `pytest`, and tears down. `make test-local` runs the suite against an already-running server on :8080.
+  - **`sdk/python/tests/conftest.py`**: session-scoped `mnemo_client` and `async_mnemo_client` fixtures with server readiness polling.
+  - **88-gate falsification suite** (`tests/test_sdk.py`): covers health, add/context, session messages (get/delete-by-index/clear), LangChain structural + functional, LlamaIndex structural + functional (all 7 methods), error handling, and package exports. All 88 gates pass.
+  - **18-gate async falsification suite** (`tests/test_async_client.py`): mocked aiohttp transport covers health, add, context, get/clear/delete messages, all HTTP error codes, API key headers, request-ID forwarding, context manager, manual close, changes_since, conflict_radar, causal_recall.
+
 - **Operator Dashboard Phase C**: face-melting polish pass on the embedded dashboard.
   - **Design system upgrade**: full CSS token system (`--bg`, `--bg-surface`, `--bg-card`, semantic color tokens with `-dim` variants, layout and font vars, motion vars).
   - **Animated transitions**: `page-in` fade+slide on every page navigation, `pulse-green` glow on healthy status dot, `shimmer` skeleton loaders while data is fetching, `toast-in`/`toast-out` for toast notification lifecycle.
