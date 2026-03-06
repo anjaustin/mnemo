@@ -12,10 +12,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Dark-themed SPA with 6 pages: Home, Webhooks, RCA, Governance, Traces, Explorer.
   - Home page live-polls `/health`, `/api/v1/ops/summary`, and `/api/v1/memory/webhooks` to display system status, metric cards, and webhook grid.
   - Static assets (HTML, CSS, JS) compiled into the server binary — no separate web server or build step needed.
+- **Operator Dashboard Phase B**: feature mapping — all 5 operator pages fully functional.
+  - **Webhooks page**: grid with parallel stats fetching, clickable drill-down to detail view (target, circuit status, dead-letter queue with per-event retry, audit log, replay-all, delete with confirmation modal).
+  - **RCA page**: time-travel trace submission with snapshot comparison (FROM/TO cards), gained/lost facts, timeline table, retrieval policy diagnostics, summary.
+  - **Governance page**: policy viewer with inline edit form, save/preview impact, violations panel (last 24h), audit trail.
+  - **Traces page**: request ID lookup rendering matched episodes, webhook events/audit, governance audit.
+  - **Knowledge Graph Explorer**: username-to-UUID resolution, entity list, force-directed graph rendering on `<canvas>` (repulsion, spring attraction, color-coded by entity type, dashed red for invalidated edges, labels, legend).
+  - Cross-cutting: `confirmAction()` modal, 30s API timeout with `AbortController`, `escapeHtml` XSS protection on all innerHTML, date formatters, status badges, truncated IDs.
 - `GET /api/v1/memory/webhooks` — list all registered webhook subscriptions (sorted newest-first, `signing_secret` excluded).
-- `tests/dashboard_smoke.sh` — 11-gate dashboard and list-webhooks smoke test script.
+- `tests/dashboard_smoke.sh` — 12-gate dashboard and list-webhooks smoke test script.
+- `tests/phase_b_screenshots.py` — Playwright screenshot validation script for all dashboard pages.
 - Integration tests: `test_list_memory_webhooks_returns_all_registered` (list endpoint), `test_dashboard_serves_index_and_static_assets` (embedded asset serving + SPA routing).
 - Dependencies: `rust-embed v8`, `mime_guess v2`.
+
+### Fixed
+
+- Dashboard `mnemo.api()` no longer sends `Content-Type: application/json` on GET requests (prevented body-less requests from completing on some endpoints).
+- Dashboard Explorer page resolves username to UUID via `/api/v1/users/external/:external_id` before calling entities endpoint (was passing raw username as UUID path param).
+- Dashboard API calls now abort after 30 seconds via `AbortController` (prevents browser from hanging indefinitely on slow endpoints).
+
+### Known Issues
+
+- `GET /api/v1/traces/:request_id` hangs with many users in Redis (O(n) scan of all users × sessions × episodes). Needs pagination or index-based lookup.
 
 ## [0.3.4] — 2026-03-05
 

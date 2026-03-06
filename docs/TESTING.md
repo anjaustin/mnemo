@@ -20,7 +20,9 @@
 | `tests/deploy_artifact_validation.sh` | 36 gates | Bash script |
 | `tests/docker_build_test.sh` | 3 gates | Bash script |
 | `tests/dashboard_smoke.sh` | 12 gates | Bash script (requires running server) |
-| **Total** | **~240** | |
+| `tests/phase_b_screenshots.py` | 8 screenshots | Playwright (requires running server) |
+| Phase B falsification | 35 gates | Playwright (manual, requires running server) |
+| **Total** | **~280+** | |
 
 This project has several practical testing layers.
 
