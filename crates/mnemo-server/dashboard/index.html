@@ -3,67 +3,183 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Mnemo Dashboard</title>
+  <title>Mnemo Operator Dashboard</title>
   <link rel="stylesheet" href="/_/static/style.css">
 </head>
 <body>
-  <nav class="sidebar" id="sidebar">
+
+  <!-- ═══════════════════════════════════════════
+       SIDEBAR
+  ═══════════════════════════════════════════ -->
+  <nav class="sidebar" id="sidebar" role="navigation" aria-label="Main navigation">
     <div class="sidebar-brand">
       <span class="brand-name">Mnemo</span>
       <span class="brand-version" id="nav-version"></span>
     </div>
-    <ul class="nav-list">
-      <li><a href="/_/" class="nav-link active" data-page="home">Home</a></li>
-      <li><a href="/_/webhooks" class="nav-link" data-page="webhooks">Webhooks</a></li>
-      <li><a href="/_/rca" class="nav-link" data-page="rca">RCA</a></li>
-      <li><a href="/_/governance" class="nav-link" data-page="governance">Governance</a></li>
-      <li><a href="/_/traces" class="nav-link" data-page="traces">Traces</a></li>
-      <li><a href="/_/explorer" class="nav-link" data-page="explorer">Explorer</a></li>
+
+    <ul class="nav-list" role="list">
+      <li>
+        <a href="/_/" class="nav-link active" data-page="home" aria-current="page">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M2 6.5L8 2l6 4.5V14H10v-3H6v3H2V6.5z"/>
+          </svg>
+          Home
+        </a>
+      </li>
+      <li>
+        <a href="/_/webhooks" class="nav-link" data-page="webhooks">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M8 3a5 5 0 100 10A5 5 0 008 3z"/>
+            <path d="M8 6v2l1.5 1.5"/>
+            <path d="M13 8h1M2 8H1M8 13v1M8 2V1"/>
+          </svg>
+          Webhooks
+        </a>
+      </li>
+      <li>
+        <a href="/_/rca" class="nav-link" data-page="rca">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="8" cy="8" r="6"/>
+            <path d="M5 8l2 2 4-4"/>
+          </svg>
+          RCA
+        </a>
+      </li>
+      <li>
+        <a href="/_/governance" class="nav-link" data-page="governance">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="4" width="12" height="9" rx="1"/>
+            <path d="M5 4V3a3 3 0 016 0v1"/>
+            <path d="M8 9v-2M8 10h.01"/>
+          </svg>
+          Governance
+        </a>
+      </li>
+      <li>
+        <a href="/_/traces" class="nav-link" data-page="traces">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M2 4h3l2 8h2l2-5h3"/>
+            <circle cx="2" cy="4" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="14" cy="11" r="1" fill="currentColor" stroke="none"/>
+          </svg>
+          Traces
+        </a>
+      </li>
+      <li>
+        <a href="/_/explorer" class="nav-link" data-page="explorer">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="5" cy="5" r="2.5"/>
+            <circle cx="11" cy="5" r="2.5"/>
+            <circle cx="8" cy="12" r="2.5"/>
+            <line x1="7.5" y1="5" x2="8.5" y2="5"/>
+            <line x1="6.2" y1="7" x2="7.2" y2="10"/>
+            <line x1="9.8" y1="7" x2="8.8" y2="10"/>
+          </svg>
+          Explorer
+        </a>
+      </li>
     </ul>
+
     <div class="sidebar-footer">
       <span class="health-dot" id="health-dot"></span>
-      <span class="health-label" id="health-label">connecting...</span>
+      <span class="health-label" id="health-label">connecting…</span>
     </div>
   </nav>
 
-  <main class="content" id="content">
-    <!-- ───── Home ───── -->
-    <div class="page" id="page-home">
+  <!-- ═══════════════════════════════════════════
+       MAIN CONTENT
+  ═══════════════════════════════════════════ -->
+  <main class="content" id="content" role="main">
+
+    <!-- ─────────── HOME ─────────── -->
+    <section class="page" id="page-home" aria-label="System Overview">
       <h1>System Overview</h1>
+      <p class="page-subtitle">Live system health and operator metrics</p>
+
       <div class="card-grid" id="metric-cards">
-        <div class="card"><div class="card-label">Status</div><div class="card-value" id="card-status">--</div></div>
-        <div class="card"><div class="card-label">Version</div><div class="card-value" id="card-version">--</div></div>
-        <div class="card"><div class="card-label">HTTP Requests</div><div class="card-value" id="card-http-requests">--</div></div>
-        <div class="card"><div class="card-label">Webhooks</div><div class="card-value" id="card-webhooks">--</div></div>
-        <div class="card"><div class="card-label">Dead-Letter</div><div class="card-value" id="card-dead-letter">--</div></div>
-        <div class="card"><div class="card-label">Policy Violations</div><div class="card-value" id="card-violations">--</div></div>
+        <div class="card">
+          <div class="card-label">Status</div>
+          <div class="card-value" id="card-status">
+            <span class="skeleton skeleton-text" style="width:40px;height:26px;display:inline-block"></span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">Version</div>
+          <div class="card-value" id="card-version">
+            <span class="skeleton skeleton-text" style="width:60px;height:26px;display:inline-block"></span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">HTTP Requests</div>
+          <div class="card-value" id="card-http-requests">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Active Webhooks</div>
+          <div class="card-value" id="card-webhooks">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Dead-Letter</div>
+          <div class="card-value" id="card-dead-letter">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Policy Violations</div>
+          <div class="card-value" id="card-violations">--</div>
+        </div>
       </div>
+
       <h2>Webhook Status</h2>
-      <div id="webhook-status-panel" class="panel"><p class="muted">Loading...</p></div>
-      <h2>Recent Activity</h2>
-      <div id="recent-activity-panel" class="panel"><p class="muted">Loading...</p></div>
-    </div>
-
-    <!-- ───── Webhooks ───── -->
-    <div class="page hidden" id="page-webhooks">
-      <h1>Webhook Operations</h1>
-      <div id="webhooks-grid" class="panel"><p class="muted">Loading...</p></div>
-      <div id="webhook-detail" class="hidden">
-        <div id="wh-detail-content" class="panel"></div>
+      <div id="webhook-status-panel" class="panel">
+        <div class="skeleton skeleton-row" style="margin:4px 0"></div>
+        <div class="skeleton skeleton-row" style="margin:4px 0;width:85%"></div>
+        <div class="skeleton skeleton-row" style="margin:4px 0;width:70%"></div>
       </div>
-    </div>
 
-    <!-- ───── RCA ───── -->
-    <div class="page hidden" id="page-rca">
+      <h2>Recent Activity</h2>
+      <div id="recent-activity-panel" class="panel">
+        <div class="skeleton skeleton-text"></div>
+        <div class="skeleton skeleton-text" style="width:80%"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── WEBHOOKS ─────────── -->
+    <section class="page hidden" id="page-webhooks" aria-label="Webhook Operations">
+      <h1>Webhook Operations</h1>
+      <p class="page-subtitle">Monitor delivery health, dead-letter queues, and audit trails</p>
+
+      <div id="webhooks-grid">
+        <div class="panel">
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row" style="width:90%"></div>
+          <div class="skeleton skeleton-row" style="width:80%"></div>
+        </div>
+      </div>
+
+      <div id="webhook-detail" class="hidden">
+        <div id="wh-detail-content"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── RCA ─────────── -->
+    <section class="page hidden" id="page-rca" aria-label="Why-Changed RCA">
       <h1>Why-Changed RCA</h1>
-      <form id="rca-form" class="form-panel">
+      <p class="page-subtitle">Time-travel trace: compare memory state across a window of time</p>
+
+      <form id="rca-form" class="form-panel" autocomplete="off">
         <div class="form-row">
-          <label>User<input type="text" id="rca-user" placeholder="username or UUID"></label>
-          <label>Query<input type="text" id="rca-query" placeholder="What changed?"></label>
+          <label>User
+            <input type="text" id="rca-user" placeholder="username or UUID" autocomplete="off">
+          </label>
+          <label>Query
+            <input type="text" id="rca-query" placeholder="What changed?" autocomplete="off">
+          </label>
         </div>
         <div class="form-row">
-          <label>From<input type="datetime-local" id="rca-from"></label>
-          <label>To<input type="datetime-local" id="rca-to"></label>
+          <label>From
+            <input type="datetime-local" id="rca-from">
+          </label>
+          <label>To
+            <input type="datetime-local" id="rca-to">
+          </label>
         </div>
         <div class="form-row">
           <label>Contract
@@ -82,65 +198,119 @@
               <option value="stability">stability</option>
             </select>
           </label>
-          <button type="submit" class="btn">Run Trace</button>
+          <button type="submit" class="btn">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5,3 14,8 5,13"/>
+            </svg>
+            Run Trace
+          </button>
         </div>
       </form>
-      <div id="rca-results" class="panel hidden"></div>
-    </div>
+      <div id="rca-results" class="hidden"></div>
+    </section>
 
-    <!-- ───── Governance ───── -->
-    <div class="page hidden" id="page-governance">
+    <!-- ─────────── GOVERNANCE ─────────── -->
+    <section class="page hidden" id="page-governance" aria-label="Governance Center">
       <h1>Governance Center</h1>
+      <p class="page-subtitle">Manage retention policies, preview impact, and audit violations</p>
+
       <div class="form-panel">
         <div class="form-row">
-          <label>User<input type="text" id="gov-user" placeholder="username or UUID"></label>
+          <label>User
+            <input type="text" id="gov-user" placeholder="username or UUID" autocomplete="off">
+          </label>
           <button type="button" class="btn" id="gov-load-btn">Load Policy</button>
         </div>
       </div>
-      <div id="gov-policy-panel" class="panel hidden"></div>
-      <div id="gov-violations-panel" class="panel hidden"></div>
-      <div id="gov-audit-panel" class="panel hidden"></div>
-    </div>
 
-    <!-- ───── Traces ───── -->
-    <div class="page hidden" id="page-traces">
+      <div id="gov-policy-panel" class="hidden"></div>
+      <div id="gov-violations-panel" class="hidden"></div>
+      <div id="gov-audit-panel" class="hidden"></div>
+    </section>
+
+    <!-- ─────────── TRACES ─────────── -->
+    <section class="page hidden" id="page-traces" aria-label="Request Trace Viewer">
       <h1>Request Trace Viewer</h1>
+      <p class="page-subtitle">Correlate a request ID across episodes, webhooks, and governance audit</p>
+
       <div class="form-panel">
         <div class="form-row">
-          <label>Request ID<input type="text" id="trace-request-id" placeholder="req-abc-123"></label>
-          <button type="button" class="btn" id="trace-lookup-btn">Lookup</button>
+          <label>Request ID
+            <input type="text" id="trace-request-id" placeholder="019cc15a-5470-7711-8d51-a3af1ace5522" autocomplete="off" style="font-family:var(--font-mono)">
+          </label>
+          <button type="button" class="btn" id="trace-lookup-btn">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="6.5" cy="6.5" r="4"/>
+              <line x1="10" y1="10" x2="14" y2="14"/>
+            </svg>
+            Lookup
+          </button>
         </div>
       </div>
-      <div id="trace-results" class="panel hidden"></div>
-    </div>
+      <div id="trace-results" class="hidden"></div>
+    </section>
 
-    <!-- ───── Explorer ───── -->
-    <div class="page hidden" id="page-explorer">
+    <!-- ─────────── EXPLORER ─────────── -->
+    <section class="page hidden" id="page-explorer" aria-label="Knowledge Graph Explorer">
       <h1>Knowledge Graph Explorer</h1>
+      <p class="page-subtitle">Browse entities and explore relationship subgraphs — drag nodes, scroll to zoom</p>
+
       <div class="form-panel">
         <div class="form-row">
-          <label>User<input type="text" id="explorer-user" placeholder="username or UUID"></label>
-          <button type="button" class="btn" id="explorer-load-btn">Load</button>
+          <label>User
+            <input type="text" id="explorer-user" placeholder="username or UUID" autocomplete="off">
+          </label>
+          <div class="btn-group" style="align-self:flex-end">
+            <button type="button" class="btn" id="explorer-load-btn">Load Entities</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="explorer-reset-btn" title="Reset graph view">Reset</button>
+          </div>
         </div>
       </div>
-      <div id="explorer-entities" class="panel hidden"></div>
-      <div id="explorer-graph" class="panel hidden">
-        <canvas id="graph-canvas" width="800" height="500"></canvas>
-      </div>
-    </div>
-  </main>
 
-  <!-- Confirmation modal -->
-  <div id="modal-overlay" class="modal-overlay hidden">
+      <div id="explorer-entities" class="hidden"></div>
+
+      <div id="explorer-graph" class="hidden">
+        <div class="graph-container" id="graph-container">
+          <canvas id="graph-canvas"></canvas>
+          <div class="graph-toolbar">
+            <button class="btn btn-ghost btn-xs" id="graph-zoom-in"  title="Zoom in">+</button>
+            <button class="btn btn-ghost btn-xs" id="graph-zoom-out" title="Zoom out">−</button>
+            <button class="btn btn-ghost btn-xs" id="graph-fit"      title="Fit to view">⊡</button>
+          </div>
+          <div class="graph-legend" id="graph-legend"></div>
+          <div class="graph-tooltip hidden" id="graph-tooltip">
+            <div class="tooltip-name" id="tooltip-name"></div>
+            <div class="tooltip-type" id="tooltip-type"></div>
+            <div class="tooltip-summary" id="tooltip-summary"></div>
+          </div>
+        </div>
+        <div class="node-detail-panel hidden" id="node-detail-panel"></div>
+      </div>
+    </section>
+
+  </main><!-- /.content -->
+
+  <!-- ═══════════════════════════════════════════
+       CONFIRMATION MODAL
+  ═══════════════════════════════════════════ -->
+  <div id="modal-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal">
+      <div class="modal-title" id="modal-title">Confirm</div>
       <p id="modal-body"></p>
       <div class="modal-actions">
-        <button class="btn btn-sm" id="modal-ok">Confirm</button>
-        <button class="btn btn-sm btn-danger" id="modal-cancel">Cancel</button>
+        <button class="btn btn-ghost btn-sm" id="modal-cancel">Cancel</button>
+        <button class="btn btn-danger btn-sm" id="modal-ok">Confirm</button>
       </div>
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════
+       TOAST CONTAINER
+  ═══════════════════════════════════════════ -->
+  <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- D3 v7 — force-directed graph -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <script src="/_/static/app.js"></script>
 </body>
 </html>

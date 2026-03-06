@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Operator Dashboard Phase C**: face-melting polish pass on the embedded dashboard.
+  - **Design system upgrade**: full CSS token system (`--bg`, `--bg-surface`, `--bg-card`, semantic color tokens with `-dim` variants, layout and font vars, motion vars).
+  - **Animated transitions**: `page-in` fade+slide on every page navigation, `pulse-green` glow on healthy status dot, `shimmer` skeleton loaders while data is fetching, `toast-in`/`toast-out` for toast notification lifecycle.
+  - **Toast notification system**: replaces all `alert()` calls — `toast.success/error/info/warn(title, msg)` renders pill notifications in `#toast-container` with auto-dismiss (4s default, 8s for errors) and a close button.
+  - **Skeleton loaders**: `mnemo.loading()` now renders animated shimmer blocks instead of plain "Loading…" text.
+  - **Badge component**: `badge(label, type)` utility returns pill-shaped `<span class="badge badge-{type}">` elements (green/yellow/red/blue/gray) — replaces raw `status-ok`/`status-error` spans.
+  - **SVG horizontal timeline** on RCA page: `buildTimelineSvg(events)` renders an inline `<svg>` with a horizontal axis, colored event dots, alternating above/below labels, and start/end timestamps — replaces the plain table.
+  - **D3.js v7 force-directed graph** on Explorer page: replaces the 120-iteration canvas simulation. Features drag nodes, scroll-to-zoom, pan, click to select with node detail panel, hover tooltip, and fit/zoom-in/zoom-out toolbar buttons. Falls back to `runFallbackSimulation()` if CDN is unavailable.
+  - **Sidebar SVG icons**: each nav link has an inline `.nav-icon` SVG.
+  - **Confirmation modal improvements**: `#modal-title` element, `title` parameter on `confirmAction()`, backdrop-click to dismiss.
+  - **Lazy page initialization**: `_pageInits` map — pages (webhooks, rca, governance, traces, explorer) initialize only on first visit. Home always inits at boot.
+  - **`fmtDateAgo(iso)`** utility: relative time strings ("5m ago", "2h ago", "3d ago") used throughout tables and audit logs.
+  - **`stat-grid` / `stat-row`** layout for key-value displays in webhook detail, governance policy, and node detail panel.
+  - **`table-wrap`** overflow container on all tables for responsive horizontal scrolling.
+  - **Selected row highlight** on webhook grid (persists across grid reloads).
+  - **Better empty states**: descriptive context-specific messages on all empty panels.
+  - **`panel`** wrapper class on secondary content sections.
+  - **`btn-group`** for grouped button layouts.
+  - **`btn-xs`** and `btn-ghost` button variants.
+  - **`activity-item`** divs with type-colored left border on Home page recent activity feed.
+
+### Fixed
+
+- `#node-detail-panel` and `#graph-tooltip` now have `class="hidden"` in initial HTML (were visible on load).
+
 - **Operator Dashboard Phase A**: embedded zero-deployment web UI served at `/_/` via `rust-embed`.
   - Dark-themed SPA with 6 pages: Home, Webhooks, RCA, Governance, Traces, Explorer.
   - Home page live-polls `/health`, `/api/v1/ops/summary`, and `/api/v1/memory/webhooks` to display system status, metric cards, and webhook grid.
@@ -30,10 +55,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Dashboard `mnemo.api()` no longer sends `Content-Type: application/json` on GET requests (prevented body-less requests from completing on some endpoints).
 - Dashboard Explorer page resolves username to UUID via `/api/v1/users/external/:external_id` before calling entities endpoint (was passing raw username as UUID path param).
 - Dashboard API calls now abort after 30 seconds via `AbortController` (prevents browser from hanging indefinitely on slow endpoints).
-
-### Known Issues
-
-- `GET /api/v1/traces/:request_id` hangs with many users in Redis (O(n) scan of all users × sessions × episodes). Needs pagination or index-based lookup.
 
 ## [0.3.4] — 2026-03-05
 
