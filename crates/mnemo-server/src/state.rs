@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+use mnemo_core::models::entity::ExtractedEntity;
+use mnemo_core::traits::llm::{ExtractionResult, LlmProvider, LlmResult};
 use mnemo_graph::GraphEngine;
-use mnemo_llm::OpenAiCompatibleEmbedder;
+use mnemo_llm::{AnthropicProvider, OpenAiCompatibleEmbedder, OpenAiCompatibleProvider};
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 use serde::{Deserialize, Serialize};
@@ -157,6 +159,48 @@ pub struct ServerMetrics {
     pub policy_violation_total: AtomicU64,
 }
 
+/// Type-erased LLM handle that is `Clone + Send + Sync`.
+///
+/// Wraps concrete provider types so we can store one in `AppState` without
+/// boxing an `async fn in trait` (which is not yet dyn-compatible in stable
+/// Rust without `async-trait`).
+#[derive(Clone)]
+pub enum LlmHandle {
+    Anthropic(Arc<AnthropicProvider>),
+    OpenAiCompat(Arc<OpenAiCompatibleProvider>),
+}
+
+impl LlmHandle {
+    pub async fn extract(
+        &self,
+        content: &str,
+        hints: &[ExtractedEntity],
+    ) -> LlmResult<ExtractionResult> {
+        match self {
+            LlmHandle::Anthropic(llm) => {
+                llm.extract_entities_and_relationships(content, hints).await
+            }
+            LlmHandle::OpenAiCompat(llm) => {
+                llm.extract_entities_and_relationships(content, hints).await
+            }
+        }
+    }
+
+    pub fn provider_name(&self) -> &str {
+        match self {
+            LlmHandle::Anthropic(llm) => llm.provider_name(),
+            LlmHandle::OpenAiCompat(llm) => llm.provider_name(),
+        }
+    }
+
+    pub fn model_name(&self) -> &str {
+        match self {
+            LlmHandle::Anthropic(llm) => llm.model_name(),
+            LlmHandle::OpenAiCompat(llm) => llm.model_name(),
+        }
+    }
+}
+
 /// Shared application state passed to all Axum route handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -165,6 +209,9 @@ pub struct AppState {
     pub retrieval:
         Arc<RetrievalEngine<RedisStateStore, QdrantVectorStore, OpenAiCompatibleEmbedder>>,
     pub graph: Arc<GraphEngine<RedisStateStore>>,
+    /// LLM provider for on-demand extraction (e.g. `POST /api/v1/memory/extract`).
+    /// `None` when no LLM is configured (no-op mode).
+    pub llm: Option<LlmHandle>,
     pub metadata_prefilter: MetadataPrefilterConfig,
     pub import_jobs: Arc<RwLock<HashMap<Uuid, ImportJobRecord>>>,
     pub import_idempotency: Arc<RwLock<HashMap<String, Uuid>>>,

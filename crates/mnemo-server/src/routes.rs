@@ -14,7 +14,7 @@ use redis::AsyncCommands;
 use sha2::Sha256;
 use tracing::warn;
 
-use mnemo_core::error::{ApiErrorResponse, MnemoError};
+use mnemo_core::error::{MnemoError, ApiErrorResponse};
 use mnemo_core::models::{
     agent::{
         AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest,
@@ -25,8 +25,8 @@ use mnemo_core::models::{
         estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary, FactSummary,
         RetrievalSource, TemporalIntent,
     },
-    edge::{Edge, EdgeFilter},
-    entity::Entity,
+    edge::{Edge, EdgeFilter, ExtractedRelationship},
+    entity::{Entity, ExtractedEntity},
     episode::{
         BatchCreateEpisodesRequest, CreateEpisodeRequest, Episode, EpisodeType, ListEpisodesParams,
         MessageRole, ProcessingStatus,
@@ -1004,6 +1004,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .route("/api/v1/ops/summary", get(get_ops_summary))
         .route("/api/v1/traces/:request_id", get(get_trace_by_request_id))
+        .route("/api/v1/audit/export", get(audit_export))
         // Users
         .route("/api/v1/users", post(create_user))
         .route("/api/v1/users", get(list_users))
@@ -1057,6 +1058,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:user_id/context", post(get_context))
         // Memory API (high-level DX)
         .route("/api/v1/memory", post(remember_memory))
+        .route("/api/v1/memory/extract", post(extract_memory))
         .route("/api/v1/memory/:user/context", post(get_memory_context))
         .route(
             "/api/v1/memory/:user/changes_since",
@@ -1378,6 +1380,174 @@ async fn get_ops_summary(
     })
 }
 
+// ── GET /api/v1/audit/export ────────────────────────────────────────
+//
+// SOC 2 / compliance audit log export.  Returns a unified, time-bounded
+// list of all governance and webhook audit events, suitable for shipping
+// to a SIEM, exporting for auditors, or feeding into compliance tooling.
+//
+// Query parameters:
+//   from              ISO 8601 datetime (default: 30 days ago)
+//   to                ISO 8601 datetime (default: now)
+//   limit             Max events returned (default: 1000, max: 10000)
+//   include_governance  bool (default: true)
+//   include_webhook     bool (default: true)
+//   user              Optional user UUID or external_id filter
+
+fn default_audit_export_from() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() - chrono::Duration::days(30)
+}
+
+fn default_audit_export_to() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+}
+
+fn default_audit_export_limit() -> u32 {
+    1000
+}
+
+fn default_true_audit() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+struct AuditExportQuery {
+    #[serde(default = "default_audit_export_from")]
+    from: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_audit_export_to")]
+    to: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_audit_export_limit")]
+    limit: u32,
+    #[serde(default = "default_true_audit")]
+    include_governance: bool,
+    #[serde(default = "default_true_audit")]
+    include_webhook: bool,
+    #[serde(default)]
+    user: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AuditExportRecord {
+    /// "governance" or "webhook"
+    audit_type: &'static str,
+    id: Uuid,
+    user_id: Uuid,
+    action: String,
+    at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    details: serde_json::Value,
+    /// Only present for webhook audit records
+    #[serde(skip_serializing_if = "Option::is_none")]
+    webhook_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+struct AuditExportResponse {
+    ok: bool,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    total: usize,
+    records: Vec<AuditExportRecord>,
+}
+
+async fn audit_export(
+    State(state): State<AppState>,
+    Query(query): Query<AuditExportQuery>,
+) -> Result<Json<AuditExportResponse>, AppError> {
+    if query.to <= query.from {
+        return Err(AppError(MnemoError::Validation(
+            "'to' must be after 'from'".into(),
+        )));
+    }
+
+    let max_records = query.limit.clamp(1, 10_000) as usize;
+
+    // Resolve optional user filter to a UUID
+    let user_filter_uuid: Option<Uuid> = if let Some(ref ident) = query.user {
+        match find_user_by_identifier(&state, ident.trim()).await {
+            Ok(u) => Some(u.id),
+            Err(_) => Some(Uuid::nil()), // unknown user — no records can match
+        }
+    } else {
+        None
+    };
+
+    let mut records: Vec<AuditExportRecord> = Vec::new();
+
+    // Governance audit
+    if query.include_governance {
+        let governance_map = state.governance_audit.read().await;
+        for (user_id, events) in governance_map.iter() {
+            if let Some(filter) = user_filter_uuid {
+                if *user_id != filter {
+                    continue;
+                }
+            }
+            for ev in events {
+                if ev.at < query.from || ev.at > query.to {
+                    continue;
+                }
+                records.push(AuditExportRecord {
+                    audit_type: "governance",
+                    id: ev.id,
+                    user_id: ev.user_id,
+                    action: ev.action.clone(),
+                    at: ev.at,
+                    request_id: ev.request_id.clone(),
+                    details: ev.details.clone(),
+                    webhook_id: None,
+                });
+            }
+        }
+    }
+
+    // Webhook audit
+    if query.include_webhook {
+        let webhook_audit_map = state.memory_webhook_audit.read().await;
+        for (webhook_id, events) in webhook_audit_map.iter() {
+            for ev in events {
+                if ev.at < query.from || ev.at > query.to {
+                    continue;
+                }
+                // Resolve user_id from webhook subscription for user filtering
+                let webhook_user_id: Option<Uuid> = {
+                    let webhooks = state.memory_webhooks.read().await;
+                    webhooks.get(webhook_id).map(|wh| wh.user_id)
+                };
+                if let Some(filter) = user_filter_uuid {
+                    if webhook_user_id != Some(filter) {
+                        continue;
+                    }
+                }
+                records.push(AuditExportRecord {
+                    audit_type: "webhook",
+                    id: ev.id,
+                    user_id: webhook_user_id.unwrap_or(Uuid::nil()),
+                    action: ev.action.clone(),
+                    at: ev.at,
+                    request_id: ev.request_id.clone(),
+                    details: ev.details.clone(),
+                    webhook_id: Some(*webhook_id),
+                });
+            }
+        }
+    }
+
+    // Sort newest-first then cap
+    records.sort_by(|a, b| b.at.cmp(&a.at));
+    records.truncate(max_records);
+
+    let total = records.len();
+    Ok(Json(AuditExportResponse {
+        ok: true,
+        from: query.from,
+        to: query.to,
+        total,
+        records,
+    }))
+}
+
 async fn get_trace_by_request_id(
     State(state): State<AppState>,
     Path(request_id): Path<String>,
@@ -1403,82 +1573,54 @@ async fn get_trace_by_request_id(
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
 
-    let users = state.state_store.list_users(10_000, None).await?;
+    // Resolve optional user filter to a UUID for post-index filtering.
+    // We do this eagerly so the index path doesn't need to scan all users.
+    let user_filter_uuid: Option<Uuid> = if let Some(ref filter) = user_filter {
+        match find_user_by_identifier(&state, filter).await {
+            Ok(u) => Some(u.id),
+            Err(_) => {
+                // Unknown user — no episodes can match
+                Some(Uuid::nil())
+            }
+        }
+    } else {
+        None
+    };
 
     let mut matched_episodes = Vec::new();
     if query.include_episodes {
-        // Filter users first before any Redis I/O
-        let candidate_users: Vec<_> = users
-            .into_iter()
-            .filter(|user| {
-                if let Some(filter) = user_filter.as_deref() {
-                    let external_id = user
-                        .external_id
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_ascii_lowercase();
-                    let user_id = user.id.to_string();
-                    user_id == filter || external_id == filter
-                } else {
-                    true
-                }
-            })
-            .collect();
+        // O(1) index lookup: `rid_episodes:{request_id}` sorted set written at
+        // episode create time. Falls back gracefully if the index has no entry
+        // (e.g. the episode predates this feature or had no request_id).
+        let from_ms = query.from.timestamp_millis();
+        let to_ms = query.to.timestamp_millis();
+        let index_hits = state
+            .state_store
+            .get_episodes_by_request_id(&request_id, from_ms, to_ms, max_matches)
+            .await
+            .unwrap_or_default();
 
-        // Process users concurrently with a JoinSet, bounded to 8 at a time
-        let mut join_set: tokio::task::JoinSet<Result<Vec<TraceEpisodeRef>, MnemoError>> =
-            tokio::task::JoinSet::new();
-        let state_ref = &state;
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(10);
-
-        for user in candidate_users {
-            // Abort if we already hit the deadline
-            if std::time::Instant::now() > deadline {
-                break;
-            }
-            // Drain completed tasks when we have 8 in flight
-            while join_set.len() >= 8 {
-                if let Some(Ok(Ok(hits))) = join_set.join_next().await {
-                    matched_episodes.extend(hits);
+        for (ep_id, uid, sess_id) in index_hits {
+            // Apply user filter if provided
+            if let Some(filter_uuid) = user_filter_uuid {
+                if uid != filter_uuid {
+                    continue;
                 }
             }
-            let state_clone = state_ref.clone();
-            let request_id_clone = request_id.clone();
-            let from = query.from;
-            let to = query.to;
-            let uid = user.id;
-            join_set.spawn(async move {
-                let mut hits = Vec::new();
-                let sessions = list_all_sessions_for_user(&state_clone, uid).await?;
-                for session in sessions {
-                    let episodes =
-                        list_all_episodes_for_session(&state_clone, session.id).await?;
-                    for episode in episodes {
-                        if episode.created_at < from || episode.created_at > to {
-                            continue;
-                        }
-                        if extract_request_id_from_metadata(&episode.metadata)
-                            .as_deref()
-                            .is_some_and(|rid| rid == request_id_clone)
-                        {
-                            hits.push(TraceEpisodeRef {
-                                user_id: uid,
-                                session_id: session.id,
-                                episode_id: episode.id,
-                                created_at: episode.created_at,
-                                preview: preview_text(&episode.content, 140),
-                            });
-                        }
-                    }
+            // Fetch the full episode to get created_at and content preview
+            match state.state_store.get_episode(ep_id).await {
+                Ok(episode) => {
+                    matched_episodes.push(TraceEpisodeRef {
+                        user_id: uid,
+                        session_id: sess_id,
+                        episode_id: ep_id,
+                        created_at: episode.created_at,
+                        preview: preview_text(&episode.content, 140),
+                    });
                 }
-                Ok(hits)
-            });
-        }
-        // Drain remaining tasks
-        while let Some(result) = join_set.join_next().await {
-            if let Ok(Ok(hits)) = result {
-                matched_episodes.extend(hits);
+                Err(_) => {
+                    // Episode was deleted or unavailable — skip silently
+                }
             }
         }
 
@@ -3066,6 +3208,105 @@ async fn remember_memory(
             episode_id: episode.id,
         }),
     ))
+}
+
+// ── POST /api/v1/memory/extract ────────────────────────────────────
+//
+// Synchronously extract entities and relationships from a text without
+// persisting anything. Returns what the LLM would extract if the text
+// were written via POST /api/v1/memory.
+//
+// Useful for: previewing extraction before commit, building extraction
+// test harnesses, and debugging configuration.
+//
+// If no LLM is configured the endpoint returns an empty extraction with
+// a `no_llm` note rather than an error, so callers can detect the state.
+
+#[derive(Debug, Deserialize)]
+struct ExtractMemoryRequest {
+    text: String,
+    #[serde(default)]
+    user: Option<String>, // if provided, existing entities for this user are used as dedup hints
+}
+
+#[derive(Serialize)]
+struct ExtractMemoryResponse {
+    ok: bool,
+    entities: Vec<ExtractedEntity>,
+    relationships: Vec<ExtractedRelationship>,
+    entity_count: usize,
+    relationship_count: usize,
+    /// Present when LLM is not configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    /// Provider + model used for this extraction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+}
+
+async fn extract_memory(
+    State(state): State<AppState>,
+    Json(req): Json<ExtractMemoryRequest>,
+) -> Result<Json<ExtractMemoryResponse>, AppError> {
+    if req.text.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("text is required".into())));
+    }
+
+    let Some(ref llm) = state.llm else {
+        return Ok(Json(ExtractMemoryResponse {
+            ok: true,
+            entities: Vec::new(),
+            relationships: Vec::new(),
+            entity_count: 0,
+            relationship_count: 0,
+            note: Some("no_llm: LLM is not configured; set MNEMO_LLM_API_KEY to enable extraction".into()),
+            provider: None,
+        }));
+    };
+
+    // Build dedup hints from the user's existing entities if a user is provided
+    let hints: Vec<ExtractedEntity> = if let Some(ref user_id_or_name) = req.user {
+        match find_user_by_identifier(&state, user_id_or_name.trim()).await {
+            Ok(user) => {
+                let existing = state
+                    .state_store
+                    .list_entities(user.id, 200, None)
+                    .await
+                    .unwrap_or_default();
+                existing
+                    .into_iter()
+                    .map(|e| ExtractedEntity {
+                        name: e.name,
+                        entity_type: e.entity_type,
+                        summary: e.summary,
+                    })
+                    .collect()
+            }
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    let provider_label = format!("{}/{}", llm.provider_name(), llm.model_name());
+
+    let extraction = llm
+        .extract(req.text.trim(), &hints)
+        .await
+        .map_err(AppError)?;
+
+    let entity_count = extraction.entities.len();
+    let relationship_count = extraction.relationships.len();
+
+    Ok(Json(ExtractMemoryResponse {
+        ok: true,
+        entities: extraction.entities,
+        relationships: extraction.relationships,
+        entity_count,
+        relationship_count,
+        note: None,
+        provider: Some(provider_label),
+    }))
 }
 
 async fn import_chat_history(

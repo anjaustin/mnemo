@@ -119,6 +119,7 @@ async fn build_test_harness_with_prefilter_and_webhooks(
         vector_store,
         retrieval,
         graph,
+        llm: None,
         metadata_prefilter: prefilter,
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -181,6 +182,23 @@ async fn json_request_with_header(
         .body(Body::from(payload.to_string()))
         .unwrap();
 
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed = if body.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_slice::<Value>(&body).unwrap()
+    };
+    (status, parsed)
+}
+
+async fn get_request(app: &axum::Router, path: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -4573,6 +4591,7 @@ async fn test_webhook_persistence_survives_restart() {
         vector_store: vector_store.clone(),
         retrieval: retrieval.clone(),
         graph: graph.clone(),
+        llm: None,
         metadata_prefilter: MetadataPrefilterConfig {
             enabled: false,
             scan_limit: 400,
@@ -4659,6 +4678,7 @@ async fn test_webhook_persistence_survives_restart() {
         vector_store: vector_store.clone(),
         retrieval: retrieval.clone(),
         graph: graph.clone(),
+        llm: None,
         metadata_prefilter: MetadataPrefilterConfig {
             enabled: false,
             scan_limit: 400,
@@ -5982,4 +6002,268 @@ async fn test_dashboard_serves_index_and_static_assets() {
         .to_str()
         .unwrap();
     assert_eq!(location, "/_/", "redirect should point to /_/");
+}
+
+// ── Item 1: request_id index + O(1) trace lookup ───────────────────
+
+#[tokio::test]
+async fn test_trace_lookup_uses_request_id_index() {
+    // Write a memory with a known request_id, then look it up via the trace
+    // endpoint. The index should return the episode without scanning all users.
+    let app = build_test_app().await;
+    let user = format!("trace-index-{}", Uuid::now_v7());
+    let request_id = format!("req-idx-{}", Uuid::now_v7().simple());
+
+    // Write a memory carrying the custom request_id header
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/memory")
+        .header("content-type", "application/json")
+        .header("x-mnemo-request-id", &request_id)
+        .body(Body::from(
+            serde_json::json!({
+                "user": user,
+                "text": "Episode written with a known request_id for index lookup test."
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "memory write should succeed");
+
+    // Trace lookup — should find the episode via the O(1) index
+    let (status, body) = get_request(&app, &format!("/api/v1/traces/{request_id}")).await;
+    assert_eq!(status, StatusCode::OK, "trace lookup should succeed");
+    let episodes = body["matched_episodes"].as_array().expect("episodes should be array");
+    assert_eq!(episodes.len(), 1, "should find exactly 1 episode via index");
+    let ep = &episodes[0];
+    assert!(
+        ep["preview"]
+            .as_str()
+            .unwrap_or("")
+            .contains("known request_id"),
+        "episode preview should contain written text"
+    );
+}
+
+#[tokio::test]
+async fn test_trace_lookup_returns_empty_for_unknown_request_id() {
+    let app = build_test_app().await;
+    let unknown_rid = format!("req-never-written-{}", Uuid::now_v7().simple());
+    let (status, body) = get_request(&app, &format!("/api/v1/traces/{unknown_rid}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let episodes = body["matched_episodes"].as_array().expect("episodes should be array");
+    assert_eq!(episodes.len(), 0, "unknown request_id should return 0 episodes");
+}
+
+#[tokio::test]
+async fn test_trace_lookup_user_filter_scopes_results() {
+    let app = build_test_app().await;
+    let user_a = format!("trace-user-a-{}", Uuid::now_v7());
+    let user_b = format!("trace-user-b-{}", Uuid::now_v7());
+    let request_id = format!("req-filter-{}", Uuid::now_v7().simple());
+
+    // Write for user_a with the shared request_id
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/memory")
+        .header("content-type", "application/json")
+        .header("x-mnemo-request-id", &request_id)
+        .body(Body::from(
+            serde_json::json!({"user": user_a, "text": "user A episode"}).to_string(),
+        ))
+        .unwrap();
+    let r = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+
+    // Write for user_b with the same request_id
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/memory")
+        .header("content-type", "application/json")
+        .header("x-mnemo-request-id", &request_id)
+        .body(Body::from(
+            serde_json::json!({"user": user_b, "text": "user B episode"}).to_string(),
+        ))
+        .unwrap();
+    let r = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+
+    // Unfiltered: should return both
+    let (status, body) = get_request(&app, &format!("/api/v1/traces/{request_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let all_eps = body["matched_episodes"].as_array().unwrap();
+    assert_eq!(all_eps.len(), 2, "unfiltered trace should return episodes from both users");
+
+    // Filtered to user_a: should return only user_a's episode
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/traces/{request_id}?user={user_a}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let filtered_eps = body["matched_episodes"].as_array().unwrap();
+    assert_eq!(filtered_eps.len(), 1, "user_a filter should return 1 episode");
+}
+
+// ── Item 2: POST /api/v1/memory/extract ────────────────────────────
+
+#[tokio::test]
+async fn test_extract_endpoint_returns_ok_with_no_llm() {
+    // In the test harness LLM is None — the endpoint should return ok=true with
+    // an empty extraction and a `note` field explaining no LLM is configured.
+    let app = build_test_app().await;
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/extract",
+        serde_json::json!({ "text": "Alice works at Acme Corp as a senior engineer." }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "extract should return 200 even with no LLM");
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert_eq!(
+        body["entity_count"].as_u64(),
+        Some(0),
+        "no LLM → entity_count should be 0"
+    );
+    assert_eq!(
+        body["relationship_count"].as_u64(),
+        Some(0),
+        "no LLM → relationship_count should be 0"
+    );
+    let note = body["note"].as_str().expect("no_llm note should be present");
+    assert!(note.contains("no_llm"), "note should contain 'no_llm' marker");
+}
+
+#[tokio::test]
+async fn test_extract_endpoint_rejects_empty_text() {
+    let app = build_test_app().await;
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/extract",
+        serde_json::json!({ "text": "" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "empty text should return 400");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("text is required"),
+        "error message should mention text required"
+    );
+}
+
+#[tokio::test]
+async fn test_extract_endpoint_accepts_optional_user() {
+    // Passing a known user should not error even if user doesn't exist
+    // (hints fall back to empty list gracefully).
+    let app = build_test_app().await;
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/extract",
+        serde_json::json!({
+            "text": "Bob loves hiking.",
+            "user": "nonexistent-user-for-extract-test"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"].as_bool(), Some(true));
+}
+
+// ── Item 3: GET /api/v1/audit/export ───────────────────────────────
+
+#[tokio::test]
+async fn test_audit_export_returns_ok_when_empty() {
+    let app = build_test_app().await;
+    let (status, body) = get_request(&app, "/api/v1/audit/export").await;
+    assert_eq!(status, StatusCode::OK, "audit/export should return 200");
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert!(body["records"].is_array(), "records should be array");
+    let total = body["total"].as_u64().unwrap_or(u64::MAX);
+    assert!(total < 1000, "fresh test namespace should have < 1000 audit records");
+}
+
+#[tokio::test]
+async fn test_audit_export_returns_governance_events() {
+    let app = build_test_app().await;
+    let user = format!("audit-export-user-{}", Uuid::now_v7());
+
+    // Create user first (policy endpoint requires user to exist)
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        serde_json::json!({ "user": user, "text": "seed episode for audit export test" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "seed memory write should succeed");
+
+    // Write a governance policy to generate an audit event
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        &format!("/api/v1/policies/{user}"),
+        serde_json::json!({ "retention_days_message": 90 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "policy set should succeed");
+
+    // Export audit — should include the policy_updated event
+    let (status, body) = get_request(&app, "/api/v1/audit/export?include_webhook=false").await;
+    assert_eq!(status, StatusCode::OK);
+    let records = body["records"].as_array().unwrap();
+    let has_governance_event = records
+        .iter()
+        .any(|r| r["audit_type"].as_str() == Some("governance"));
+    assert!(has_governance_event, "audit export should contain governance events after policy write");
+}
+
+#[tokio::test]
+async fn test_audit_export_from_to_filtering() {
+    let app = build_test_app().await;
+    // Request a window entirely in the past (year 2000) — should return 0 records
+    let (status, body) = get_request(
+        &app,
+        "/api/v1/audit/export?from=2000-01-01T00:00:00Z&to=2000-01-02T00:00:00Z",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let records = body["records"].as_array().unwrap();
+    assert_eq!(
+        records.len(),
+        0,
+        "window in distant past should return 0 records"
+    );
+}
+
+#[tokio::test]
+async fn test_audit_export_to_before_from_returns_400() {
+    let app = build_test_app().await;
+    let (status, _) = get_request(
+        &app,
+        "/api/v1/audit/export?from=2025-12-01T00:00:00Z&to=2025-01-01T00:00:00Z",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "to < from should return 400");
+}
+
+#[tokio::test]
+async fn test_audit_export_include_flags() {
+    let app = build_test_app().await;
+
+    // include_governance=false, include_webhook=false → should return 0 records
+    let (status, body) = get_request(
+        &app,
+        "/api/v1/audit/export?include_governance=false&include_webhook=false",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let records = body["records"].as_array().unwrap();
+    assert_eq!(records.len(), 0, "both include flags false should return 0 records");
 }

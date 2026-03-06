@@ -10,7 +10,7 @@ use mnemo_server::config::MnemoConfig;
 use mnemo_server::middleware::{request_context_middleware, AuthConfig, AuthLayer};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
-    AppState, MetadataPrefilterConfig, ServerMetrics, WebhookDeliveryConfig,
+    AppState, LlmHandle, MetadataPrefilterConfig, ServerMetrics, WebhookDeliveryConfig,
 };
 
 use mnemo_graph::GraphEngine;
@@ -78,11 +78,14 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Spawn ingestion worker with provider-specific LLM type
-    // (generics require concrete types, so we branch here)
-    match config.llm.provider.as_str() {
+    // (generics require concrete types, so we branch here).
+    // We also keep an LlmHandle in AppState for on-demand extraction
+    // (e.g. POST /api/v1/memory/extract).
+    let llm_for_state: Option<LlmHandle> = match config.llm.provider.as_str() {
         "anthropic" => {
             tracing::info!(model = %config.llm.model, "Using Anthropic provider");
             let llm = Arc::new(AnthropicProvider::new(config.llm_config()));
+            let handle = LlmHandle::Anthropic(llm.clone());
             let worker = IngestWorker::new(
                 state_store.clone(),
                 vector_store.clone(),
@@ -91,10 +94,12 @@ async fn main() -> anyhow::Result<()> {
                 ingest_config,
             );
             tokio::spawn(async move { worker.run().await });
+            Some(handle)
         }
         _ => {
             tracing::info!(provider = %config.llm.provider, model = %config.llm.model, "Using OpenAI-compatible provider");
             let llm = Arc::new(OpenAiCompatibleProvider::new(config.llm_config()));
+            let handle = LlmHandle::OpenAiCompat(llm.clone());
             let worker = IngestWorker::new(
                 state_store.clone(),
                 vector_store.clone(),
@@ -103,8 +108,9 @@ async fn main() -> anyhow::Result<()> {
                 ingest_config,
             );
             tokio::spawn(async move { worker.run().await });
+            Some(handle)
         }
-    }
+    };
     tracing::info!("Ingestion worker started");
 
     // Auth
@@ -140,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
         vector_store,
         retrieval,
         graph,
+        llm: llm_for_state,
         metadata_prefilter: MetadataPrefilterConfig {
             enabled: config.retrieval.metadata_prefilter_enabled,
             scan_limit: config.retrieval.metadata_scan_limit,

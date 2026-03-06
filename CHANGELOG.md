@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-03-06
+
+### Added
+
+- **O(1) trace index** (`GET /api/v1/traces/:request_id`): writes a `rid_episodes:{request_id}` sorted set in Redis at episode-create time. Trace lookup now resolves episodes via an indexed `ZRANGEBYSCORE` instead of scanning all users. Constant-time regardless of corpus size.
+- **`POST /api/v1/memory/extract`**: synchronous LLM extraction preview endpoint. Returns entities and relationships extracted from arbitrary text. Degrades gracefully (returns `ok=true`, empty extraction, `note: "no_llm: ..."`) when no LLM is configured. Route registered before `/:user/context` to prevent Axum path-matching collision.
+- **`LlmHandle` enum** in `state.rs`: dyn-compatible wrapper over `Arc<AnthropicProvider>` and `Arc<OpenAiCompatibleProvider>`. Exposes `extract()`, `provider_name()`, and `model_name()`. Avoids the dyn-incompatibility of `LlmProvider` trait (async fn). Stored as `AppState.llm: Option<LlmHandle>`.
+- **`GET /api/v1/audit/export`**: SOC 2 audit log export endpoint. Merges governance and webhook audit events into a unified `AuditExportRecord` array sorted newest-first. Query params: `from`, `to`, `limit` (default 1000, max 10000), `include_governance` (default true), `include_webhook` (default true), `user` (optional filter). Returns 400 when `to < from`.
+- 11 new integration tests covering all three items (index correctness, user filter scoping, empty-index case, extract with/without LLM, empty-text 400, audit export empty/governance/time-filter/include-flags/invalid-window).
+
 ### Added
 
 - **Python SDK — full production release** (`sdk/python`).

@@ -37,9 +37,10 @@ use mnemo_core::traits::storage::*;
 /// {prefix}entity_name:{user_id}:{lc_name} → entity UUID (name index)
 /// {prefix}entity_episodes:{entity_id} → Sorted Set (score=timestamp, member=episode_id)
 /// {prefix}edge:{id}                   → JSON Edge
-/// {prefix}adj_out:{entity_id}         → Sorted Set (score=valid_at, member=edge_id)
-/// {prefix}adj_in:{entity_id}          → Sorted Set (score=valid_at, member=edge_id)
-/// {prefix}user_edges:{user_id}        → Sorted Set (score=timestamp, member=edge_id)
+/// {prefix}adj_out:{entity_id}          → Sorted Set (score=valid_at, member=edge_id)
+/// {prefix}adj_in:{entity_id}           → Sorted Set (score=valid_at, member=edge_id)
+/// {prefix}user_edges:{user_id}         → Sorted Set (score=timestamp, member=edge_id)
+/// {prefix}rid_episodes:{request_id}   → Sorted Set (score=epoch_ms, member="{ep_id}:{user_id}:{sess_id}")
 /// ```
 #[derive(Clone)]
 pub struct RedisStateStore {
@@ -158,6 +159,53 @@ impl RedisStateStore {
             }
         }
         Ok(items)
+    }
+
+    /// Look up episodes by request correlation ID using the secondary index.
+    ///
+    /// Returns a list of `(episode_id, user_id, session_id)` tuples in
+    /// ascending timestamp order, scoped to `[from_ms, to_ms]` and capped at
+    /// `limit` results.
+    ///
+    /// Key schema: `{prefix}rid_episodes:{request_id}` → SortedSet where
+    /// score = created_at epoch_ms and member = `{episode_id}:{user_id}:{session_id}`.
+    pub async fn get_episodes_by_request_id(
+        &self,
+        request_id: &str,
+        from_ms: i64,
+        to_ms: i64,
+        limit: usize,
+    ) -> StorageResult<Vec<(Uuid, Uuid, Uuid)>> {
+        let rid_key = self.key(&["rid_episodes", request_id]);
+        let mut conn = self.conn.clone();
+
+        let members: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(&rid_key)
+            .arg(from_ms)
+            .arg(to_ms)
+            .arg("LIMIT")
+            .arg(0)
+            .arg(limit as isize)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut result = Vec::with_capacity(members.len());
+        for member in &members {
+            // member format: "{episode_id}:{user_id}:{session_id}"
+            let parts: Vec<&str> = member.splitn(3, ':').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            let ep_id = Uuid::parse_str(parts[0])
+                .map_err(|e| MnemoError::Storage(format!("Invalid UUID in rid index: {}", e)))?;
+            let user_id = Uuid::parse_str(parts[1])
+                .map_err(|e| MnemoError::Storage(format!("Invalid UUID in rid index: {}", e)))?;
+            let sess_id = Uuid::parse_str(parts[2])
+                .map_err(|e| MnemoError::Storage(format!("Invalid UUID in rid index: {}", e)))?;
+            result.push((ep_id, user_id, sess_id));
+        }
+        Ok(result)
     }
 }
 
@@ -370,6 +418,22 @@ impl EpisodeStore for RedisStateStore {
         session.record_episode(episode.id, episode.created_at);
         let sess_key = self.key(&["session", &session_id.to_string()]);
         self.set_json(&sess_key, &session).await?;
+
+        // Index by request_id (O(1) trace lookup)
+        if let Some(rid) = episode
+            .metadata
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            let rid_key = self.key(&["rid_episodes", rid]);
+            let member = format!("{}:{}:{}", episode.id, user_id, session_id);
+            let score = episode.created_at.timestamp_millis() as f64;
+            conn.zadd::<_, _, _, ()>(&rid_key, member, score)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
 
         tracing::debug!(episode_id = %episode.id, session_id = %session_id, "Created episode");
         Ok(episode)
