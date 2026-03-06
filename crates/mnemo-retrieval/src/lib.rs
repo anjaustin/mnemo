@@ -663,11 +663,21 @@ mod tests {
             vec![ScoredHit { id: b }, ScoredHit { id: a }],
         ]);
 
-        // Same inputs should produce identical scores
+        // Same inputs should produce identical scores (order may vary when scores are equal)
         assert_eq!(r1.len(), r2.len());
-        for i in 0..r1.len() {
-            assert_eq!(r1[i].0, r2[i].0);
-            assert!((r1[i].1 - r2[i].1).abs() < f64::EPSILON);
+        let r1_scores: std::collections::HashMap<Uuid, f64> =
+            r1.iter().map(|(id, s)| (*id, *s)).collect();
+        let r2_scores: std::collections::HashMap<Uuid, f64> =
+            r2.iter().map(|(id, s)| (*id, *s)).collect();
+        for (id, score) in &r1_scores {
+            let other = r2_scores.get(id).expect("same IDs in both runs");
+            assert!(
+                (score - other).abs() < f64::EPSILON,
+                "scores for {:?} should match: {} vs {}",
+                id,
+                score,
+                other
+            );
         }
     }
 
