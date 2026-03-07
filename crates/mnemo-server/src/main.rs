@@ -21,6 +21,7 @@ use mnemo_retrieval::RetrievalEngine;
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
 use mnemo_core::traits::fulltext::FullTextStore;
+use mnemo_core::traits::llm::EmbeddingProvider;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -113,6 +114,26 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     tracing::info!("Ingestion worker started");
+
+    // Keep-warm task: fire a no-op embedding every 3 minutes so the embedding
+    // model stays loaded in Ollama (or any provider with idle eviction).
+    // Eliminates cold-start latency spikes on queries after idle periods.
+    // Belt-and-suspenders alongside keep_alive:-1 in embed requests.
+    {
+        let warm_embedder = embedder.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(180));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                if let Err(e) = warm_embedder.embed("warmup").await {
+                    tracing::debug!(error = %e, "keep-warm embed ping failed (non-fatal)");
+                } else {
+                    tracing::debug!("keep-warm embed ping ok");
+                }
+            }
+        });
+    }
 
     // Auth
     let auth_config = if config.auth.enabled {

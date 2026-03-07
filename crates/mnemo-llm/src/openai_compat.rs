@@ -23,6 +23,9 @@ pub struct OpenAiCompatibleEmbedder {
     client: Client,
     config: EmbeddingConfig,
     base_url: String,
+    /// True when the base_url points at an Ollama instance.
+    /// Ollama accepts `keep_alive: -1` to pin the model in memory indefinitely.
+    is_ollama: bool,
 }
 
 // ─── Chat completion types ─────────────────────────────────────────
@@ -53,12 +56,14 @@ struct ChatChoice {
 
 // ─── Embedding types ───────────────────────────────────────────────
 
+/// OpenAI-compatible `/v1/embeddings` request.
 #[derive(Serialize)]
 struct EmbedRequest {
     model: String,
     input: Vec<String>,
 }
 
+/// OpenAI-compatible `/v1/embeddings` response.
 #[derive(Deserialize)]
 struct EmbedResponse {
     data: Vec<EmbedData>,
@@ -67,6 +72,22 @@ struct EmbedResponse {
 #[derive(Deserialize)]
 struct EmbedData {
     embedding: Vec<f32>,
+}
+
+/// Ollama-native `/api/embed` request — supports `keep_alive: -1` to pin the
+/// model in memory indefinitely, avoiding cold-start reload latency.
+#[derive(Serialize)]
+struct OllamaEmbedRequest {
+    model: String,
+    input: Vec<String>,
+    /// -1 keeps the model loaded forever; positive value is seconds.
+    keep_alive: i64,
+}
+
+/// Ollama-native `/api/embed` response — uses `embeddings` not `data[].embedding`.
+#[derive(Deserialize)]
+struct OllamaEmbedResponse {
+    embeddings: Vec<Vec<f32>>,
 }
 
 // ─── Extraction prompt ─────────────────────────────────────────────
@@ -357,28 +378,23 @@ impl OpenAiCompatibleEmbedder {
             .base_url
             .clone()
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        // Detect Ollama by provider name or by the default Ollama port in the URL.
+        let is_ollama = config.provider == "ollama"
+            || base_url.contains(":11434")
+            || base_url.contains("ollama");
         let client = Client::new();
         Self {
             client,
             config,
             base_url,
+            is_ollama,
         }
     }
 }
 
-impl EmbeddingProvider for OpenAiCompatibleEmbedder {
-    async fn embed(&self, text: &str) -> LlmResult<Vec<f32>> {
-        let batch = self.embed_batch(&[text.to_string()]).await?;
-        batch
-            .into_iter()
-            .next()
-            .ok_or_else(|| MnemoError::EmbeddingProvider {
-                provider: self.config.provider.clone(),
-                message: "Empty embedding response".into(),
-            })
-    }
-
-    async fn embed_batch(&self, texts: &[String]) -> LlmResult<Vec<Vec<f32>>> {
+impl OpenAiCompatibleEmbedder {
+    /// OpenAI-compatible `/v1/embeddings` path.
+    async fn embed_batch_openai(&self, texts: &[String]) -> LlmResult<Vec<Vec<f32>>> {
         let request = EmbedRequest {
             model: self.config.model.clone(),
             input: texts.to_vec(),
@@ -424,6 +440,76 @@ impl EmbeddingProvider for OpenAiCompatibleEmbedder {
             .into_iter()
             .map(|d| d.embedding)
             .collect())
+    }
+
+    /// Ollama-native embed path: posts to `/api/embed` with `keep_alive: -1`
+    /// so the model stays pinned in memory indefinitely.
+    ///
+    /// Ollama's `/v1/embeddings` (OpenAI-compat) silently ignores `keep_alive`,
+    /// whereas the native endpoint honours it and reflects the far-future
+    /// `expires_at` in `/api/ps`.
+    async fn embed_batch_ollama(&self, texts: &[String]) -> LlmResult<Vec<Vec<f32>>> {
+        // Strip the `/v1` suffix that the OpenAI-compat base_url ends with.
+        let base = self.base_url.trim_end_matches("/v1");
+        let url = format!("{}/api/embed", base);
+
+        let request = OllamaEmbedRequest {
+            model: self.config.model.clone(),
+            input: texts.to_vec(),
+            keep_alive: -1,
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| MnemoError::EmbeddingProvider {
+                provider: self.config.provider.clone(),
+                message: format!("Request failed: {}", e),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(MnemoError::EmbeddingProvider {
+                provider: self.config.provider.clone(),
+                message: format!("HTTP {}: {}", status, body),
+            });
+        }
+
+        let embed_response: OllamaEmbedResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| MnemoError::EmbeddingProvider {
+                    provider: self.config.provider.clone(),
+                    message: format!("Failed to parse response: {}", e),
+                })?;
+
+        Ok(embed_response.embeddings)
+    }
+}
+
+impl EmbeddingProvider for OpenAiCompatibleEmbedder {
+    async fn embed(&self, text: &str) -> LlmResult<Vec<f32>> {
+        let batch = self.embed_batch(&[text.to_string()]).await?;
+        batch
+            .into_iter()
+            .next()
+            .ok_or_else(|| MnemoError::EmbeddingProvider {
+                provider: self.config.provider.clone(),
+                message: "Empty embedding response".into(),
+            })
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> LlmResult<Vec<Vec<f32>>> {
+        if self.is_ollama {
+            self.embed_batch_ollama(texts).await
+        } else {
+            self.embed_batch_openai(texts).await
+        }
     }
 
     fn dimensions(&self) -> u32 {

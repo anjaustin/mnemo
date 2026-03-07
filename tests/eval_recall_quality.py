@@ -431,6 +431,14 @@ def run_factual_recall(base: str, ingest_wait_s: float = 5.0) -> EvalResult:
     print(f"  Waiting {ingest_wait_s:.0f}s for ingest pipeline...")
     time.sleep(ingest_wait_s)
 
+    # Warmup: fire one throwaway query so the embedding model is hot before
+    # we start measuring latency. Local Ollama models have a cold-start penalty
+    # of 1-3s on the first request after an idle period.
+    try:
+        query_context(base, GOLD_FACTS[0].user, GOLD_FACTS[0].query)
+    except Exception:
+        pass
+
     # Query each fact
     print(f"  Querying {len(GOLD_FACTS)} facts...")
     for fact in GOLD_FACTS:
