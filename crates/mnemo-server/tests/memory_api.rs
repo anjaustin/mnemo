@@ -21,7 +21,7 @@ use mnemo_core::traits::fulltext::FullTextStore;
 use mnemo_core::traits::llm::EmbeddingConfig;
 use mnemo_core::traits::storage::{EdgeStore, EntityStore};
 use mnemo_graph::GraphEngine;
-use mnemo_llm::OpenAiCompatibleEmbedder;
+use mnemo_llm::{EmbedderKind, OpenAiCompatibleEmbedder};
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_server::middleware::{request_context_middleware, REQUEST_ID_HEADER};
 use mnemo_server::routes::{build_router, restore_webhook_state};
@@ -99,13 +99,15 @@ async fn build_test_harness_with_prefilter_and_webhooks(
             }),
     );
 
-    let embedder = Arc::new(OpenAiCompatibleEmbedder::new(EmbeddingConfig {
-        provider: "openai".to_string(),
-        api_key: None,
-        model: "text-embedding-3-small".to_string(),
-        base_url: None,
-        dimensions: 1536,
-    }));
+    let embedder = Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
+        EmbeddingConfig {
+            provider: "openai".to_string(),
+            api_key: None,
+            model: "text-embedding-3-small".to_string(),
+            base_url: None,
+            dimensions: 1536,
+        },
+    )));
 
     let retrieval = Arc::new(RetrievalEngine::new(
         state_store.clone(),
@@ -4551,7 +4553,7 @@ async fn test_webhook_persistence_survives_restart() {
             .expect("Qdrant required for WH-15 test"),
     );
 
-    let embedder = Arc::new(OpenAiCompatibleEmbedder::new(
+    let embedder = Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
         mnemo_core::traits::llm::EmbeddingConfig {
             provider: "openai".to_string(),
             api_key: None,
@@ -4559,7 +4561,7 @@ async fn test_webhook_persistence_survives_restart() {
             base_url: None,
             dimensions: 1536,
         },
-    ));
+    )));
 
     let retrieval = Arc::new(RetrievalEngine::new(
         state_store.clone(),

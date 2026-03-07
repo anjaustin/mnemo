@@ -13,7 +13,7 @@ variable "region" {
 variable "droplet_size" {
   description = "Droplet size slug"
   type        = string
-  default     = "s-2vcpu-4gb"  # 2 vCPU / 4 GB RAM — ~$24/month
+  default     = "s-2vcpu-4gb" # 2 vCPU / 4 GB RAM — ~$24/month
 }
 
 variable "ssh_key_name" {
@@ -25,6 +25,12 @@ variable "mnemo_version" {
   description = "Mnemo server image tag"
   type        = string
   default     = "latest"
+}
+
+variable "mnemo_image" {
+  description = "Full Mnemo server image reference"
+  type        = string
+  default     = "ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h"
 }
 
 variable "mnemo_llm_provider" {
@@ -57,6 +63,30 @@ variable "mnemo_embedding_model" {
   description = "Embedding model name"
   type        = string
   default     = "text-embedding-3-small"
+}
+
+variable "mnemo_embedding_provider" {
+  description = "Embedding provider (openai | local)"
+  type        = string
+  default     = "local"
+}
+
+variable "mnemo_embedding_dimensions" {
+  description = "Embedding vector dimensions"
+  type        = string
+  default     = "384"
+}
+
+variable "mnemo_qdrant_prefix" {
+  description = "Qdrant collection prefix"
+  type        = string
+  default     = "mnemo_do_384_"
+}
+
+variable "mnemo_session_summary_threshold" {
+  description = "Episode threshold for progressive session summarization"
+  type        = string
+  default     = "10"
 }
 
 variable "mnemo_auth_enabled" {

@@ -33,6 +33,12 @@ variable "mnemo_version" {
   default     = "latest"
 }
 
+variable "mnemo_image" {
+  description = "Full Mnemo server image reference"
+  type        = string
+  default     = "ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h"
+}
+
 variable "mnemo_llm_provider" {
   description = "LLM provider (openai | anthropic | ollama | liquid)"
   type        = string
@@ -63,6 +69,30 @@ variable "mnemo_embedding_model" {
   description = "Embedding model name"
   type        = string
   default     = "text-embedding-3-small"
+}
+
+variable "mnemo_embedding_provider" {
+  description = "Embedding provider (openai | local)"
+  type        = string
+  default     = "local"
+}
+
+variable "mnemo_embedding_dimensions" {
+  description = "Embedding vector dimensions"
+  type        = string
+  default     = "384"
+}
+
+variable "mnemo_qdrant_prefix" {
+  description = "Qdrant collection prefix"
+  type        = string
+  default     = "mnemo_vultr_384_"
+}
+
+variable "mnemo_session_summary_threshold" {
+  description = "Episode threshold for progressive session summarization"
+  type        = string
+  default     = "10"
 }
 
 variable "mnemo_auth_enabled" {

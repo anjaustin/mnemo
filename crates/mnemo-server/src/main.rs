@@ -16,7 +16,9 @@ use mnemo_server::config::RerankerConfig;
 
 use mnemo_graph::GraphEngine;
 use mnemo_ingest::{IngestConfig, IngestWorker};
-use mnemo_llm::{AnthropicProvider, OpenAiCompatibleEmbedder, OpenAiCompatibleProvider};
+use mnemo_llm::{AnthropicProvider, EmbedderKind, OpenAiCompatibleEmbedder, OpenAiCompatibleProvider};
+#[cfg(feature = "local-embed")]
+use mnemo_llm::{FastEmbedder, DEFAULT_LOCAL_DIMENSIONS, DEFAULT_LOCAL_MODEL};
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
@@ -56,8 +58,39 @@ async fn main() -> anyhow::Result<()> {
         .await?,
     );
 
-    // Embedder
-    let embedder = Arc::new(OpenAiCompatibleEmbedder::new(config.embedding_config()));
+    // Embedder — choose backend based on MNEMO_EMBEDDING_PROVIDER
+    let embedder: Arc<EmbedderKind> = match config.embedding.provider.as_str() {
+        #[cfg(feature = "local-embed")]
+        "local" => {
+            let model_str = if config.embedding.model.is_empty()
+                || config.embedding.model == "text-embedding-3-small"
+            {
+                DEFAULT_LOCAL_MODEL.to_string()
+            } else {
+                config.embedding.model.clone()
+            };
+            let dims = if config.embedding.dimensions == 1536 {
+                DEFAULT_LOCAL_DIMENSIONS
+            } else {
+                config.embedding.dimensions
+            };
+            tracing::info!(model = %model_str, dims = dims, "Using local fastembed provider");
+            let fe = tokio::task::spawn_blocking(move || FastEmbedder::new(&model_str, dims))
+                .await
+                .map_err(|e| anyhow::anyhow!("spawn_blocking error: {}", e))??;
+            Arc::new(EmbedderKind::Local(fe))
+        }
+        _ => {
+            tracing::info!(
+                provider = %config.embedding.provider,
+                model = %config.embedding.model,
+                "Using OpenAI-compatible embedding provider"
+            );
+            Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
+                config.embedding_config(),
+            )))
+        }
+    };
 
     // Ensure RediSearch indexes exist
     tracing::info!("Ensuring RediSearch indexes");

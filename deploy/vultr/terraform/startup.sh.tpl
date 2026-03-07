@@ -31,12 +31,17 @@ mkdir -p /data/redis /data/qdrant /opt/mnemo
 # ── Environment file ─────────────────────────────────────────────────────────
 cat > /opt/mnemo/.env <<'ENVEOF'
 MNEMO_VERSION=${mnemo_version}
+MNEMO_IMAGE=${mnemo_image}
 MNEMO_SERVER_PORT=8080
 MNEMO_LLM_PROVIDER=${mnemo_llm_provider}
 MNEMO_LLM_API_KEY=${mnemo_llm_api_key}
 MNEMO_LLM_MODEL=${mnemo_llm_model}
+MNEMO_EMBEDDING_PROVIDER=${mnemo_embedding_provider}
 MNEMO_EMBEDDING_API_KEY=${mnemo_embedding_api_key}
 MNEMO_EMBEDDING_MODEL=${mnemo_embedding_model}
+MNEMO_EMBEDDING_DIMENSIONS=${mnemo_embedding_dimensions}
+MNEMO_QDRANT_PREFIX=${mnemo_qdrant_prefix}
+MNEMO_SESSION_SUMMARY_THRESHOLD=${mnemo_session_summary_threshold}
 MNEMO_AUTH_ENABLED=${mnemo_auth_enabled}
 MNEMO_AUTH_API_KEYS=${mnemo_auth_api_keys}
 MNEMO_WEBHOOKS_ENABLED=true
@@ -46,7 +51,7 @@ ENVEOF
 chmod 600 /opt/mnemo/.env
 
 # ── Docker Compose file ──────────────────────────────────────────────────────
-MNEMO_VER=$(grep '^MNEMO_VERSION=' /opt/mnemo/.env | cut -d= -f2)
+MNEMO_IMAGE=$(grep '^MNEMO_IMAGE=' /opt/mnemo/.env | cut -d= -f2-)
 cat > /opt/mnemo/docker-compose.yml <<COMPEOF
 services:
   redis:
@@ -83,7 +88,7 @@ services:
       retries: 5
       start_period: 15s
   mnemo:
-    image: ghcr.io/anjaustin/mnemo/mnemo-server:$MNEMO_VER
+    image: $MNEMO_IMAGE
     container_name: mnemo-server
     restart: always
     ports:

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mnemo_core::models::entity::ExtractedEntity;
 use mnemo_core::traits::llm::{ExtractionResult, LlmProvider, LlmResult};
 use mnemo_graph::GraphEngine;
-use mnemo_llm::{AnthropicProvider, OpenAiCompatibleEmbedder, OpenAiCompatibleProvider};
+use mnemo_llm::{AnthropicProvider, EmbedderKind, OpenAiCompatibleProvider};
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 use serde::{Deserialize, Serialize};
@@ -216,7 +216,7 @@ pub struct AppState {
     pub state_store: Arc<RedisStateStore>,
     pub vector_store: Arc<QdrantVectorStore>,
     pub retrieval:
-        Arc<RetrievalEngine<RedisStateStore, QdrantVectorStore, OpenAiCompatibleEmbedder>>,
+        Arc<RetrievalEngine<RedisStateStore, QdrantVectorStore, EmbedderKind>>,
     pub graph: Arc<GraphEngine<RedisStateStore>>,
     /// LLM provider for on-demand extraction (e.g. `POST /api/v1/memory/extract`).
     /// `None` when no LLM is configured (no-op mode).

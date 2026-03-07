@@ -381,6 +381,9 @@ impl MnemoConfig {
         if let Ok(v) = std::env::var("MNEMO_QDRANT_URL") {
             config.qdrant.url = v;
         }
+        if let Ok(v) = std::env::var("MNEMO_QDRANT_PREFIX") {
+            config.qdrant.collection_prefix = v;
+        }
         if let Ok(v) = std::env::var("MNEMO_LLM_PROVIDER") {
             config.llm.provider = v;
         }
@@ -392,6 +395,9 @@ impl MnemoConfig {
         }
         if let Ok(v) = std::env::var("MNEMO_LLM_BASE_URL") {
             config.llm.base_url = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_EMBEDDING_PROVIDER") {
+            config.embedding.provider = v;
         }
         if let Ok(v) = std::env::var("MNEMO_EMBEDDING_API_KEY") {
             config.embedding.api_key = v;
@@ -663,10 +669,12 @@ mod tests {
 
         std::env::set_var("MNEMO_REDIS_URL", "redis://custom:6380");
         std::env::set_var("MNEMO_QDRANT_URL", "http://custom:6335");
+        std::env::set_var("MNEMO_QDRANT_PREFIX", "mnemo_384_");
 
         let config = MnemoConfig::load(None).unwrap();
         assert_eq!(config.redis.url, "redis://custom:6380");
         assert_eq!(config.qdrant.url, "http://custom:6335");
+        assert_eq!(config.qdrant.collection_prefix, "mnemo_384_");
 
         clear_mnemo_env();
     }

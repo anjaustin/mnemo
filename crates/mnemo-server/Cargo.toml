@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["local-embed"]
+local-embed = ["mnemo-llm/local-embed"]
+
 [[bin]]
 name = "mnemo-server"
 path = "src/main.rs"

@@ -8,11 +8,21 @@ FROM rust:slim-bookworm AS builder
 
 WORKDIR /build
 
+ARG ORT_VERSION=1.23.0
+
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Download ONNX Runtime shared library for fastembed local embeddings.
+RUN mkdir -p /opt/ort \
+    && curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" -o /tmp/onnxruntime.tgz \
+    && tar -xzf /tmp/onnxruntime.tgz -C /opt/ort \
+    && rm /tmp/onnxruntime.tgz
 
 # Cache dependency compilation
 COPY Cargo.toml ./
@@ -45,32 +55,39 @@ RUN find crates -name "*.rs" -exec touch {} +
 # Build the actual application
 RUN cargo build --release --bin mnemo-server
 
-# ── Stage 2: Runtime ────────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+# ── Stage 2: App payload for minimal runtime ────────────────────────
+FROM debian:bookworm-slim AS runtime-rootfs
 
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+ARG ORT_VERSION=1.23.0
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash mnemo
+RUN mkdir -p /rootfs/app/lib /rootfs/app/config /rootfs/app/.fastembed_cache
+
+COPY --from=builder /build/target/release/mnemo-server /rootfs/app/mnemo-server
+COPY --from=builder /opt/ort/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.1.23.0 /rootfs/app/lib/libonnxruntime.so.1.23.0
+COPY config/ /rootfs/app/config/
+COPY --from=builder /lib/x86_64-linux-gnu/libssl.so.3 /rootfs/app/lib/libssl.so.3
+COPY --from=builder /lib/x86_64-linux-gnu/libcrypto.so.3 /rootfs/app/lib/libcrypto.so.3
+COPY --from=builder /lib/x86_64-linux-gnu/libgcc_s.so.1 /rootfs/app/lib/libgcc_s.so.1
+COPY --from=builder /lib/x86_64-linux-gnu/libstdc++.so.6 /rootfs/app/lib/libstdc++.so.6
+
+RUN ln -s libonnxruntime.so.1.23.0 /rootfs/app/lib/libonnxruntime.so.1 \
+    && ln -s libonnxruntime.so.1.23.0 /rootfs/app/lib/libonnxruntime.so
+
+# ── Stage 3: Final image ────────────────────────────────────────────
+FROM gcr.io/distroless/base-nossl-debian12:nonroot AS runtime
 
 WORKDIR /app
 
-# Copy the binary
-COPY --from=builder /build/target/release/mnemo-server /app/mnemo-server
+COPY --from=runtime-rootfs --chown=65532:65532 /rootfs/app/ /app/
 
-# Copy default config
-COPY config/ /app/config/
-
-# Set ownership
-RUN chown -R mnemo:mnemo /app
-
-USER mnemo
+USER 65532:65532
 
 EXPOSE 8080 50051
 
+ENV HOME=/app
+ENV FASTEMBED_CACHE_PATH=/app/.fastembed_cache
 ENV MNEMO_CONFIG=/app/config/default.toml
+ENV ORT_DYLIB_PATH=/app/lib/libonnxruntime.so.1.23.0
+ENV LD_LIBRARY_PATH=/app/lib
 
 ENTRYPOINT ["/app/mnemo-server"]
