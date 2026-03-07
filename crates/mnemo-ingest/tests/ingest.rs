@@ -460,3 +460,127 @@ async fn test_ingest_retry_on_failure() {
         processed.processing_error
     );
 }
+
+#[tokio::test]
+async fn test_progressive_session_summarization_triggers_at_threshold() {
+    // After processing exactly `session_summary_threshold` episodes, the
+    // ingest worker must call LLM::summarize() and persist the result into
+    // session.summary.  We set threshold=1 so it fires on every episode,
+    // making the assertion unconditional after a single poll cycle.
+    let store = Arc::new(test_store("ingest_summary").await);
+    let (user_id, session_id) = setup_user_session(&store).await;
+
+    // Pre-condition: session.summary must be None before ingest
+    let session_before = store.get_session(session_id).await.unwrap();
+    assert!(
+        session_before.summary.is_none(),
+        "session.summary must start as None"
+    );
+
+    store
+        .create_episode(
+            CreateEpisodeRequest {
+                id: None,
+                episode_type: EpisodeType::Message,
+                content: "Kendra switched to Nike running shoes for her marathon training."
+                    .into(),
+                role: Some(MessageRole::User),
+                name: Some("Kendra".into()),
+                metadata: serde_json::json!({}),
+                created_at: None,
+            },
+            session_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+    let worker = IngestWorker::new(
+        store.clone(),
+        Arc::new(NoopVectorStore),
+        Arc::new(MockLlm::new()),
+        Arc::new(MockEmbedder),
+        IngestConfig {
+            poll_interval_ms: 50,
+            batch_size: 10,
+            concurrency: 1,
+            max_retries: 3,
+            // threshold=1 means summarize after every single episode
+            session_summary_threshold: 1,
+        },
+    );
+
+    tokio::select! {
+        _ = worker.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(800)) => {},
+    }
+
+    // After processing, session.summary must be non-None and non-empty
+    let session_after = store.get_session(session_id).await.unwrap();
+    assert!(
+        session_after.summary.is_some(),
+        "session.summary must be set after threshold episodes were processed"
+    );
+    let summary = session_after.summary.unwrap();
+    assert!(
+        !summary.is_empty(),
+        "session.summary must be non-empty, got: {:?}",
+        summary
+    );
+    assert!(
+        session_after.summary_tokens > 0,
+        "session.summary_tokens must be > 0"
+    );
+}
+
+#[tokio::test]
+async fn test_progressive_summarization_disabled_when_threshold_zero() {
+    // When session_summary_threshold=0, no summarization must occur
+    // even after processing episodes.
+    let store = Arc::new(test_store("ingest_summary_disabled").await);
+    let (user_id, session_id) = setup_user_session(&store).await;
+
+    store
+        .create_episode(
+            CreateEpisodeRequest {
+                id: None,
+                episode_type: EpisodeType::Message,
+                content: "This episode should not trigger summarization.".into(),
+                role: Some(MessageRole::User),
+                name: None,
+                metadata: serde_json::json!({}),
+                created_at: None,
+            },
+            session_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+    let worker = IngestWorker::new(
+        store.clone(),
+        Arc::new(NoopVectorStore),
+        Arc::new(MockLlm::new()),
+        Arc::new(MockEmbedder),
+        IngestConfig {
+            poll_interval_ms: 50,
+            batch_size: 10,
+            concurrency: 1,
+            max_retries: 3,
+            session_summary_threshold: 0, // disabled
+        },
+    );
+
+    tokio::select! {
+        _ = worker.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(800)) => {},
+    }
+
+    // session.summary must remain None
+    let session_after = store.get_session(session_id).await.unwrap();
+    assert!(
+        session_after.summary.is_none(),
+        "session.summary must stay None when threshold=0, got: {:?}",
+        session_after.summary
+    );
+}

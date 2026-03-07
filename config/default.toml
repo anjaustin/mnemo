@@ -71,6 +71,9 @@ max_retries = 3
 concurrency = 4
 # How often to check for pending episodes (milliseconds).
 poll_interval_ms = 500
+# After how many completed episodes per session to trigger progressive summarization.
+# Set to 0 to disable. The summary is stored in session.summary and updated in place.
+session_summary_threshold = 10
 
 [graph]
 # Enable community detection (groups related entities into clusters).
