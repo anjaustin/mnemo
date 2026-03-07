@@ -19,8 +19,9 @@ use mnemo_core::models::edge::Edge;
 use mnemo_core::models::entity::{Entity, ExtractedEntity};
 use mnemo_core::models::episode::Episode;
 use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
+use mnemo_core::models::session::UpdateSessionRequest;
 use mnemo_core::traits::storage::{
-    EdgeStore, EntityStore, EpisodeStore, StorageResult, VectorStore,
+    EdgeStore, EntityStore, EpisodeStore, SessionStore, StorageResult, VectorStore,
 };
 
 fn episode_request_id(episode: &Episode) -> Option<&str> {
@@ -42,6 +43,9 @@ pub struct IngestConfig {
     pub concurrency: usize,
     /// Max retries for failed episodes before marking as permanently failed.
     pub max_retries: u32,
+    /// Number of episodes after which to trigger progressive session summarization.
+    /// Set to 0 to disable. Default: 10.
+    pub session_summary_threshold: u32,
 }
 
 impl Default for IngestConfig {
@@ -51,6 +55,7 @@ impl Default for IngestConfig {
             batch_size: 10,
             concurrency: 4,
             max_retries: 3,
+            session_summary_threshold: 10,
         }
     }
 }
@@ -61,7 +66,7 @@ impl Default for IngestConfig {
 /// and processing them through the extraction → graph construction pipeline.
 pub struct IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore,
+    S: EpisodeStore + EntityStore + EdgeStore + SessionStore,
     V: VectorStore,
     L: LlmProvider,
     E: EmbeddingProvider,
@@ -75,7 +80,7 @@ where
 
 impl<S, V, L, E> IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore + Send + Sync + 'static,
+    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + Send + Sync + 'static,
     V: VectorStore + Send + Sync + 'static,
     L: LlmProvider + Send + Sync + 'static,
     E: EmbeddingProvider + Send + Sync + 'static,
@@ -288,6 +293,54 @@ where
         done.mark_completed(new_entity_ids, new_edge_ids);
         self.state_store.update_episode(&done).await?;
         tracing::debug!(episode_id = %episode.id, request_id = ?episode_request_id(episode), "Episode completed");
+
+        // 7. Progressive session summarization
+        //    Runs if threshold is enabled and episode_count is a multiple of the threshold.
+        let threshold = self.config.session_summary_threshold;
+        if threshold > 0 {
+            if let Ok(session) = self.state_store.get_session(episode.session_id).await {
+                if session.episode_count > 0 && session.episode_count % u64::from(threshold) == 0 {
+                    tracing::debug!(
+                        session_id = %episode.session_id,
+                        episode_count = session.episode_count,
+                        threshold,
+                        "Triggering progressive session summarization"
+                    );
+                    match self.llm.summarize(&episode.content, 256).await {
+                        Ok(summary_text) => {
+                            // Rough token count: ~4 chars/token
+                            let tokens = (summary_text.len() / 4).max(1) as u32;
+                            let update = UpdateSessionRequest {
+                                summary: Some(summary_text),
+                                summary_tokens: Some(tokens),
+                                ..Default::default()
+                            };
+                            if let Err(e) = self
+                                .state_store
+                                .update_session(episode.session_id, update)
+                                .await
+                            {
+                                // Non-fatal: log and continue
+                                tracing::warn!(
+                                    session_id = %episode.session_id,
+                                    error = %e,
+                                    "Failed to persist session summary"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            // Non-fatal: summarization failure must not block ingest
+                            tracing::warn!(
+                                session_id = %episode.session_id,
+                                error = %e,
+                                "Session summarization LLM call failed"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }

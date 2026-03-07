@@ -86,6 +86,18 @@ jobs:
           wait $SERVER_PID 2>/dev/null || true
           exit $STATUS
 
+      - name: Run LongMemEval benchmark (Mnemo)
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.benchmark_target == 'mnemo' || github.event.inputs.benchmark_target == 'both'
+        run: |
+          target/debug/mnemo-server >/tmp/mnemo_longmem.log 2>&1 &
+          SERVER_PID=$!
+          sleep 3
+          python3 eval/longmem_eval.py --mnemo-base-url http://localhost:8080 --gate-only | tee /tmp/longmem_eval_table.txt
+          STATUS=$?
+          kill $SERVER_PID || true
+          wait $SERVER_PID 2>/dev/null || true
+          exit $STATUS
+
       - name: Run Zep benchmark (manual)
         if: github.event_name == 'workflow_dispatch' && (github.event.inputs.benchmark_target == 'zep' || github.event.inputs.benchmark_target == 'both')
         env:
@@ -125,6 +137,13 @@ jobs:
             echo "### Mnemo Scientific Pack v2" >> "$GITHUB_STEP_SUMMARY"
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             cat /tmp/mnemo_eval_scientific_v2_table.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f /tmp/longmem_eval_table.txt ]; then
+            echo "### LongMemEval (Mnemo)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/longmem_eval_table.txt >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
           fi

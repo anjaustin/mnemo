@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.7] — 2026-03-06
+
+### Added
+
+- **Ollama native embed keep-warm** (`mnemo-llm`, `mnemo-server`): Ollama's `/v1/embeddings` (OpenAI-compat) silently ignores `keep_alive`; switched to native `/api/embed` endpoint with `keep_alive: -1` so the model never unloads between requests. Background 180-second keep-warm task in `main.rs` pings the embedder as belt-and-suspenders against OS-level eviction. Eval result with fix: 3/3 quality gates pass — 95% factual recall, 100% temporal query return rate, p95 latency 1575ms.
+- **`AsyncMnemo` full parity** (`sdk/python`): 18 methods were present in the sync `Mnemo` client but absent from `AsyncMnemo`. All 18 are now implemented: `context_head`, `time_travel_trace`, `time_travel_summary`, `preview_policy`, `get_policy_audit`, `get_policy_violations`, `create_webhook`, `get_webhook`, `delete_webhook`, `get_webhook_events`, `get_dead_letter_events`, `replay_events`, `retry_event`, `get_webhook_stats`, `get_webhook_audit`, `trace_lookup`, `import_chat_history`, `get_import_job`. Backed by 18 new falsification tests (all pass; total async test count raised from 22 to 40).
+- **Progressive session summarization** (`mnemo-ingest`, `mnemo-core`, `mnemo-server`): after every N completed episodes (default N=10, configurable via `MNEMO_SESSION_SUMMARY_THRESHOLD` / `[extraction] session_summary_threshold`), the ingest worker calls `LlmProvider::summarize()` and writes the result back to the session via `update_session`. Non-fatal — LLM failures are logged and ingest continues. `UpdateSessionRequest` gains `summary: Option<String>` and `summary_tokens: Option<u32>` fields; `Session::apply_update()` updated accordingly.
+- **LongMemEval benchmark** (`eval/longmem_eval.py`): Mnemo-native evaluation harness covering the 5 LongMemEval task types — single-hop (4 cases), multi-hop (3), temporal (3), preference-tracking (3), and absent-information detection (3). Gate thresholds: single-hop ≥ 80%, multi-hop ≥ 70%, temporal ≥ 75%, preference ≥ 80%, absent ≥ 90%. Integrated into `.github/workflows/benchmark-eval.yml`; results published to job summary. Accepts `--cases-file` for additional JSON case packs and `--gate-only` for CI exit-code gating.
+
+### Fixed
+
+- **33 documentation gaps** across P0/P1/P2 priority levels:
+  - `ChangesSinceResult` and `TimeTravelTraceResult` in `_models.py` had wrong field names that didn't match the actual server response shape; body key mappings corrected in both `client.py` and `async_client.py`.
+  - `POST /api/v1/memory/extract` and `GET /api/v1/audit/export` were entirely absent from `docs/API.md`; full request/response documentation added for both.
+  - `docs/ARCHITECTURE.md`: 7-step retrieval pipeline documented; 11 Redis key patterns added; Qdrant payload indexes section added; Agent Identity Substrate section added; Webhook Delivery Architecture section added; Kubernetes note corrected.
+  - `sdk/python/README.md`: `context()` mode values corrected (`"head"`, `"hybrid"`, `"historical"` — not `"semantic"` / `"temporal"`).
+  - `README.md`: version number updated to `0.3.6`; reranker TOML config block added to env var table.
+  - `crates/mnemo-core/src/models/agent.rs`: full `///` doc comments on all 11 structs/enums and their fields.
+  - `docs/TESTING.md`: `eval_recall_quality.py` row added; section 3.5 with run instructions added; integration/unit test counts corrected (91 integration / 24 unit).
+  - `CONTRIBUTING.md`: "Areas Where Help Needed" updated — shipped items removed, done annotations added.
+  - `FALSIFICATION.md`: resolved annotations added for issues 1, 3, 6, 15, 21, 22.
+
 ## [0.3.6] — 2026-03-06
 
 ### Added

@@ -152,6 +152,10 @@ pub struct ExtractionSection {
     pub max_retries: u32,
     #[serde(default = "default_poll_interval")]
     pub poll_interval_ms: u64,
+    /// How many episodes must accumulate in a session before the ingest worker
+    /// generates (or re-generates) a progressive summary. Set to 0 to disable.
+    #[serde(default = "default_session_summary_threshold")]
+    pub session_summary_threshold: u32,
 }
 
 impl Default for ExtractionSection {
@@ -161,6 +165,7 @@ impl Default for ExtractionSection {
             concurrency: default_concurrency(),
             max_retries: default_max_retries(),
             poll_interval_ms: default_poll_interval(),
+            session_summary_threshold: default_session_summary_threshold(),
         }
     }
 }
@@ -308,6 +313,9 @@ fn default_max_retries() -> u32 {
 fn default_poll_interval() -> u64 {
     500
 }
+fn default_session_summary_threshold() -> u32 {
+    10
+}
 fn default_metadata_scan_limit() -> u32 {
     400
 }
@@ -411,6 +419,13 @@ impl MnemoConfig {
                 .filter(|s| !s.is_empty())
                 .collect();
             config.auth.api_keys.extend(keys);
+        }
+
+        // Extraction overrides
+        if let Ok(v) = std::env::var("MNEMO_SESSION_SUMMARY_THRESHOLD") {
+            if let Ok(n) = v.parse() {
+                config.extraction.session_summary_threshold = n;
+            }
         }
 
         // Retrieval / metadata prefilter overrides

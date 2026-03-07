@@ -297,6 +297,7 @@ async fn test_ingest_full_pipeline() {
             batch_size: 10,
             concurrency: 1,
             max_retries: 3,
+            session_summary_threshold: 0, // disable in tests
         },
     );
 
@@ -351,6 +352,7 @@ async fn test_ingest_entity_dedup_across_episodes() {
             batch_size: 10,
             concurrency: 1,
             max_retries: 3,
+            session_summary_threshold: 0, // disable in tests
         },
     );
 
@@ -438,6 +440,7 @@ async fn test_ingest_retry_on_failure() {
             batch_size: 10,
             concurrency: 1,
             max_retries: 3,
+            session_summary_threshold: 0, // disable in tests
         },
     );
 

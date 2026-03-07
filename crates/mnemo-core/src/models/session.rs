@@ -71,6 +71,14 @@ pub struct UpdateSessionRequest {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+
+    /// Progressive summary written by the ingest pipeline after every N episodes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+
+    /// Token count of the written summary (for budget tracking).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_tokens: Option<u32>,
 }
 
 /// Pagination parameters for listing sessions.
@@ -118,6 +126,12 @@ impl Session {
         }
         if let Some(metadata) = update.metadata {
             self.metadata = metadata;
+        }
+        if let Some(summary) = update.summary {
+            self.summary = Some(summary);
+        }
+        if let Some(tokens) = update.summary_tokens {
+            self.summary_tokens = tokens;
         }
         self.updated_at = Utc::now();
         self

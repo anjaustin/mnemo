@@ -77,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
         batch_size: config.extraction.batch_size,
         concurrency: config.extraction.concurrency,
         max_retries: config.extraction.max_retries,
+        session_summary_threshold: config.extraction.session_summary_threshold,
     };
 
     // Spawn ingestion worker with provider-specific LLM type

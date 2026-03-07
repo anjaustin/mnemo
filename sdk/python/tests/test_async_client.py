@@ -22,11 +22,24 @@ from aioresponses import aioresponses
 
 from mnemo import AsyncMnemo
 from mnemo._models import (
-    HealthResult,
-    RememberResult,
+    AuditRecord,
+    ChangesSinceResult,
     ContextResult,
     DeleteResult,
+    HealthResult,
+    ImportJobResult,
     MessagesResult,
+    PolicyPreviewResult,
+    PolicyResult,
+    RememberResult,
+    ReplayResult,
+    RetryResult,
+    TimeTravelSummaryResult,
+    TimeTravelTraceResult,
+    TraceLookupResult,
+    WebhookEvent,
+    WebhookResult,
+    WebhookStats,
 )
 from mnemo._errors import (
     MnemoHttpError,
@@ -351,19 +364,23 @@ async def test_async_changes_since():
             m.post(
                 f"{BASE}/api/v1/memory/kendra/changes_since",
                 payload={
-                    "facts_added": ["Kendra likes dogs"],
-                    "facts_superseded": [],
-                    "entities_updated": ["Kendra"],
-                    "from_dt": "2025-01-01T00:00:00Z",
-                    "to_dt": "2025-03-01T00:00:00Z",
+                    "added_facts": ["Kendra likes dogs"],
+                    "superseded_facts": [],
+                    "confidence_deltas": [],
+                    "head_changes": [],
+                    "added_episodes": [],
+                    "summary": "one new fact",
+                    "from": "2025-01-01T00:00:00Z",
+                    "to": "2025-03-01T00:00:00Z",
                 },
             )
             result = await client.changes_since(
                 "kendra", from_dt="2025-01-01T00:00:00Z", to_dt="2025-03-01T00:00:00Z"
             )
-            assert len(result.facts_added) == 1
-            assert result.facts_added[0] == "Kendra likes dogs"
-            assert len(result.entities_updated) == 1
+            assert isinstance(result, ChangesSinceResult)
+            assert len(result.added_facts) == 1
+            assert result.added_facts[0] == "Kendra likes dogs"
+            assert result.summary == "one new fact"
 
 
 @pytest.mark.asyncio
@@ -530,6 +547,451 @@ async def test_sync_exponential_backoff():
     assert all(d >= 0 for d in sleep_calls), (
         f"all delays must be non-negative: {sleep_calls}"
     )
+
+
+# ── SDK-08c: 18 parity methods ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_async_context_head():
+    """context_head() delegates to context() with mode='head'."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/memory/kendra/context",
+                payload={
+                    "context": "head context",
+                    "token_count": 3,
+                    "mode": "head",
+                    "entities": [],
+                    "facts": [],
+                    "episodes": [],
+                },
+            )
+            result = await client.context_head("kendra", "latest info")
+            assert isinstance(result, ContextResult)
+            assert result.mode == "head"
+            assert result.text == "head context"
+
+
+@pytest.mark.asyncio
+async def test_async_time_travel_trace():
+    """time_travel_trace() parses TimeTravelTraceResult correctly."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/memory/kendra/time_travel/trace",
+                payload={
+                    "snapshot_from": {"context": "old"},
+                    "snapshot_to": {"context": "new"},
+                    "gained_facts": ["Kendra moved to Denver"],
+                    "lost_facts": [],
+                    "gained_episodes": [],
+                    "lost_episodes": [],
+                    "timeline": [],
+                    "summary": "one fact gained",
+                    "from": "2025-01-01T00:00:00Z",
+                    "to": "2025-06-01T00:00:00Z",
+                },
+            )
+            result = await client.time_travel_trace(
+                "kendra",
+                "where does Kendra live?",
+                from_dt="2025-01-01T00:00:00Z",
+                to_dt="2025-06-01T00:00:00Z",
+            )
+            assert isinstance(result, TimeTravelTraceResult)
+            assert result.gained_facts == ["Kendra moved to Denver"]
+            assert result.summary == "one fact gained"
+            assert result.from_dt == "2025-01-01T00:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_async_time_travel_summary():
+    """time_travel_summary() parses TimeTravelSummaryResult correctly."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/memory/kendra/time_travel/summary",
+                payload={
+                    "gained_count": 2,
+                    "lost_count": 0,
+                    "from": "2025-01-01T00:00:00Z",
+                    "to": "2025-06-01T00:00:00Z",
+                },
+            )
+            result = await client.time_travel_summary(
+                "kendra",
+                "changes",
+                from_dt="2025-01-01T00:00:00Z",
+                to_dt="2025-06-01T00:00:00Z",
+            )
+            assert isinstance(result, TimeTravelSummaryResult)
+            assert result.summary.get("gained_count") == 2
+
+
+@pytest.mark.asyncio
+async def test_async_preview_policy():
+    """preview_policy() parses PolicyPreviewResult correctly."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/policies/kendra/preview",
+                payload={
+                    "estimated_episodes_affected": 7,
+                    "policy": {"retention_days_message": 30},
+                },
+            )
+            result = await client.preview_policy("kendra", retention_days_message=30)
+            assert isinstance(result, PolicyPreviewResult)
+            assert result.estimated_episodes_affected == 7
+            assert result.policy.get("retention_days_message") == 30
+
+
+@pytest.mark.asyncio
+async def test_async_get_policy_audit():
+    """get_policy_audit() returns list of AuditRecord."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/policies/kendra/audit?limit=50",
+                payload={
+                    "data": [
+                        {
+                            "id": "a-1",
+                            "user_id": "u-kendra",
+                            "action": "policy_updated",
+                            "details": {},
+                            "at": "2025-01-01T00:00:00Z",
+                        }
+                    ]
+                },
+            )
+            records = await client.get_policy_audit("kendra")
+            assert len(records) == 1
+            assert isinstance(records[0], AuditRecord)
+            assert records[0].action == "policy_updated"
+
+
+@pytest.mark.asyncio
+async def test_async_get_policy_violations():
+    """get_policy_violations() returns list of AuditRecord for violations."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/policies/kendra/violations"
+                f"?from=2025-01-01T00:00:00Z&to=2025-06-01T00:00:00Z&limit=50",
+                payload={
+                    "data": [
+                        {
+                            "id": "v-1",
+                            "user_id": "u-kendra",
+                            "action": "retention_violation",
+                            "details": {},
+                            "at": "2025-03-01T00:00:00Z",
+                        }
+                    ]
+                },
+            )
+            records = await client.get_policy_violations(
+                "kendra",
+                from_dt="2025-01-01T00:00:00Z",
+                to_dt="2025-06-01T00:00:00Z",
+            )
+            assert len(records) == 1
+            assert isinstance(records[0], AuditRecord)
+            assert records[0].action == "retention_violation"
+
+
+@pytest.mark.asyncio
+async def test_async_create_webhook():
+    """create_webhook() sends correct payload and returns WebhookResult."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/memory/webhooks",
+                payload={
+                    "webhook": {
+                        "id": "wh-1",
+                        "user_id": "u-kendra",
+                        "target_url": "https://example.com/hook",
+                        "events": ["memory.created"],
+                        "enabled": True,
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "updated_at": "2025-01-01T00:00:00Z",
+                    }
+                },
+            )
+            result = await client.create_webhook(
+                "kendra", "https://example.com/hook", ["memory.created"]
+            )
+            assert isinstance(result, WebhookResult)
+            assert result.id == "wh-1"
+            assert result.target_url == "https://example.com/hook"
+            assert "memory.created" in result.events
+
+
+@pytest.mark.asyncio
+async def test_async_get_webhook():
+    """get_webhook() returns WebhookResult for a given ID."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/memory/webhooks/wh-1",
+                payload={
+                    "webhook": {
+                        "id": "wh-1",
+                        "user_id": "u-kendra",
+                        "target_url": "https://example.com/hook",
+                        "events": ["memory.created"],
+                        "enabled": True,
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "updated_at": "2025-01-01T00:00:00Z",
+                    }
+                },
+            )
+            result = await client.get_webhook("wh-1")
+            assert isinstance(result, WebhookResult)
+            assert result.id == "wh-1"
+            assert result.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_async_delete_webhook():
+    """delete_webhook() returns DeleteResult."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.delete(
+                f"{BASE}/api/v1/memory/webhooks/wh-1",
+                payload={"deleted": True},
+            )
+            result = await client.delete_webhook("wh-1")
+            assert isinstance(result, DeleteResult)
+            assert result.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_async_get_webhook_events():
+    """get_webhook_events() returns list of WebhookEvent."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/memory/webhooks/wh-1/events?limit=20",
+                payload={
+                    "events": [
+                        {
+                            "id": "ev-1",
+                            "webhook_id": "wh-1",
+                            "event_type": "memory.created",
+                            "user_id": "u-kendra",
+                            "payload": {},
+                            "created_at": "2025-01-01T00:00:00Z",
+                            "attempts": 1,
+                            "delivered": True,
+                            "dead_letter": False,
+                        }
+                    ]
+                },
+            )
+            events = await client.get_webhook_events("wh-1")
+            assert len(events) == 1
+            assert isinstance(events[0], WebhookEvent)
+            assert events[0].event_type == "memory.created"
+            assert events[0].delivered is True
+
+
+@pytest.mark.asyncio
+async def test_async_get_dead_letter_events():
+    """get_dead_letter_events() returns list of WebhookEvent in dead-letter queue."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/memory/webhooks/wh-1/events/dead-letter?limit=20",
+                payload={
+                    "events": [
+                        {
+                            "id": "ev-dead-1",
+                            "webhook_id": "wh-1",
+                            "event_type": "memory.created",
+                            "user_id": "u-kendra",
+                            "payload": {},
+                            "created_at": "2025-01-01T00:00:00Z",
+                            "attempts": 5,
+                            "delivered": False,
+                            "dead_letter": True,
+                        }
+                    ]
+                },
+            )
+            events = await client.get_dead_letter_events("wh-1")
+            assert len(events) == 1
+            assert isinstance(events[0], WebhookEvent)
+            assert events[0].dead_letter is True
+            assert events[0].delivered is False
+
+
+@pytest.mark.asyncio
+async def test_async_replay_events():
+    """replay_events() parses ReplayResult correctly."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/memory/webhooks/wh-1/events/replay"
+                f"?limit=100&include_delivered=true&include_dead_letter=true",
+                payload={"replayed": 3, "events": ["ev-1", "ev-2", "ev-3"]},
+            )
+            result = await client.replay_events("wh-1")
+            assert isinstance(result, ReplayResult)
+            assert result.replayed == 3
+            assert len(result.events) == 3
+
+
+@pytest.mark.asyncio
+async def test_async_retry_event():
+    """retry_event() parses RetryResult correctly."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/memory/webhooks/wh-1/events/ev-1/retry",
+                payload={"ok": True, "event_id": "ev-1"},
+            )
+            result = await client.retry_event("wh-1", "ev-1")
+            assert isinstance(result, RetryResult)
+            assert result.ok is True
+            assert result.event_id == "ev-1"
+
+
+@pytest.mark.asyncio
+async def test_async_get_webhook_stats():
+    """get_webhook_stats() parses WebhookStats correctly."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/memory/webhooks/wh-1/stats?window_seconds=300",
+                payload={
+                    "webhook_id": "wh-1",
+                    "window_seconds": 300,
+                    "delivered": 10,
+                    "failed": 2,
+                    "dead_letter": 1,
+                },
+            )
+            result = await client.get_webhook_stats("wh-1")
+            assert isinstance(result, WebhookStats)
+            assert result.delivered == 10
+            assert result.failed == 2
+            assert result.dead_letter == 1
+
+
+@pytest.mark.asyncio
+async def test_async_get_webhook_audit():
+    """get_webhook_audit() returns list of AuditRecord for a webhook."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/memory/webhooks/wh-1/audit?limit=20",
+                payload={
+                    "events": [
+                        {
+                            "id": "wa-1",
+                            "user_id": "u-kendra",
+                            "action": "webhook_created",
+                            "details": {},
+                            "at": "2025-01-01T00:00:00Z",
+                        }
+                    ]
+                },
+            )
+            records = await client.get_webhook_audit("wh-1")
+            assert len(records) == 1
+            assert isinstance(records[0], AuditRecord)
+            assert records[0].action == "webhook_created"
+
+
+@pytest.mark.asyncio
+async def test_async_trace_lookup():
+    """trace_lookup() parses TraceLookupResult correctly."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/traces/req-abc?limit=100",
+                payload={
+                    "episodes": [{"id": "ep-1"}],
+                    "webhook_events": [],
+                    "webhook_audit": [],
+                    "governance_audit": [],
+                },
+            )
+            result = await client.trace_lookup("req-abc")
+            assert isinstance(result, TraceLookupResult)
+            assert result.request_id == "req-abc"
+            assert len(result.episodes) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_import_chat_history():
+    """import_chat_history() sends correct payload and parses ImportJobResult."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/import/chat-history",
+                payload={
+                    "job": {
+                        "id": "job-1",
+                        "source": "openai",
+                        "user": "kendra",
+                        "dry_run": False,
+                        "status": "queued",
+                        "total_messages": 0,
+                        "imported_messages": 0,
+                        "failed_messages": 0,
+                        "sessions_touched": 0,
+                        "errors": [],
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "started_at": None,
+                        "finished_at": None,
+                    }
+                },
+            )
+            result = await client.import_chat_history(
+                "kendra", "openai", {"conversations": []}
+            )
+            assert isinstance(result, ImportJobResult)
+            assert result.id == "job-1"
+            assert result.source == "openai"
+            assert result.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_async_get_import_job():
+    """get_import_job() returns ImportJobResult for a completed job."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/import/jobs/job-1",
+                payload={
+                    "job": {
+                        "id": "job-1",
+                        "source": "openai",
+                        "user": "kendra",
+                        "dry_run": False,
+                        "status": "completed",
+                        "total_messages": 50,
+                        "imported_messages": 50,
+                        "failed_messages": 0,
+                        "sessions_touched": 3,
+                        "errors": [],
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "started_at": "2025-01-01T00:00:01Z",
+                        "finished_at": "2025-01-01T00:00:10Z",
+                    }
+                },
+            )
+            result = await client.get_import_job("job-1")
+            assert isinstance(result, ImportJobResult)
+            assert result.status == "completed"
+            assert result.total_messages == 50
+            assert result.sessions_touched == 3
 
 
 if __name__ == "__main__":

@@ -434,6 +434,385 @@ class AsyncMnemo:
         )
         return DeleteResult(deleted=bool(body.get("deleted")), request_id=rid)
 
+    # ── Time-travel ─────────────────────────────────────────────────
+
+    async def context_head(
+        self,
+        user: str,
+        query: str,
+        *,
+        session: str | None = None,
+        max_tokens: int | None = None,
+        min_relevance: float | None = None,
+        time_intent: str | None = None,
+        temporal_weight: float | None = None,
+        request_id: str | None = None,
+    ) -> ContextResult:
+        """Retrieve only the most recent session head (fast path)."""
+        return await self.context(
+            user,
+            query,
+            session=session,
+            max_tokens=max_tokens,
+            min_relevance=min_relevance,
+            mode="head",
+            time_intent=time_intent,
+            temporal_weight=temporal_weight,
+            request_id=request_id,
+        )
+
+    async def time_travel_trace(
+        self,
+        user: str,
+        query: str,
+        *,
+        from_dt: str,
+        to_dt: str,
+        session: str | None = None,
+        contract: str | None = None,
+        retrieval_policy: str | None = None,
+        max_tokens: int | None = None,
+        min_relevance: float | None = None,
+        request_id: str | None = None,
+    ) -> TimeTravelTraceResult:
+        """Diff memory snapshots over a time window."""
+        payload: dict[str, Any] = {
+            "query": query,
+            "from_dt": from_dt,
+            "to_dt": to_dt,
+        }
+        opt(payload, "session", session)
+        opt(payload, "contract", contract)
+        opt(payload, "retrieval_policy", retrieval_policy)
+        opt(payload, "max_tokens", max_tokens)
+        opt(payload, "min_relevance", min_relevance)
+        body, rid = await self._req(
+            "POST",
+            f"/api/v1/memory/{user}/time_travel/trace",
+            payload,
+            request_id=request_id,
+        )
+        return TimeTravelTraceResult(
+            snapshot_from=dict(body.get("snapshot_from", {})),
+            snapshot_to=dict(body.get("snapshot_to", {})),
+            gained_facts=list(body.get("gained_facts", [])),
+            lost_facts=list(body.get("lost_facts", [])),
+            gained_episodes=list(body.get("gained_episodes", [])),
+            lost_episodes=list(body.get("lost_episodes", [])),
+            timeline=list(body.get("timeline", [])),
+            summary=str(body.get("summary", "")),
+            from_dt=str(body.get("from", from_dt)),
+            to_dt=str(body.get("to", to_dt)),
+            request_id=rid,
+        )
+
+    async def time_travel_summary(
+        self,
+        user: str,
+        query: str,
+        *,
+        from_dt: str,
+        to_dt: str,
+        session: str | None = None,
+        request_id: str | None = None,
+    ) -> TimeTravelSummaryResult:
+        """Lightweight snapshot delta counts for fast rendering."""
+        payload: dict[str, Any] = {
+            "query": query,
+            "from_dt": from_dt,
+            "to_dt": to_dt,
+        }
+        opt(payload, "session", session)
+        body, rid = await self._req(
+            "POST",
+            f"/api/v1/memory/{user}/time_travel/summary",
+            payload,
+            request_id=request_id,
+        )
+        return TimeTravelSummaryResult(summary=body, request_id=rid)
+
+    # ── Governance / policies (extended) ────────────────────────────
+
+    async def preview_policy(
+        self,
+        user: str,
+        *,
+        retention_days_message: int | None = None,
+        retention_days_text: int | None = None,
+        retention_days_json: int | None = None,
+        request_id: str | None = None,
+    ) -> PolicyPreviewResult:
+        """Estimate impact of a policy change without applying it."""
+        payload: dict[str, Any] = {}
+        opt(payload, "retention_days_message", retention_days_message)
+        opt(payload, "retention_days_text", retention_days_text)
+        opt(payload, "retention_days_json", retention_days_json)
+        body, rid = await self._req(
+            "POST", f"/api/v1/policies/{user}/preview", payload, request_id=request_id
+        )
+        return PolicyPreviewResult(
+            estimated_episodes_affected=int(body.get("estimated_episodes_affected", 0)),
+            policy=dict(body.get("policy", {})),
+            request_id=rid,
+        )
+
+    async def get_policy_audit(
+        self,
+        user: str,
+        *,
+        limit: int = 50,
+        request_id: str | None = None,
+    ) -> list[AuditRecord]:
+        """List governance audit events for a user's policy."""
+        body, rid = await self._req(
+            "GET",
+            f"/api/v1/policies/{user}/audit?limit={limit}",
+            request_id=request_id,
+        )
+        return [_parse_audit(r, rid) for r in body.get("data", [])]
+
+    async def get_policy_violations(
+        self,
+        user: str,
+        *,
+        from_dt: str,
+        to_dt: str,
+        limit: int = 50,
+        request_id: str | None = None,
+    ) -> list[AuditRecord]:
+        """List policy violations within a time window."""
+        path = (
+            f"/api/v1/policies/{user}/violations"
+            f"?from={from_dt}&to={to_dt}&limit={limit}"
+        )
+        body, rid = await self._req("GET", path, request_id=request_id)
+        return [_parse_audit(r, rid) for r in body.get("data", [])]
+
+    # ── Webhooks ────────────────────────────────────────────────────
+
+    async def create_webhook(
+        self,
+        user: str,
+        target_url: str,
+        events: list[str],
+        *,
+        signing_secret: str | None = None,
+        request_id: str | None = None,
+    ) -> WebhookResult:
+        """Register a webhook for memory events."""
+        payload: dict[str, Any] = {
+            "user": user,
+            "target_url": target_url,
+            "events": events,
+        }
+        opt(payload, "signing_secret", signing_secret)
+        body, rid = await self._req(
+            "POST", "/api/v1/memory/webhooks", payload, request_id=request_id
+        )
+        return _parse_webhook(body, rid)
+
+    async def get_webhook(
+        self,
+        webhook_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> WebhookResult:
+        """Get a webhook by ID."""
+        body, rid = await self._req(
+            "GET", f"/api/v1/memory/webhooks/{webhook_id}", request_id=request_id
+        )
+        return _parse_webhook(body, rid)
+
+    async def delete_webhook(
+        self,
+        webhook_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> DeleteResult:
+        """Delete a webhook."""
+        body, rid = await self._req(
+            "DELETE", f"/api/v1/memory/webhooks/{webhook_id}", request_id=request_id
+        )
+        return DeleteResult(deleted=bool(body.get("deleted")), request_id=rid)
+
+    async def get_webhook_events(
+        self,
+        webhook_id: str,
+        *,
+        limit: int = 20,
+        request_id: str | None = None,
+    ) -> list[WebhookEvent]:
+        """List events for a webhook."""
+        body, rid = await self._req(
+            "GET",
+            f"/api/v1/memory/webhooks/{webhook_id}/events?limit={limit}",
+            request_id=request_id,
+        )
+        return [_parse_webhook_event(e, rid) for e in body.get("events", [])]
+
+    async def get_dead_letter_events(
+        self,
+        webhook_id: str,
+        *,
+        limit: int = 20,
+        request_id: str | None = None,
+    ) -> list[WebhookEvent]:
+        """List dead-letter events for a webhook."""
+        body, rid = await self._req(
+            "GET",
+            f"/api/v1/memory/webhooks/{webhook_id}/events/dead-letter?limit={limit}",
+            request_id=request_id,
+        )
+        return [_parse_webhook_event(e, rid) for e in body.get("events", [])]
+
+    async def replay_events(
+        self,
+        webhook_id: str,
+        *,
+        after_event_id: str | None = None,
+        limit: int = 100,
+        include_delivered: bool = True,
+        include_dead_letter: bool = True,
+        request_id: str | None = None,
+    ) -> ReplayResult:
+        """Replay webhook events from a cursor."""
+        path = (
+            f"/api/v1/memory/webhooks/{webhook_id}/events/replay"
+            f"?limit={limit}"
+            f"&include_delivered={str(include_delivered).lower()}"
+            f"&include_dead_letter={str(include_dead_letter).lower()}"
+        )
+        if after_event_id:
+            path += f"&after={after_event_id}"
+        body, rid = await self._req("GET", path, request_id=request_id)
+        return ReplayResult(
+            replayed=int(body.get("replayed", 0)),
+            events=list(body.get("events", [])),
+            request_id=rid,
+        )
+
+    async def retry_event(
+        self,
+        webhook_id: str,
+        event_id: str,
+        *,
+        force: bool = False,
+        request_id: str | None = None,
+    ) -> RetryResult:
+        """Manually retry a failed webhook event."""
+        path = f"/api/v1/memory/webhooks/{webhook_id}/events/{event_id}/retry"
+        body, rid = await self._req(
+            "POST", path, {"force": force}, request_id=request_id
+        )
+        return RetryResult(
+            ok=bool(body.get("ok")),
+            event_id=str(body.get("event_id", event_id)),
+            request_id=rid,
+        )
+
+    async def get_webhook_stats(
+        self,
+        webhook_id: str,
+        *,
+        window_seconds: int = 300,
+        request_id: str | None = None,
+    ) -> WebhookStats:
+        """Get delivery stats for a webhook."""
+        body, rid = await self._req(
+            "GET",
+            f"/api/v1/memory/webhooks/{webhook_id}/stats?window_seconds={window_seconds}",
+            request_id=request_id,
+        )
+        return WebhookStats(
+            webhook_id=str(body.get("webhook_id", webhook_id)),
+            window_seconds=int(body.get("window_seconds", window_seconds)),
+            delivered=int(body.get("delivered", 0)),
+            failed=int(body.get("failed", 0)),
+            dead_letter=int(body.get("dead_letter", 0)),
+            request_id=rid,
+        )
+
+    async def get_webhook_audit(
+        self,
+        webhook_id: str,
+        *,
+        limit: int = 20,
+        request_id: str | None = None,
+    ) -> list[AuditRecord]:
+        """List audit events for a webhook."""
+        body, rid = await self._req(
+            "GET",
+            f"/api/v1/memory/webhooks/{webhook_id}/audit?limit={limit}",
+            request_id=request_id,
+        )
+        return [_parse_audit(r, rid) for r in body.get("events", [])]
+
+    # ── Operator ────────────────────────────────────────────────────
+
+    async def trace_lookup(
+        self,
+        request_id_to_find: str,
+        *,
+        from_dt: str | None = None,
+        to_dt: str | None = None,
+        limit: int = 100,
+        request_id: str | None = None,
+    ) -> TraceLookupResult:
+        """Look up cross-pipeline trace by request correlation ID."""
+        path = f"/api/v1/traces/{request_id_to_find}?limit={limit}"
+        if from_dt:
+            path += f"&from={from_dt}"
+        if to_dt:
+            path += f"&to={to_dt}"
+        body, rid = await self._req("GET", path, request_id=request_id)
+        return TraceLookupResult(
+            request_id=request_id_to_find,
+            episodes=list(body.get("episodes", [])),
+            webhook_events=list(body.get("webhook_events", [])),
+            webhook_audit=list(body.get("webhook_audit", [])),
+            governance_audit=list(body.get("governance_audit", [])),
+            sdk_request_id=rid,
+        )
+
+    # ── Import ──────────────────────────────────────────────────────
+
+    async def import_chat_history(
+        self,
+        user: str,
+        source: str,
+        payload_data: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+        dry_run: bool = False,
+        default_session: str | None = None,
+        request_id: str | None = None,
+    ) -> ImportJobResult:
+        """Start an async chat history import job."""
+        payload: dict[str, Any] = {
+            "user": user,
+            "source": source,
+            "payload": payload_data,
+            "dry_run": dry_run,
+        }
+        opt(payload, "idempotency_key", idempotency_key)
+        opt(payload, "default_session", default_session)
+        body, rid = await self._req(
+            "POST", "/api/v1/import/chat-history", payload, request_id=request_id
+        )
+        return _parse_import_job(body, rid)
+
+    async def get_import_job(
+        self,
+        job_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> ImportJobResult:
+        """Get status of an import job."""
+        body, rid = await self._req(
+            "GET", f"/api/v1/import/jobs/{job_id}", request_id=request_id
+        )
+        return _parse_import_job(body, rid)
+
 
 def _aio_extract_message(body: dict[str, Any]) -> str:
     err = body.get("error", {})
