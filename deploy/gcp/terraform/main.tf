@@ -114,12 +114,17 @@ resource "google_compute_instance" "mnemo" {
       # ── Environment file ────────────────────────────────────────
       cat > /opt/mnemo/.env <<'EOF'
       MNEMO_VERSION=__MNEMO_VERSION__
+      MNEMO_IMAGE=__MNEMO_IMAGE__
       MNEMO_SERVER_PORT=8080
       MNEMO_LLM_PROVIDER=__LLM_PROVIDER__
       MNEMO_LLM_API_KEY=__LLM_API_KEY__
       MNEMO_LLM_MODEL=__LLM_MODEL__
+      MNEMO_EMBEDDING_PROVIDER=__EMBED_PROVIDER__
       MNEMO_EMBEDDING_API_KEY=__EMBED_API_KEY__
       MNEMO_EMBEDDING_MODEL=__EMBED_MODEL__
+      MNEMO_EMBEDDING_DIMENSIONS=__EMBED_DIMS__
+      MNEMO_QDRANT_PREFIX=__QDRANT_PREFIX__
+      MNEMO_SESSION_SUMMARY_THRESHOLD=__SESSION_SUMMARY_THRESHOLD__
       MNEMO_AUTH_ENABLED=__AUTH_ENABLED__
       MNEMO_AUTH_API_KEYS=__AUTH_API_KEYS__
       MNEMO_WEBHOOKS_ENABLED=true
@@ -129,18 +134,23 @@ resource "google_compute_instance" "mnemo" {
 
       sed -i \
         -e "s|__MNEMO_VERSION__|${var.mnemo_version}|g" \
+        -e "s|__MNEMO_IMAGE__|${var.mnemo_image}|g" \
         -e "s|__LLM_PROVIDER__|${var.mnemo_llm_provider}|g" \
         -e "s|__LLM_API_KEY__|${var.mnemo_llm_api_key}|g" \
         -e "s|__LLM_MODEL__|${var.mnemo_llm_model}|g" \
+        -e "s|__EMBED_PROVIDER__|${var.mnemo_embedding_provider}|g" \
         -e "s|__EMBED_API_KEY__|${var.mnemo_embedding_api_key}|g" \
         -e "s|__EMBED_MODEL__|${var.mnemo_embedding_model}|g" \
+        -e "s|__EMBED_DIMS__|${var.mnemo_embedding_dimensions}|g" \
+        -e "s|__QDRANT_PREFIX__|${var.mnemo_qdrant_prefix}|g" \
+        -e "s|__SESSION_SUMMARY_THRESHOLD__|${var.mnemo_session_summary_threshold}|g" \
         -e "s|__AUTH_ENABLED__|${var.mnemo_auth_enabled}|g" \
         -e "s|__AUTH_API_KEYS__|${var.mnemo_auth_api_keys}|g" \
         /opt/mnemo/.env
       chmod 600 /opt/mnemo/.env
 
       # ── Docker Compose file ─────────────────────────────────────
-      MNEMO_VER=$(grep '^MNEMO_VERSION=' /opt/mnemo/.env | cut -d= -f2)
+      MNEMO_IMAGE=$(grep '^MNEMO_IMAGE=' /opt/mnemo/.env | cut -d= -f2-)
       cat > /opt/mnemo/docker-compose.yml <<'EOF'
       services:
         redis:
@@ -177,7 +187,7 @@ resource "google_compute_instance" "mnemo" {
             retries: 5
             start_period: 15s
         mnemo:
-          image: ghcr.io/anjaustin/mnemo/mnemo-server:__MNEMO_VER__
+          image: __MNEMO_IMAGE__
           container_name: mnemo-server
           restart: always
           ports:
@@ -201,7 +211,7 @@ resource "google_compute_instance" "mnemo" {
             retries: 3
             start_period: 20s
       EOF
-      sed -i "s|__MNEMO_VER__|$MNEMO_VER|g" /opt/mnemo/docker-compose.yml
+      sed -i "s|__MNEMO_IMAGE__|$MNEMO_IMAGE|g" /opt/mnemo/docker-compose.yml
 
       # ── Start the stack ─────────────────────────────────────────
       cd /opt/mnemo
