@@ -4,11 +4,11 @@
 
 | Location | Tests | Type |
 |----------|-------|------|
-| `crates/mnemo-server/tests/memory_api.rs` | 80 | Integration (requires Redis + Qdrant) |
+| `crates/mnemo-server/tests/memory_api.rs` | 91 | Integration (requires Redis + Qdrant) |
 | `crates/mnemo-server/src/config.rs` | 24 | Unit (inline `#[cfg(test)]`) |
 | `crates/mnemo-server/src/middleware/auth.rs` | 7 | Unit (inline) |
 | `crates/mnemo-graph/src/lib.rs` | 10 | Unit (inline) |
-| `crates/mnemo-llm/src/openai_compat.rs` | 17 | Unit (wiremock) |
+| `crates/mnemo-llm/src/openai_compat.rs` | 24 | Unit (wiremock) |
 | `crates/mnemo-llm/src/anthropic.rs` | 7 | Unit (wiremock) |
 | `crates/mnemo-retrieval/src/lib.rs` | 11 | Unit (6 existing + 5 RRF) |
 | `crates/mnemo-storage/tests/qdrant.rs` | 6 | Integration (requires Qdrant) |
@@ -22,7 +22,8 @@
 | `tests/dashboard_smoke.sh` | 12 gates | Bash script (requires running server) |
 | `tests/phase_b_screenshots.py` | 8 screenshots | Playwright (requires running server) |
 | Phase B falsification | 35 gates | Playwright (manual, requires running server) |
-| **Total** | **~280+** | |
+| `tests/eval_recall_quality.py` | 3 quality gates (40-fact dataset) | Python (requires running server + embedding model) |
+| **Total** | **~295+** | |
 
 This project has several practical testing layers.
 
@@ -63,6 +64,26 @@ Assumes the server is already running on `http://localhost:8080`.
 ```bash
 ./tests/e2e.sh
 ```
+
+## 3.5) Recall quality eval harness
+
+Measures retrieval quality against a 40-fact gold dataset across 4 synthetic users. Requires a running server and an embedding model (Ollama `nomic-embed-text` or OpenAI `text-embedding-3-small`).
+
+```bash
+python tests/eval_recall_quality.py --server http://localhost:8080 --ingest-wait 1400
+```
+
+`--ingest-wait` is the number of seconds to wait for the async ingest pipeline to process all 40 facts after they are written. 1400s is appropriate for a local LFM2-24B-A2B stack (~33s/episode). For Anthropic or OpenAI LLMs, 120s is usually sufficient.
+
+**Quality gates (all must pass):**
+
+| Gate | Threshold | Measures |
+|------|-----------|----------|
+| Factual recall accuracy | ≥ 85% (no embeddings) / ≥ 85% (with embeddings) | % of gold facts surfaced in context |
+| Temporal recall accuracy | ≥ 90% | Correct historical vs. current fact ranking |
+| p95 retrieval latency | ≤ 500ms (API embedder) / ≤ 2500ms (local embedder) | End-to-end context query time |
+
+Exit code is 0 when all gates pass, 1 otherwise. Suitable for CI pipelines.
 
 ## 4) Memory API falsification suite
 

@@ -106,7 +106,7 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release workflow expectation: bump `Cargo.toml` (`workspace.package.version`) and `sdk/python/pyproject.toml` together before tagging.
-- Current in-repo development version: `0.3.4`.
+- Current in-repo development version: `0.3.6`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
@@ -513,6 +513,7 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_METADATA_PREFILTER_ENABLED` | Enable metadata prefilter planner | `true` |
 | `MNEMO_METADATA_SCAN_LIMIT` | Candidate scan limit for prefilter planner | `400` |
 | `MNEMO_METADATA_RELAX_IF_EMPTY` | Relax strict metadata filters when empty | `false` |
+| `reranker` (TOML only) | Retrieval reranking strategy: `rrf` or `mmr` | `rrf` |
 | `MNEMO_WEBHOOKS_ENABLED` | Enable outbound webhook delivery | `true` |
 | `MNEMO_WEBHOOKS_MAX_ATTEMPTS` | Retry attempts before dead-lettering | `3` |
 | `MNEMO_WEBHOOKS_BASE_BACKOFF_MS` | Base backoff duration for retries | `200` |

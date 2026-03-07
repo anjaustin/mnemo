@@ -18,7 +18,7 @@ Returns server status and version. Also available at `/healthz` for Kubernetes-s
 // Response 200
 {
   "status": "ok",
-  "version": "0.3.4"
+  "version": "0.3.6"
 }
 ```
 
@@ -63,6 +63,55 @@ Returns matched artifacts across:
 - webhook audit rows
 - governance audit rows
 
+### `GET /api/v1/audit/export`
+
+SOC 2 / compliance audit log export. Returns a unified, time-bounded list of governance and webhook audit events suitable for shipping to a SIEM, exporting for auditors, or feeding into compliance tooling.
+
+Query parameters:
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `from` | RFC3339 datetime | 30 days ago | Start of time window (exclusive) |
+| `to` | RFC3339 datetime | now | End of time window (inclusive) |
+| `limit` | integer | `1000` | Max records returned (max `10000`) |
+| `include_governance` | bool | `true` | Include governance policy audit events |
+| `include_webhook` | bool | `true` | Include webhook delivery audit events |
+| `user` | string | (none) | Filter by user UUID or external_id |
+
+`to` must be after `from`; otherwise returns `400`.
+
+```json
+// Response 200
+{
+  "ok": true,
+  "from": "2026-02-04T00:00:00Z",
+  "to": "2026-03-06T00:00:00Z",
+  "total": 2,
+  "records": [
+    {
+      "audit_type": "governance",
+      "id": "019513a4-7e2b-7000-8000-000000000001",
+      "user_id": "019513a4-7e2b-7000-8000-000000000002",
+      "action": "policy_update",
+      "at": "2026-02-15T10:30:00Z",
+      "request_id": "req-abc-123",
+      "details": {"retention_days_message": 90}
+    },
+    {
+      "audit_type": "webhook",
+      "id": "019513a4-7e2b-7000-8000-000000000003",
+      "user_id": "019513a4-7e2b-7000-8000-000000000002",
+      "action": "delivered",
+      "at": "2026-02-16T08:00:00Z",
+      "webhook_id": "019513a4-7e2b-7000-8000-000000000004",
+      "details": {"event_type": "memory.written", "attempts": 1}
+    }
+  ]
+}
+```
+
+Records are returned in ascending `at` order. Each record has an `audit_type` field (`"governance"` or `"webhook"`); webhook records additionally carry a `webhook_id` field.
+
 ---
 
 ## Memory API (High-Level)
@@ -94,6 +143,48 @@ Remember a piece of text for a user. Mnemo resolves or creates the user, resolve
   "episode_id": "019513a4-9d3a-7000-8000-000000000003"
 }
 ```
+
+### `POST /api/v1/memory/extract`
+
+Synchronously extract entities and relationships from text **without persisting anything**. Returns what the LLM would produce if the text were submitted via `POST /api/v1/memory`. Useful for previewing extraction quality, building test harnesses, and debugging LLM configuration.
+
+If no LLM is configured the endpoint returns an empty extraction with a `note: "no_llm"` field rather than an error, so callers can detect the no-LLM state explicitly.
+
+```json
+// Request
+{
+  "text": "Kendra just switched from Adidas to Nike running shoes",
+  "user": "kendra"   // optional — if supplied, existing entities are used as dedup hints
+}
+```
+
+`user` is optional. When supplied, the user's existing entity graph is passed to the LLM as deduplication hints so entity names are consistent with stored data.
+
+```json
+// Response 200
+{
+  "ok": true,
+  "entities": [
+    {"name": "Kendra", "entity_type": "person", "summary": "A runner"},
+    {"name": "Nike", "entity_type": "organization", "summary": "Athletic shoe brand"},
+    {"name": "Adidas", "entity_type": "organization", "summary": "Athletic shoe brand"}
+  ],
+  "relationships": [
+    {
+      "source_name": "Kendra",
+      "target_name": "Nike",
+      "label": "switched_to",
+      "fact": "Kendra switched from Adidas to Nike running shoes",
+      "confidence": 0.95
+    }
+  ],
+  "entity_count": 3,
+  "relationship_count": 1,
+  "provider": "ollama/hf.co/LiquidAI/LFM2-24B-A2B-GGUF"
+}
+```
+
+When no LLM is configured, `entity_count` and `relationship_count` are 0 and `note` is `"no_llm: LLM is not configured; set MNEMO_LLM_API_KEY to enable extraction"`.
 
 ### `POST /api/v1/memory/:user/context`
 
@@ -1093,6 +1184,19 @@ Add multiple episodes at once. Ideal for backfilling conversation history.
 ## Context (Primary Endpoint)
 
 This is the endpoint your agent calls on every turn. It retrieves relevant knowledge from the user's graph and assembles a context string ready for LLM injection.
+
+### Retrieval reranking
+
+After the parallel semantic + graph search, results are merged and reranked. The strategy is set in `config/default.toml` under `[retrieval]`:
+
+```toml
+[retrieval]
+# "rrf"  — Reciprocal Rank Fusion (default): boosts candidates appearing in multiple ranked lists.
+# "mmr"  — Maximal Marginal Relevance: penalises near-duplicate results for more diverse context.
+reranker = "rrf"
+```
+
+There is no environment-variable override for `reranker` — use the TOML config file (`MNEMO_CONFIG=/path/to/mnemo.toml`) to change it.
 
 ### `POST /api/v1/users/:user_id/context`
 

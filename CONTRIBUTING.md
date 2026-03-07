@@ -154,14 +154,17 @@ test: add integration tests for Redis entity dedup
 
 These are the highest-impact areas for contributions right now:
 
-- **Full-text search**: RediSearch integration for BM25 search alongside semantic
 - **Progressive summarization**: Auto-summarize long sessions to stay within token budgets
 - **Benchmarks**: DMR and LongMemEval benchmark implementations
-- **SDKs**: Python and TypeScript client libraries
-- **Framework integrations**: LangChain, LlamaIndex, CrewAI adapters
-- **Helm chart**: Kubernetes deployment
-- **Tests**: Integration tests with real Redis and Qdrant
-- **Documentation**: Tutorials, guides, examples
+- **TypeScript SDK**: Client library mirroring the Python SDK surface
+- **Helm chart**: Kubernetes deployment (architecture is stateless — ready to scale)
+- **Documentation**: Tutorials, worked examples, domain-specific integration guides
+
+Already shipped and no longer needed:
+- ~~RediSearch full-text search integration~~ — shipped in v0.2
+- ~~Python SDK~~ — shipped in v0.3, full async + sync coverage
+- ~~LangChain and LlamaIndex adapters~~ — shipped in v0.3
+- ~~Integration tests with real Redis and Qdrant~~ — 91 tests in `tests/memory_api.rs`
 
 ---
 

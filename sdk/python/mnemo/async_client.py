@@ -295,11 +295,14 @@ class AsyncMnemo:
             request_id=request_id,
         )
         return ChangesSinceResult(
-            facts_added=list(body.get("facts_added", [])),
-            facts_superseded=list(body.get("facts_superseded", [])),
-            entities_updated=list(body.get("entities_updated", [])),
-            from_dt=str(body.get("from_dt", from_dt)),
-            to_dt=str(body.get("to_dt", to_dt)),
+            added_facts=list(body.get("added_facts", [])),
+            superseded_facts=list(body.get("superseded_facts", [])),
+            confidence_deltas=list(body.get("confidence_deltas", [])),
+            head_changes=list(body.get("head_changes", [])),
+            added_episodes=list(body.get("added_episodes", [])),
+            summary=str(body.get("summary", "")),
+            from_dt=str(body.get("from", from_dt)),
+            to_dt=str(body.get("to", to_dt)),
             request_id=rid,
         )
 

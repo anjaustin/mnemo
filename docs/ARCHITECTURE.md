@@ -209,42 +209,49 @@ If extraction fails (LLM timeout, parse error, etc.), the episode is marked `fai
 
 ## Retrieval Strategy
 
-When your agent calls `POST /api/v1/users/:id/context`, Mnemo runs a hybrid retrieval pipeline:
+When your agent calls `POST /api/v1/memory/:user/context` (or the lower-level `POST /api/v1/users/:id/context`), Mnemo runs a seven-step hybrid retrieval pipeline:
 
 ### 1. Query Embedding
 
-The recent messages from the request are concatenated and embedded via the configured embedding provider.
+The query string is embedded via the configured embedding provider. When Ollama is the provider, embedding requests go to the native `/api/embed` endpoint with `keep_alive: -1` so the model remains pinned in GPU/CPU memory indefinitely.
 
-### 2. Semantic Search (Qdrant)
+### 2. Metadata Prefilter Planner
 
-Three parallel searches run against Qdrant collections:
+Before running the vector search, Mnemo scans up to `MNEMO_METADATA_SCAN_LIMIT` (default: 400) candidate document IDs from Redis sorted sets using the user/session scope. This produces an Qdrant payload filter (`user_id`, `session_id`) that restricts the ANN search to the user's own data without a full-collection scan. If the candidate set is empty and `MNEMO_METADATA_RELAX_IF_EMPTY=true`, the filter is relaxed to prevent empty results.
+
+### 3. Semantic Search (Qdrant)
+
+Three parallel ANN searches run against Qdrant collections, constrained by the metadata prefilter:
 - **Entity search**: Find entities whose names/summaries are semantically similar to the query
 - **Edge search**: Find facts whose descriptions match the query
 - **Episode search**: Find relevant conversation history
 
-Each search is filtered by `user_id` for tenant isolation and by `min_relevance` threshold.
+Each search is filtered by `user_id` for tenant isolation and by `min_relevance` threshold. All three collections have indexed payload fields (`user_id`, `session_id`, `processing_status`, `created_at`) for O(1) filtering.
 
-### 3. Graph Traversal
+### 4. Graph Traversal
 
 For the top 3 matched entities, Mnemo traverses their outgoing edges to find connected facts. Graph-traversed results receive a 0.8x relevance discount relative to their seed entity's score.
 
-### 4. Temporal Filtering
+### 5. Temporal Filtering
 
-If `temporal_filter` is set, edges are filtered by validity at that point in time. Otherwise, only currently valid edges are included.
+If `temporal_filter` is set, edges are filtered by validity at that point in time using the bi-temporal `valid_at` / `invalid_at` fields. Otherwise, only currently valid edges are included.
 
-### 5. Ranking
+### 6. Reranking (RRF or MMR)
 
-All results are sorted by relevance score (highest first).
+Results from the parallel searches are merged and reranked using one of two strategies, configured via `reranker` in `config/default.toml` (or `[retrieval]` section):
 
-### 6. Context Assembly
+- **`rrf` (Reciprocal Rank Fusion)** — Default. Boosts candidates that appear in multiple ranked lists (entity + edge + episode). Effective for most workloads where relevance diversity is less important than consensus.
+- **`mmr` (Maximal Marginal Relevance)** — Penalises near-duplicate results. Useful when queries tend to surface many semantically similar facts that would otherwise crowd the context window.
 
-Results are assembled into a token-budgeted string with three sections, each tracked against the `max_tokens` budget:
+### 7. Context Assembly
+
+Reranked results are assembled into a token-budgeted string with three sections:
 
 1. **Known entities** — Name, type, and summary
 2. **Current facts** — Natural language descriptions of relationships
 3. **Relevant conversation history** — Episode previews with timestamps
 
-Section headers are counted against the budget. If a section header alone would exceed the remaining budget, it's skipped. Empty sections are never included.
+Section headers are counted against the `max_tokens` budget. Empty sections are never included.
 
 ---
 
@@ -271,6 +278,17 @@ All structured data lives in Redis using a consistent key schema:
 | `mnemo:adj_out:{entity_id}` | Sorted Set | Outgoing adjacency list |
 | `mnemo:adj_in:{entity_id}` | Sorted Set | Incoming adjacency list |
 | `mnemo:user_edges:{user_id}` | Sorted Set | User's edges |
+| `mnemo:rid_episodes:{request_id}` | Sorted Set | O(1) request-ID → episode trace index |
+| `mnemo:webhooks:{user_id}` | JSON (Hash) | Webhook subscriptions per user |
+| `mnemo:webhook_events:{webhook_id}` | JSON (Hash) | Delivery event rows per webhook |
+| `mnemo:webhook_audit:{webhook_id}` | JSON (Hash) | Webhook audit records |
+| `mnemo:governance_audit:{user_id}` | JSON (Hash) | Governance policy change audit log |
+| `mnemo:user_policies:{user_id}` | JSON | Per-user governance policy |
+| `mnemo:import_jobs:{job_id}` | JSON | Async chat-history import job status |
+| `mnemo:agent_identity:{agent_id}` | JSON | Agent identity profile (current version) |
+| `mnemo:agent_identity_versions:{agent_id}` | Sorted Set | Agent identity version history |
+| `mnemo:agent_experiences:{agent_id}` | Sorted Set | Agent experience event log |
+| `mnemo:agent_promotions:{agent_id}` | Sorted Set | Promotion proposals per agent |
 
 Sorted sets are scored by timestamp for time-ordered pagination. Adjacency lists are scored by `valid_at` for temporal ordering.
 
@@ -282,9 +300,45 @@ Three collections, each with `user_id` in the payload for tenant filtering:
 |---|---|---|
 | `mnemo_entities` | Entity name + type + summary embeddings | `user_id`, `name`, `entity_type` |
 | `mnemo_edges` | Fact description embeddings | `user_id`, `label`, `fact` |
-| `mnemo_episodes` | Episode content embeddings | `user_id`, `session_id` |
+| `mnemo_episodes` | Episode content embeddings | `user_id`, `session_id`, `processing_status`, `created_at` |
 
 All collections use cosine distance. Dimensions match the configured embedding model (default: 1536 for `text-embedding-3-small`).
+
+All payload fields used in filters have dedicated Qdrant payload indexes (created at startup via `CreateFieldIndexCollectionBuilder`). This ensures ANN searches with `user_id` filters are O(1) per-collection rather than full-collection scans.
+
+---
+
+## Agent Identity Substrate
+
+Alongside per-user memory (episodes, entities, edges), Mnemo maintains a parallel **agent-level identity layer** for the AI agent itself — distinct from any individual user's data.
+
+### Data Model
+
+| Object | Description |
+|--------|-------------|
+| `AgentIdentityProfile` | Versioned JSON `core` blob representing the agent's learned identity. Mutated by approved promotions or explicit PUT. |
+| `ExperienceEvent` | A signal recorded from an interaction — category, signal text, confidence, weight, and a time-decay half-life (days). |
+| `PromotionProposal` | A candidate identity update proposed from experience signals. Requires manual approval (`POST …/approve`) before it is applied to the profile. |
+| `AgentIdentityAuditEvent` | Append-only audit record of every identity `created`, `updated`, or `rolled_back` event. |
+
+### Key properties
+
+- **Versioned**: every write increments `version`; all prior versions are retained in a Redis sorted set for rollback.
+- **Approval gating**: `PromotionProposal` moves through `pending → approved | rejected`; only approved promotions update the live profile.
+- **Risk levels**: proposals carry a `risk_level` field (`low | medium | high`) for human review workflows.
+- **Audit trail**: all mutations are appended to an identity audit log, queryable via `GET /api/v1/agents/:agent_id/identity/audit`.
+
+### Webhook Delivery Architecture
+
+Mnemo supports outbound webhooks for real-time notification of memory events. The delivery system is built into the server process (no separate worker required):
+
+- **Subscriptions** — stored per user in Redis (`mnemo:webhooks:{user_id}`).
+- **Event log** — each delivery attempt is recorded as a `WebhookEvent` row.
+- **Retry / dead-letter** — up to `MNEMO_WEBHOOKS_MAX_ATTEMPTS` retries with exponential backoff (`MNEMO_WEBHOOKS_BASE_BACKOFF_MS`). Events that exhaust retries are dead-lettered.
+- **Rate limiting** — per-webhook rate limiter (`MNEMO_WEBHOOKS_RATE_LIMIT_PER_MINUTE`).
+- **Circuit breaker** — after `MNEMO_WEBHOOKS_CIRCUIT_BREAKER_THRESHOLD` consecutive failures the circuit opens; delivery resumes after `MNEMO_WEBHOOKS_CIRCUIT_BREAKER_COOLDOWN_MS`.
+- **Persistence** — subscriptions and event rows survive server restarts (stored in Redis, loaded at startup via `restore_webhook_state`).
+- **Audit** — all delivery decisions are appended to `mnemo:webhook_audit:{webhook_id}`.
 
 ---
 
@@ -358,7 +412,7 @@ The Dockerfile uses a multi-stage build: Rust compilation in a builder stage, th
 
 ### Production (Kubernetes)
 
-A Helm chart is planned for Phase 3. The architecture is stateless (all state in Redis/Qdrant), so horizontal scaling is straightforward: run multiple Mnemo replicas behind a load balancer.
+A Helm chart is not yet published. The architecture is fully stateless (all state in Redis/Qdrant), so horizontal scaling is straightforward: run multiple Mnemo replicas behind a load balancer. Each replica connects to the same Redis and Qdrant instances; no sticky sessions or shared local storage are required.
 
 **Scaling considerations:**
 - Mnemo replicas: Stateless, scale horizontally

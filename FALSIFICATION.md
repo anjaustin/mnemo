@@ -42,6 +42,8 @@ CI gate:
 **Reviewed:** All files in `crates/mnemo-core/`, `Cargo.toml`, `Dockerfile`, `docker-compose.yml`, `config/default.toml`
 **Date:** 2026-03-01
 
+> **Note (2026-03-07):** This report was written against the v0.1.0 source. The majority of issues below have since been resolved. Each issue carries a status annotation where its resolution is known.
+
 ---
 
 ## 🔴 CRITICAL — Will break compilation or cause runtime bugs
@@ -50,6 +52,7 @@ CI gate:
 **File:** `Cargo.toml:14`
 **Issue:** Rust edition `"2024"` was never stabilized under that name. The latest stable edition is `"2021"`. Rust 1.85 ships edition `"2024"` as experimental at best, but crates.io tooling and most CI won't accept it.
 **Fix:** Change to `edition = "2021"`.
+> ✅ **RESOLVED** — Workspace now uses `edition = "2024"` which was stabilised in Rust 1.85. All crates compile and CI passes.
 
 ### 2. `thiserror = "2"` — major version mismatch
 **File:** `Cargo.toml:29`
@@ -65,6 +68,7 @@ use super::episode::Episode;
 ```
 **Issue:** `Edge`, `Entity`, and `Episode` are imported but never used anywhere in the file. This will cause `unused import` warnings and may fail CI with `#[deny(unused_imports)]`.
 **Fix:** Remove the three unused imports.
+> ✅ **RESOLVED** — Unused imports removed. `cargo clippy --all-targets -- -D warnings` passes clean.
 
 ### 4. `EntityType` serde roundtrip broken for `Custom` variant
 **File:** `entity.rs:10-20`
@@ -84,6 +88,7 @@ pub episode_type: EpisodeType,
 **File:** `edge.rs:89`
 **Issue:** `EdgeFilter` derives `Default`, which gives `limit` the value `0` (u32 default). But `default_limit()` returns `100`. The `#[serde(default = "default_limit")]` only applies during JSON deserialization, not when using `Default::default()` in Rust code. All tests using `EdgeFilter { ..Default::default() }` have `limit: 0`, which would return zero results in a real storage implementation.
 **Fix:** Implement `Default` manually for `EdgeFilter` instead of deriving it, setting `limit: 100`.
+> ✅ **RESOLVED** — `EdgeFilter` now has a manual `Default` impl with `limit: 100`.
 
 ---
 
@@ -133,6 +138,7 @@ pub episode_type: EpisodeType,
 **File:** `storage.rs:211-220`
 **Issue:** Forcing a single struct to implement `UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + VectorStore` means Redis and Qdrant must be behind the same struct. But Redis handles state and Qdrant handles vectors — they're fundamentally different backends. This forces an awkward wrapper struct.
 **Fix:** Split into `StateStore` (Redis: users, sessions, episodes, entities, edges) and `VectorStore` (Qdrant). The server layer composes them, not a single trait.
+> ✅ **RESOLVED** — `MnemoStore` monolith removed. `RedisStateStore` and `QdrantVectorStore` are separate crates (`mnemo-storage`) composed at the server layer in `AppState`.
 
 ### 16. `invalidated_by_episode_id` name is misleading
 **File:** `edge.rs:53`
@@ -167,10 +173,12 @@ pub episode_type: EpisodeType,
 **File:** `Dockerfile:40`
 **Issue:** `cargo build --release --bin mnemo-server` — but there's no `[[bin]]` defined anywhere. The `mnemo-server` crate is a library (`lib.rs`), not a binary. The build will fail.
 **Fix:** Either add a `src/main.rs` to `mnemo-server` or add `[[bin]]` in its `Cargo.toml`, or change the Dockerfile to reference the correct binary.
+> ✅ **RESOLVED** — `crates/mnemo-server/src/main.rs` exists; the binary is produced by `cargo build -p mnemo-server`. Dockerfile is correct.
 
 ### 22. No `Cargo.lock` file
 **Issue:** The workspace doesn't have a `Cargo.lock`. For an application (not a library), the lock file should be committed to ensure reproducible builds.
 **Fix:** Generate and commit `Cargo.lock`.
+> ✅ **RESOLVED** — `Cargo.lock` is committed and tracked.
 
 ### 23. Config TOML uses `[embedding]` but code uses `EmbeddingConfig`
 **File:** `config/default.toml` vs `traits/llm.rs`

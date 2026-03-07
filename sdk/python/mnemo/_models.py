@@ -38,9 +38,23 @@ class ContextResult:
 
 @dataclass(slots=True)
 class ChangesSinceResult:
-    facts_added: list[dict[str, Any]]
-    facts_superseded: list[dict[str, Any]]
-    entities_updated: list[dict[str, Any]]
+    """Fact delta between two timestamps for a user.
+
+    Fields match the server response from ``POST /api/v1/memory/:user/changes_since``.
+    """
+
+    added_facts: list[dict[str, Any]]
+    """Facts (edges) created within the time window."""
+    superseded_facts: list[dict[str, Any]]
+    """Facts that were invalidated (superseded) within the time window."""
+    confidence_deltas: list[dict[str, Any]]
+    """Facts whose confidence score changed within the window."""
+    head_changes: list[dict[str, Any]]
+    """Thread-HEAD changes (current-fact pointer updates) within the window."""
+    added_episodes: list[dict[str, Any]]
+    """Raw episodes ingested within the window."""
+    summary: str
+    """Human-readable natural language summary of the changes."""
     from_dt: str
     to_dt: str
     request_id: str | None = None
@@ -62,7 +76,27 @@ class CausalRecallResult:
 
 @dataclass(slots=True)
 class TimeTravelTraceResult:
-    snapshots: list[dict[str, Any]]
+    """Full time-travel trace: dual snapshots + fact diff + chronological timeline.
+
+    Fields match the server response from ``POST /api/v1/memory/:user/time_travel/trace``.
+    """
+
+    snapshot_from: dict[str, Any]
+    """Memory snapshot at ``from_dt``: fact/episode counts, top facts, top episodes."""
+    snapshot_to: dict[str, Any]
+    """Memory snapshot at ``to_dt``: fact/episode counts, top facts, top episodes."""
+    gained_facts: list[dict[str, Any]]
+    """Facts present in ``snapshot_to`` but not in ``snapshot_from``."""
+    lost_facts: list[dict[str, Any]]
+    """Facts present in ``snapshot_from`` but invalidated by ``to_dt``."""
+    gained_episodes: list[dict[str, Any]]
+    """Episodes ingested between ``from_dt`` and ``to_dt``."""
+    lost_episodes: list[dict[str, Any]]
+    """Episodes that were deleted or expired by ``to_dt``."""
+    timeline: list[dict[str, Any]]
+    """Chronological list of memory-change events between the two timestamps."""
+    summary: str
+    """Natural language summary of what changed and why."""
     from_dt: str
     to_dt: str
     request_id: str | None = None
