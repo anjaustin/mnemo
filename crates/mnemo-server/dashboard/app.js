@@ -173,15 +173,17 @@ function dashboardQuery() {
   return new URLSearchParams(location.search);
 }
 
-function traceHref(requestId) {
-  return requestId ? `/_/traces/${encodeURIComponent(requestId)}` : '';
+function traceHref(requestId, focus) {
+  if (!requestId) return '';
+  const suffix = focus ? ('?focus=' + encodeURIComponent(focus)) : '';
+  return `/_/traces/${encodeURIComponent(requestId)}${suffix}`;
 }
 
-function traceLink(requestId, label) {
+function traceLink(requestId, label, focus) {
   if (!requestId) return '--';
-  const href = traceHref(requestId);
+  const href = traceHref(requestId, focus);
   const text = label || ('req ' + truncId(requestId));
-  return `<a class="link" href="${href}" data-trace-link="${escapeHtml(requestId)}">${escapeHtml(text)}</a>`;
+  return `<a class="link" href="${href}" data-trace-link="${escapeHtml(requestId)}" data-trace-focus="${escapeHtml(focus || '')}">${escapeHtml(text)}</a>`;
 }
 
 function webhookHref(webhookId, focus) {
@@ -192,6 +194,72 @@ function webhookHref(webhookId, focus) {
 
 function governanceHref(userId) {
   return userId ? `/_/governance/${encodeURIComponent(userId)}` : '/_/governance';
+}
+
+function traceFocusConfig(focus) {
+  switch (focus) {
+    case 'webhooks':
+      return {
+        title: 'Webhook Evidence Focus',
+        description: 'This trace view is narrowed to delivery and replay evidence first.',
+        episodes: false,
+        webhooks: true,
+        governance: false,
+      };
+    case 'governance':
+      return {
+        title: 'Governance Evidence Focus',
+        description: 'This trace view is narrowed to policy and audit evidence first.',
+        episodes: false,
+        webhooks: false,
+        governance: true,
+      };
+    default:
+      return null;
+  }
+}
+
+function applyTraceFocusPreset(focus) {
+  const config = traceFocusConfig(focus);
+  const chkEps = document.getElementById('trace-chk-episodes');
+  const chkWh = document.getElementById('trace-chk-webhooks');
+  const chkGov = document.getElementById('trace-chk-governance');
+  if (!chkEps || !chkWh || !chkGov) return;
+  if (!config) {
+    chkEps.checked = true;
+    chkWh.checked = true;
+    chkGov.checked = true;
+    return;
+  }
+  chkEps.checked = config.episodes;
+  chkWh.checked = config.webhooks;
+  chkGov.checked = config.governance;
+}
+
+function currentTraceFocus() {
+  return dashboardQuery().get('focus') || '';
+}
+
+function incidentTraceFocus(kind) {
+  return kind === 'policy_violation' ? 'governance' : 'webhooks';
+}
+
+function downloadJson(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function evidenceFilename(prefix, key) {
+  const safeKey = (key || 'bundle').replace(/[^a-zA-Z0-9._-]+/g, '-');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `mnemo-${prefix}-${safeKey}-${stamp}.json`;
 }
 
 function syncPageFromPath(pageName) {
@@ -222,6 +290,7 @@ function syncPageFromPath(pageName) {
 
   if (pageName === 'traces') {
     const reqId = segments[1] ? decodeURIComponent(segments[1]) : null;
+    applyTraceFocusPreset(currentTraceFocus());
     const input = document.getElementById('trace-request-id');
     if (reqId && input && input.value !== reqId) {
       input.value = reqId;
@@ -359,9 +428,10 @@ function initHome() {
 
       const severityTone = sev => sev === 'high' ? 'red' : (sev === 'medium' ? 'yellow' : 'blue');
       const rows = incidents.map(incident => {
-        const traceHref = incident.request_id ? `/_/traces/${encodeURIComponent(incident.request_id)}` : '';
+        const traceFocus = incidentTraceFocus(incident.kind);
+        const traceHrefValue = incident.request_id ? traceHref(incident.request_id, traceFocus) : '';
         const requestLink = incident.request_id
-          ? `<a class="link" href="${traceHref}" data-request-id="${escapeHtml(incident.request_id)}">req ${escapeHtml(truncId(incident.request_id))}</a>`
+          ? `<a class="link" href="${traceHrefValue}" data-request-id="${escapeHtml(incident.request_id)}" data-request-focus="${escapeHtml(traceFocus)}">req ${escapeHtml(truncId(incident.request_id))}</a>`
           : '';
         return `<div class="incident-card severity-${escapeHtml(incident.severity || 'low')}" data-action-href="${escapeHtml(incident.action_href || '/_/')}" data-request-id="${escapeHtml(incident.request_id || '')}">
           <div class="incident-head">
@@ -385,8 +455,10 @@ function initHome() {
         card.addEventListener('click', e => {
           const reqId = card.dataset.requestId;
           if (reqId && e.target.closest('a[data-request-id]')) {
+            const focus = e.target.closest('a[data-request-id]')?.dataset.requestFocus || '';
             document.getElementById('trace-request-id').value = reqId;
-            _navigate('traces', true, `/_/traces/${encodeURIComponent(reqId)}`);
+            applyTraceFocusPreset(focus);
+            _navigate('traces', true, traceHref(reqId, focus));
             setTimeout(() => document.getElementById('trace-lookup-btn')?.click(), 50);
             return;
           }
@@ -491,11 +563,12 @@ function openWebhookDetail(whId, pushUrl) {
   loadWebhookDetail(whId);
 }
 
-function navigateToTrace(requestId) {
+function navigateToTrace(requestId, focus) {
   if (!requestId) return;
   const input = document.getElementById('trace-request-id');
   if (input) input.value = requestId;
-  _navigate('traces', true, traceHref(requestId));
+  applyTraceFocusPreset(focus);
+  _navigate('traces', true, traceHref(requestId, focus));
   setTimeout(() => document.getElementById('trace-lookup-btn')?.click(), 50);
 }
 
@@ -503,9 +576,61 @@ function bindTraceLinks(scope) {
   (scope || document).querySelectorAll('a[data-trace-link]').forEach(link => {
     link.addEventListener('click', e => {
       e.preventDefault();
-      navigateToTrace(link.dataset.traceLink);
+      navigateToTrace(link.dataset.traceLink, link.dataset.traceFocus || '');
     });
   });
+}
+
+let _webhookEvidenceBundle = null;
+let _governanceEvidenceBundle = null;
+let _traceEvidenceBundle = null;
+
+function exportWebhookEvidenceBundle() {
+  if (!_webhookEvidenceBundle) {
+    toast.warn('No webhook evidence', 'Load a webhook detail view first.');
+    return;
+  }
+  downloadJson(
+    evidenceFilename('webhook-evidence', _webhookEvidenceBundle.webhook?.id),
+    {
+      kind: 'webhook_evidence_bundle',
+      exported_at: new Date().toISOString(),
+      source_path: location.pathname + location.search,
+      payload: _webhookEvidenceBundle,
+    },
+  );
+}
+
+function exportGovernanceEvidenceBundle() {
+  if (!_governanceEvidenceBundle) {
+    toast.warn('No governance evidence', 'Load a governance record first.');
+    return;
+  }
+  downloadJson(
+    evidenceFilename('governance-evidence', _governanceEvidenceBundle.user),
+    {
+      kind: 'governance_evidence_bundle',
+      exported_at: new Date().toISOString(),
+      source_path: location.pathname + location.search,
+      payload: _governanceEvidenceBundle,
+    },
+  );
+}
+
+function exportTraceEvidenceBundle() {
+  if (!_traceEvidenceBundle) {
+    toast.warn('No trace evidence', 'Run a trace lookup first.');
+    return;
+  }
+  downloadJson(
+    evidenceFilename('trace-evidence', _traceEvidenceBundle.request_id),
+    {
+      kind: 'trace_evidence_bundle',
+      exported_at: new Date().toISOString(),
+      source_path: location.pathname + location.search,
+      payload: _traceEvidenceBundle,
+    },
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -641,11 +766,18 @@ async function loadWebhookDetail(whId) {
     }
 
     const audits = audit.audit || [];
+    _webhookEvidenceBundle = {
+      webhook: wh,
+      stats,
+      dead_letters: deadLetters,
+      audit,
+      focus,
+    };
     let auditHtml = '';
     if (audits.length > 0) {
       const auditRows = audits.map(a => `<tr>
         <td>${escapeHtml(a.action)}</td>
-        <td style="font-size:11px">${traceLink(a.request_id)}</td>
+        <td style="font-size:11px">${traceLink(a.request_id, null, 'webhooks')}</td>
         <td style="font-size:11px">${escapeHtml(JSON.stringify(a.details).substring(0, 80))}</td>
         <td>${fmtDateAgo(a.at)}</td>
       </tr>`).join('');
@@ -658,6 +790,7 @@ async function loadWebhookDetail(whId) {
       <div class="detail-header">
         <h2>Webhook <code>${escapeHtml(truncId(whId))}</code></h2>
         <div class="btn-group">
+          <button class="btn btn-sm btn-ghost" onclick="exportWebhookEvidenceBundle()">Export Evidence</button>
           <button class="btn btn-sm" onclick="replayWebhook('${escapeHtml(whId)}')">Replay All</button>
           <button class="btn btn-sm btn-danger" onclick="deleteWebhook('${escapeHtml(whId)}')">Delete</button>
         </div>
@@ -914,10 +1047,17 @@ async function loadGovernance(user) {
   try {
     const data = await mnemo.api('GET', `/api/v1/policies/${encodeURIComponent(user)}`);
     const p = data.policy;
+    _governanceEvidenceBundle = {
+      user,
+      policy: p,
+      violations: [],
+      audit: [],
+    };
     mnemo.setHtml('gov-policy-panel', `
       <div class="detail-header">
         <h2>Policy — ${escapeHtml(p.user_identifier)}</h2>
         <div class="btn-group">
+          <button class="btn btn-sm btn-ghost" id="gov-export-btn">Export Evidence</button>
           <button class="btn btn-sm" id="gov-edit-btn">Edit</button>
           <button class="btn btn-sm" id="gov-preview-btn">Preview Impact</button>
         </div>
@@ -960,6 +1100,7 @@ async function loadGovernance(user) {
     document.getElementById('gov-edit-btn').addEventListener('click', () => {
       document.getElementById('gov-edit-form').classList.toggle('hidden');
     });
+    document.getElementById('gov-export-btn').addEventListener('click', exportGovernanceEvidenceBundle);
     document.getElementById('gov-save-btn').addEventListener('click', () => saveGovernance(user));
     document.getElementById('gov-preview-btn').addEventListener('click', () => previewGovernance(user));
 
@@ -1017,11 +1158,14 @@ async function loadViolations(user) {
     } else {
       const rows = viols.map(v => `<tr>
         <td>${escapeHtml(v.action)}</td>
-        <td style="font-size:11px">${traceLink(v.request_id)}</td>
+        <td style="font-size:11px">${traceLink(v.request_id, null, 'governance')}</td>
         <td>${fmtDateAgo(v.at)}</td>
       </tr>`).join('');
       mnemo.setHtml('gov-violations-panel', `<h2>Violations (24h) — ${badge(viols.length,'red')}</h2>
         <div class="panel"><div class="table-wrap"><table><thead><tr><th>Action</th><th>Request ID</th><th>Time</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
+    }
+    if (_governanceEvidenceBundle && _governanceEvidenceBundle.user === user) {
+      _governanceEvidenceBundle.violations = viols;
     }
     mnemo.show('gov-violations-panel');
     bindTraceLinks(document.getElementById('gov-violations-panel'));
@@ -1040,12 +1184,15 @@ async function loadGovernanceAudit(user) {
     } else {
       const rows = audits.map(a => `<tr>
         <td>${escapeHtml(a.action)}</td>
-        <td style="font-size:11px">${traceLink(a.request_id)}</td>
+        <td style="font-size:11px">${traceLink(a.request_id, null, 'governance')}</td>
         <td style="font-size:11px">${escapeHtml(JSON.stringify(a.details).substring(0, 100))}</td>
         <td>${fmtDateAgo(a.at)}</td>
       </tr>`).join('');
       mnemo.setHtml('gov-audit-panel', `<h2>Audit Trail — ${audits.length}</h2>
         <div class="panel"><div class="table-wrap"><table><thead><tr><th>Action</th><th>Request ID</th><th>Details</th><th>Time</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
+    }
+    if (_governanceEvidenceBundle && _governanceEvidenceBundle.user === user) {
+      _governanceEvidenceBundle.audit = audits;
     }
     mnemo.show('gov-audit-panel');
     bindTraceLinks(document.getElementById('gov-audit-panel'));
@@ -1060,6 +1207,7 @@ async function loadGovernanceAudit(user) {
 function initTraces() {
   const btn   = document.getElementById('trace-lookup-btn');
   const input = document.getElementById('trace-request-id');
+  applyTraceFocusPreset(currentTraceFocus());
 
   // Set default window: last 30 days
   const now  = new Date();
@@ -1093,7 +1241,8 @@ function initTraces() {
       if (chkGov  && !chkGov.checked)  params.set('include_governance_audit', 'false');
       const qs = params.toString();
       const data = await mnemo.api('GET', `/api/v1/traces/${encodeURIComponent(reqId)}${qs ? '?' + qs : ''}`);
-      history.pushState({ page: 'traces' }, '', `/_/traces/${encodeURIComponent(reqId)}`);
+      const focus = currentTraceFocus();
+      history.pushState({ page: 'traces' }, '', traceHref(reqId, focus));
       renderTraceResults(data);
     } catch (e) {
       mnemo.error('trace-results', 'Trace lookup failed: ' + e.message);
@@ -1104,18 +1253,235 @@ function initTraces() {
   input.addEventListener('keydown', e => { if (e.key === 'Enter') doLookup(); });
 }
 
+function buildTraceEvidenceGraphData(d, focus) {
+  const nodes = [{
+    id: `req:${d.request_id}`,
+    label: truncId(d.request_id),
+    title: d.request_id,
+    kind: 'request',
+    size: 26,
+    layer: 0,
+  }];
+  const links = [];
+  const centerId = nodes[0].id;
+
+  (d.matched_episodes || []).forEach((row, idx) => {
+    const id = `episode:${row.episode_id}:${idx}`;
+    nodes.push({
+      id,
+      label: truncId(row.episode_id),
+      title: row.preview || row.episode_id,
+      kind: 'episode',
+      size: 15,
+      layer: 1,
+    });
+    links.push({ source: centerId, target: id, label: 'episode' });
+  });
+
+  (d.matched_webhook_events || []).forEach((row, idx) => {
+    const id = `webhook-event:${row.id}:${idx}`;
+    nodes.push({
+      id,
+      label: row.dead_letter ? 'dead' : 'event',
+      title: row.event_type || row.id,
+      kind: row.dead_letter ? 'dead_letter' : 'webhook_event',
+      size: row.dead_letter ? 18 : 14,
+      layer: 2,
+    });
+    links.push({ source: centerId, target: id, label: 'delivery' });
+  });
+
+  (d.matched_webhook_audit || []).forEach((row, idx) => {
+    const id = `webhook-audit:${row.id}:${idx}`;
+    nodes.push({
+      id,
+      label: 'audit',
+      title: row.action || row.id,
+      kind: 'webhook_audit',
+      size: 13,
+      layer: 2,
+    });
+    links.push({ source: centerId, target: id, label: 'audit' });
+  });
+
+  (d.matched_governance_audit || []).forEach((row, idx) => {
+    const id = `governance:${row.id}:${idx}`;
+    nodes.push({
+      id,
+      label: 'policy',
+      title: row.action || row.id,
+      kind: 'governance',
+      size: 16,
+      layer: 3,
+    });
+    links.push({ source: centerId, target: id, label: 'policy' });
+  });
+
+  if (links.length === 0) {
+    const placeholders = focus === 'governance'
+      ? [
+          { id: 'placeholder:governance', label: 'policy lane', title: 'Awaiting governance evidence', kind: 'governance', size: 14, layer: 3 },
+          { id: 'placeholder:audit', label: 'audit lane', title: 'Awaiting audit evidence', kind: 'webhook_audit', size: 12, layer: 2 },
+        ]
+      : [
+          { id: 'placeholder:webhook', label: 'delivery lane', title: 'Awaiting delivery evidence', kind: 'webhook_event', size: 14, layer: 2 },
+          { id: 'placeholder:replay', label: 'replay lane', title: 'Awaiting replay evidence', kind: 'dead_letter', size: 12, layer: 2 },
+        ];
+    placeholders.forEach(node => {
+      nodes.push(node);
+      links.push({ source: centerId, target: node.id, label: 'focus' });
+    });
+  }
+
+  return { nodes, links };
+}
+
+function renderTraceEvidenceGraph(d) {
+  const mount = document.getElementById('trace-evidence-graph');
+  if (!mount) return;
+
+  const graph = buildTraceEvidenceGraphData(d, currentTraceFocus());
+  mount.innerHTML = '';
+  mount.dataset.nodeCount = String(graph.nodes.length);
+  mount.dataset.edgeCount = String(graph.links.length);
+
+  if (graph.nodes.length <= 1 || typeof d3 === 'undefined') {
+    mount.innerHTML = '<p class="muted">Evidence graph becomes available once related episodes, delivery events, or policy audit rows are found.</p>';
+    return;
+  }
+
+  const width = Math.max(720, mount.clientWidth || 720);
+  const height = 360;
+  const colors = {
+    request: '#a5b4fc',
+    episode: '#22c55e',
+    webhook_event: '#38bdf8',
+    dead_letter: '#f97316',
+    webhook_audit: '#818cf8',
+    governance: '#f43f5e',
+  };
+  const bg = d3.select(mount)
+    .append('svg')
+    .attr('class', 'trace-evidence-svg')
+    .attr('viewBox', `0 0 ${width} ${height}`)
+    .attr('role', 'img')
+    .attr('aria-label', 'Trace evidence constellation');
+
+  const defs = bg.append('defs');
+  const gradient = defs.append('radialGradient').attr('id', 'trace-evidence-bg');
+  gradient.append('stop').attr('offset', '0%').attr('stop-color', 'rgba(99,102,241,0.18)');
+  gradient.append('stop').attr('offset', '100%').attr('stop-color', 'rgba(8,11,18,0.96)');
+
+  bg.append('rect')
+    .attr('width', width)
+    .attr('height', height)
+    .attr('rx', 18)
+    .attr('fill', 'url(#trace-evidence-bg)');
+
+  const orbit = bg.append('g').attr('class', 'trace-evidence-orbits');
+  [68, 112, 156].forEach((radius, idx) => {
+    orbit.append('ellipse')
+      .attr('cx', width / 2)
+      .attr('cy', height / 2 + idx * 8)
+      .attr('rx', radius * 1.15)
+      .attr('ry', radius * 0.34)
+      .attr('fill', 'none')
+      .attr('stroke', 'rgba(148,163,184,0.12)')
+      .attr('stroke-width', 1);
+  });
+
+  const simulation = d3.forceSimulation(graph.nodes)
+    .force('link', d3.forceLink(graph.links).id(datum => datum.id).distance(edgeDatum => edgeDatum.label === 'policy' ? 150 : 120).strength(0.45))
+    .force('charge', d3.forceManyBody().strength(datum => datum.kind === 'request' ? -900 : -260))
+    .force('collide', d3.forceCollide(datum => datum.size + 8))
+    .force('radial', d3.forceRadial(datum => 38 + datum.layer * 44, width / 2, height / 2).strength(0.7))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .stop();
+
+  for (let i = 0; i < 220; i++) simulation.tick();
+
+  const link = bg.append('g')
+    .selectAll('line')
+    .data(graph.links)
+    .join('line')
+    .attr('x1', d => d.source.x)
+    .attr('y1', d => d.source.y)
+    .attr('x2', d => d.target.x)
+    .attr('y2', d => d.target.y)
+    .attr('stroke', d => d.label === 'policy' ? 'rgba(244,63,94,0.34)' : 'rgba(125,211,252,0.26)')
+    .attr('stroke-width', d => d.label === 'delivery' ? 2.1 : 1.4);
+
+  const node = bg.append('g')
+    .selectAll('g')
+    .data(graph.nodes)
+    .join('g')
+    .attr('transform', d => `translate(${d.x},${d.y})`);
+
+  node.append('circle')
+    .attr('r', d => d.size + 8)
+    .attr('fill', d => colors[d.kind] || '#94a3b8')
+    .attr('opacity', 0.12)
+    .attr('filter', 'blur(10px)');
+
+  node.append('circle')
+    .attr('r', d => d.size)
+    .attr('fill', d => colors[d.kind] || '#94a3b8')
+    .attr('stroke', 'rgba(255,255,255,0.75)')
+    .attr('stroke-width', d => d.kind === 'request' ? 2.2 : 1.2);
+
+  node.append('text')
+    .attr('y', d => d.size + 16)
+    .attr('text-anchor', 'middle')
+    .attr('fill', '#e5e7eb')
+    .attr('font-size', d => d.kind === 'request' ? 12 : 10)
+    .attr('font-family', 'var(--font-mono)')
+    .text(d => d.label);
+
+  node.append('title').text(d => d.title);
+
+  bg.append('text')
+    .attr('x', 18)
+    .attr('y', 28)
+    .attr('fill', 'rgba(224,231,255,0.94)')
+    .attr('font-size', 13)
+    .attr('font-weight', 600)
+    .text('Evidence Constellation');
+  bg.append('text')
+    .attr('x', 18)
+    .attr('y', 48)
+    .attr('fill', 'rgba(148,163,184,0.86)')
+    .attr('font-size', 11)
+    .text(`${graph.nodes.length} nodes · ${graph.links.length} joins · request-centric trace map`);
+}
+
 function renderTraceResults(d) {
+  const focus = currentTraceFocus();
+  const focusConfig = traceFocusConfig(focus);
   const eps = d.matched_episodes || [];
   const whEvts = d.matched_webhook_events || [];
   const whAudit = d.matched_webhook_audit || [];
   const govAudit = d.matched_governance_audit || [];
+  _traceEvidenceBundle = {
+    request_id: d.request_id,
+    focus,
+    trace: d,
+  };
 
-  let html = `<h2>Trace: <code>${escapeHtml(d.request_id)}</code></h2>
+  let html = `<div class="detail-header">
+      <h2>Trace: <code>${escapeHtml(d.request_id)}</code></h2>
+      <div class="btn-group">
+        <button class="btn btn-sm btn-ghost" onclick="exportTraceEvidenceBundle()">Export Evidence</button>
+      </div>
+    </div>
+    ${focusConfig ? `<div class="trace-focus-banner"><strong>${escapeHtml(focusConfig.title)}</strong><span>${escapeHtml(focusConfig.description)}</span></div>` : ''}
     <div class="card-grid" style="margin-bottom:16px">
       <div class="card"><div class="card-label">Episodes</div><div class="card-value">${eps.length}</div></div>
       <div class="card"><div class="card-label">Webhook Events</div><div class="card-value">${whEvts.length}</div></div>
       <div class="card"><div class="card-label">Webhook Audit</div><div class="card-value">${whAudit.length}</div></div>
       <div class="card"><div class="card-label">Governance Audit</div><div class="card-value">${govAudit.length}</div></div>
+    </div>
+    <div class="evidence-graph-shell">
+      <div id="trace-evidence-graph"></div>
     </div>`;
 
   if (eps.length > 0) {
@@ -1173,6 +1539,7 @@ function renderTraceResults(d) {
   }
 
   mnemo.setHtml('trace-results', html);
+  renderTraceEvidenceGraph(d);
   mnemo.show('trace-results');
 }
 

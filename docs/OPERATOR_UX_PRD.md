@@ -204,6 +204,7 @@ Cross-cutting latency targets for incident UX:
   - webhook events/delivery attempts/audit rows
 - progressive disclosure: summary first, deep raw records on demand.
 - correlated webhook and governance rows should expose direct drilldowns back into the relevant webhook detail and governance views.
+- operators should be able to export a request-centric incident evidence bundle directly from trace, governance, or webhook drilldowns.
 
 ## 11) API/Backend Mapping
 

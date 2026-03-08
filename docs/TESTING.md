@@ -20,6 +20,8 @@
 | `tests/deploy_artifact_validation.sh` | 36 gates | Bash script |
 | `tests/docker_build_test.sh` | 3 gates | Bash script |
 | `tests/dashboard_smoke.sh` | 12 gates | Bash script (requires running server) |
+| `tests/dashboard_browser_smoke.py` | Browser drilldown smoke | Playwright + requests (requires running server) |
+| `tests/mock_openai_chat_server.py` | Minimal chat-completions mock | Python stdlib helper for local browser smoke |
 | `tests/phase_b_screenshots.py` | 8 screenshots | Playwright (requires running server) |
 | Phase B falsification | 35 gates | Playwright (manual, requires running server) |
 | `tests/eval_recall_quality.py` | 3 quality gates (40-fact dataset) | Python (requires running server + embedding model) |
@@ -63,6 +65,25 @@ Assumes the server is already running on `http://localhost:8080`.
 
 ```bash
 ./tests/e2e.sh
+```
+
+## 3.2) Browser-driven dashboard smoke
+
+Runs a real browser through the operator dashboard drilldown lanes, including trace focus presets and evidence exports. Assumes the server is already running on `http://localhost:8080`.
+
+```bash
+python3 tests/dashboard_browser_smoke.py
+```
+
+If you do not want to point Mnemo at a real LLM during browser smoke, pair it with the local OpenAI-compatible mock:
+
+```bash
+python3 tests/mock_openai_chat_server.py &
+MNEMO_LLM_PROVIDER=openai \
+MNEMO_LLM_MODEL=mock-extractor \
+MNEMO_LLM_API_KEY=dummy \
+MNEMO_LLM_BASE_URL=http://127.0.0.1:18080/v1 \
+cargo run -p mnemo-server
 ```
 
 ## 3.5) Recall quality eval harness
