@@ -580,6 +580,7 @@ See `docs/PHASE_2_PRD.md` for milestones.
 - T10 Linode — all 5 gates passed ✅
 
 See `docs/PRD_DEPLOY.md` for full deployment PRD and falsification gate contract.
+See `docs/DEPLOYMENT_STATUS.md` for the current live fleet matrix, provider quirks, and revalidation commands.
 
 **Phase 3 — Operator UX & Control Plane** 🚧 in progress
 
