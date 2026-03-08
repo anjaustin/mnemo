@@ -169,6 +169,21 @@ function dashboardPageFromPath(pathname) {
   return pathname.replace(/^\/_\/?/, '').split('/')[0] || 'home';
 }
 
+function dashboardQuery() {
+  return new URLSearchParams(location.search);
+}
+
+function traceHref(requestId) {
+  return requestId ? `/_/traces/${encodeURIComponent(requestId)}` : '';
+}
+
+function traceLink(requestId, label) {
+  if (!requestId) return '--';
+  const href = traceHref(requestId);
+  const text = label || ('req ' + truncId(requestId));
+  return `<a class="link" href="${href}" data-trace-link="${escapeHtml(requestId)}">${escapeHtml(text)}</a>`;
+}
+
 function syncPageFromPath(pageName) {
   const segments = dashboardSegments();
 
@@ -460,9 +475,27 @@ function openWebhookDetail(whId, pushUrl) {
     r.classList.toggle('selected-row', r.dataset.whId === whId);
   });
   if (pushUrl !== false) {
-    history.pushState({ page: 'webhooks' }, '', `/_/webhooks/${encodeURIComponent(whId)}`);
+    const query = location.search || '';
+    history.pushState({ page: 'webhooks' }, '', `/_/webhooks/${encodeURIComponent(whId)}${query}`);
   }
   loadWebhookDetail(whId);
+}
+
+function navigateToTrace(requestId) {
+  if (!requestId) return;
+  const input = document.getElementById('trace-request-id');
+  if (input) input.value = requestId;
+  _navigate('traces', true, traceHref(requestId));
+  setTimeout(() => document.getElementById('trace-lookup-btn')?.click(), 50);
+}
+
+function bindTraceLinks(scope) {
+  (scope || document).querySelectorAll('a[data-trace-link]').forEach(link => {
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      navigateToTrace(link.dataset.traceLink);
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -478,6 +511,7 @@ function initWebhooks() {
 async function loadWebhookGrid() {
   mnemo.loading('webhooks-grid');
   try {
+    const filterMode = dashboardQuery().get('filter') || '';
     const list = await mnemo.api('GET', '/api/v1/memory/webhooks');
     webhooksData = list.data || [];
     if (webhooksData.length === 0) {
@@ -490,7 +524,15 @@ async function loadWebhookGrid() {
     );
     const allStats = await Promise.all(statsPromises);
 
-    const rows = webhooksData.map((h, i) => {
+    const filteredHooks = webhooksData.filter((h, i) => {
+      const s = allStats[i] || {};
+      if (filterMode === 'dead-letter') return (s.dead_letter_events || 0) > 0;
+      if (filterMode === 'backlog') return (s.pending_events || 0) > 0 || (s.dead_letter_events || 0) > 0;
+      return true;
+    });
+
+    const rows = filteredHooks.map(h => {
+      const i = webhooksData.findIndex(row => row.id === h.id);
       const s = allStats[i] || {};
       const circuit = s.circuit_open ? badge('OPEN', 'red') : badge('closed', 'green');
       const selected = h.id === _selectedWebhookId ? ' selected-row' : '';
@@ -506,9 +548,21 @@ async function loadWebhookGrid() {
       </tr>`;
     }).join('');
 
-    mnemo.setHtml('webhooks-grid', `<div class="table-wrap"><table>
+    const filterBanner = filterMode
+      ? `<div class="detail-header" style="margin-bottom:8px"><span class="muted">Filtered to ${escapeHtml(filterMode.replace('-', ' '))} incidents</span><a class="link" href="/_/webhooks" data-reset-webhook-filter="true">Clear filter</a></div>`
+      : '';
+
+    mnemo.setHtml('webhooks-grid', `${filterBanner}<div class="table-wrap"><table>
       <thead><tr><th>ID</th><th>Target</th><th>Status</th><th>Circuit</th><th>Pending</th><th>Dead</th><th>Delivered</th><th>User</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`);
+
+    document.querySelectorAll('[data-reset-webhook-filter]').forEach(link => {
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        history.pushState({ page: 'webhooks' }, '', '/_/webhooks');
+        _navigate('webhooks', false);
+      });
+    });
 
     document.querySelectorAll('.clickable-row[data-wh-id]').forEach(row => {
       row.addEventListener('click', () => {
@@ -518,6 +572,7 @@ async function loadWebhookGrid() {
 
     // Auto-reload selected webhook detail
     if (_selectedWebhookId) openWebhookDetail(_selectedWebhookId, false);
+    if (!_selectedWebhookId && filteredHooks.length === 1) openWebhookDetail(filteredHooks[0].id, false);
   } catch (e) {
     mnemo.error('webhooks-grid', 'Failed to load webhooks: ' + e.message);
   }
@@ -527,6 +582,8 @@ async function loadWebhookDetail(whId) {
   mnemo.show('webhook-detail');
   mnemo.loading('wh-detail-content');
   try {
+    const query = dashboardQuery();
+    const focus = query.get('focus') || '';
     const [wh, stats, deadLetters, audit] = await Promise.all([
       mnemo.api('GET', `/api/v1/memory/webhooks/${whId}`),
       mnemo.api('GET', `/api/v1/memory/webhooks/${whId}/stats`),
@@ -559,7 +616,7 @@ async function loadWebhookDetail(whId) {
     if (audits.length > 0) {
       const auditRows = audits.map(a => `<tr>
         <td>${escapeHtml(a.action)}</td>
-        <td style="font-size:11px">${escapeHtml(a.request_id || '--')}</td>
+        <td style="font-size:11px">${traceLink(a.request_id)}</td>
         <td style="font-size:11px">${escapeHtml(JSON.stringify(a.details).substring(0, 80))}</td>
         <td>${fmtDateAgo(a.at)}</td>
       </tr>`).join('');
@@ -576,6 +633,7 @@ async function loadWebhookDetail(whId) {
           <button class="btn btn-sm btn-danger" onclick="deleteWebhook('${escapeHtml(whId)}')">Delete</button>
         </div>
       </div>
+      ${focus === 'dead-letter' ? '<div class="panel" style="margin-bottom:16px"><strong>Incident focus:</strong> dead-letter recovery lane</div>' : ''}
       <div class="stat-grid" style="margin-bottom:16px">
         <div class="stat-row"><span>Target</span><span style="word-break:break-all;font-size:12px">${escapeHtml(wh.target_url)}</span></div>
         <div class="stat-row"><span>Status</span><span>${wh.enabled ? badge('enabled','green') : badge('disabled','yellow')}</span></div>
@@ -592,6 +650,7 @@ async function loadWebhookDetail(whId) {
       <h2>Audit Log</h2>
       <div class="panel">${auditHtml}</div>
     `);
+    bindTraceLinks(document.getElementById('wh-detail-content'));
   } catch (e) {
     mnemo.error('wh-detail-content', 'Failed to load webhook detail: ' + e.message);
   }
@@ -633,7 +692,8 @@ async function deleteWebhook(whId) {
     await mnemo.api('DELETE', `/api/v1/memory/webhooks/${whId}`);
     toast.success('Webhook deleted', `ID: ${truncId(whId)}`);
     _selectedWebhookId = null;
-    history.pushState({ page: 'webhooks' }, '', '/_/webhooks');
+    const query = location.search || '';
+    history.pushState({ page: 'webhooks' }, '', `/_/webhooks${query}`);
     mnemo.hide('webhook-detail');
     loadWebhookGrid();
   } catch (e) { toast.error('Delete failed', e.message); }
@@ -928,13 +988,14 @@ async function loadViolations(user) {
     } else {
       const rows = viols.map(v => `<tr>
         <td>${escapeHtml(v.action)}</td>
-        <td style="font-size:11px">${escapeHtml(v.request_id || '--')}</td>
+        <td style="font-size:11px">${traceLink(v.request_id)}</td>
         <td>${fmtDateAgo(v.at)}</td>
       </tr>`).join('');
       mnemo.setHtml('gov-violations-panel', `<h2>Violations (24h) — ${badge(viols.length,'red')}</h2>
         <div class="panel"><div class="table-wrap"><table><thead><tr><th>Action</th><th>Request ID</th><th>Time</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
     }
     mnemo.show('gov-violations-panel');
+    bindTraceLinks(document.getElementById('gov-violations-panel'));
   } catch (e) {
     mnemo.error('gov-violations-panel', 'Could not load violations.');
   }
@@ -950,13 +1011,15 @@ async function loadGovernanceAudit(user) {
     } else {
       const rows = audits.map(a => `<tr>
         <td>${escapeHtml(a.action)}</td>
+        <td style="font-size:11px">${traceLink(a.request_id)}</td>
         <td style="font-size:11px">${escapeHtml(JSON.stringify(a.details).substring(0, 100))}</td>
         <td>${fmtDateAgo(a.at)}</td>
       </tr>`).join('');
       mnemo.setHtml('gov-audit-panel', `<h2>Audit Trail — ${audits.length}</h2>
-        <div class="panel"><div class="table-wrap"><table><thead><tr><th>Action</th><th>Details</th><th>Time</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
+        <div class="panel"><div class="table-wrap"><table><thead><tr><th>Action</th><th>Request ID</th><th>Details</th><th>Time</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
     }
     mnemo.show('gov-audit-panel');
+    bindTraceLinks(document.getElementById('gov-audit-panel'));
   } catch (e) {
     mnemo.error('gov-audit-panel', 'Could not load audit trail.');
   }

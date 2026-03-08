@@ -1465,7 +1465,7 @@ async fn get_ops_incidents(
                 dead_letter_backlog
             ),
             action_label: "Review dead-letter queue".to_string(),
-            action_href: "/_/webhooks".to_string(),
+            action_href: "/_/webhooks?filter=dead-letter".to_string(),
             resource_id: None,
             resource_label: None,
             request_id: None,
@@ -1485,7 +1485,7 @@ async fn get_ops_incidents(
             summary: "Webhook deliveries are accumulating faster than they are clearing."
                 .to_string(),
             action_label: "Inspect webhook throughput".to_string(),
-            action_href: "/_/webhooks".to_string(),
+            action_href: "/_/webhooks?filter=backlog".to_string(),
             resource_id: None,
             resource_label: None,
             request_id: None,
