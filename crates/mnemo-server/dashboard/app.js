@@ -161,6 +161,50 @@ function badge(label, type) {
 
 function truncId(id) { return id ? id.substring(0, 8) : '--'; }
 
+function dashboardSegments() {
+  return location.pathname.replace(/^\/_\/?/, '').split('/').filter(Boolean);
+}
+
+function dashboardPageFromPath(pathname) {
+  return pathname.replace(/^\/_\/?/, '').split('/')[0] || 'home';
+}
+
+function syncPageFromPath(pageName) {
+  const segments = dashboardSegments();
+
+  if (pageName === 'webhooks') {
+    const whId = segments[1] ? decodeURIComponent(segments[1]) : null;
+    _selectedWebhookId = whId;
+    if (whId) {
+      openWebhookDetail(whId, false);
+    } else {
+      mnemo.hide('webhook-detail');
+      document.querySelectorAll('.clickable-row[data-wh-id]').forEach(r => r.classList.remove('selected-row'));
+    }
+    return;
+  }
+
+  if (pageName === 'governance') {
+    const user = segments[1] ? decodeURIComponent(segments[1]) : null;
+    if (user && user !== govCurrentUser) {
+      const input = document.getElementById('gov-user');
+      if (input) input.value = user;
+      govCurrentUser = user;
+      loadGovernance(user);
+    }
+    return;
+  }
+
+  if (pageName === 'traces') {
+    const reqId = segments[1] ? decodeURIComponent(segments[1]) : null;
+    const input = document.getElementById('trace-request-id');
+    if (reqId && input && input.value !== reqId) {
+      input.value = reqId;
+      setTimeout(() => document.getElementById('trace-lookup-btn')?.click(), 0);
+    }
+  }
+}
+
 // ─── Navigation with lazy init ─────────────────────────────────────
 let currentPage = 'home';
 
@@ -170,7 +214,7 @@ function initNav() {
   const links = document.querySelectorAll('.nav-link');
   const pages = document.querySelectorAll('.page');
 
-  window._navigate = function navigate(pageName, pushUrl) {
+  window._navigate = function navigate(pageName, pushUrl, exactPath) {
     currentPage = pageName;
     pages.forEach(p => p.classList.add('hidden'));
     links.forEach(l => { l.classList.remove('active'); l.removeAttribute('aria-current'); });
@@ -188,7 +232,7 @@ function initNav() {
 
     // Always update URL (unless explicitly suppressed for popstate handler)
     if (pushUrl !== false) {
-      const url = pageName === 'home' ? '/_/' : `/_/${pageName}`;
+      const url = exactPath || (pageName === 'home' ? '/_/' : `/_/${pageName}`);
       history.pushState({ page: pageName }, '', url);
     }
 
@@ -197,6 +241,8 @@ function initNav() {
       _pageInits[pageName]._done = true;
       _pageInits[pageName].init();
     }
+
+    syncPageFromPath(pageName);
   };
 
   links.forEach(link => {
@@ -207,11 +253,11 @@ function initNav() {
   });
 
   window.addEventListener('popstate', () => {
-    const page = location.pathname.replace(/^\/_\/?/, '').split('/')[0] || 'home';
+    const page = dashboardPageFromPath(location.pathname);
     _navigate(page, false);
   });
 
-  const path = location.pathname.replace(/^\/_\/?/, '').split('/')[0] || 'home';
+  const path = dashboardPageFromPath(location.pathname);
   _navigate(path, false);
 }
 
@@ -288,8 +334,9 @@ function initHome() {
 
       const severityTone = sev => sev === 'high' ? 'red' : (sev === 'medium' ? 'yellow' : 'blue');
       const rows = incidents.map(incident => {
+        const traceHref = incident.request_id ? `/_/traces/${encodeURIComponent(incident.request_id)}` : '';
         const requestLink = incident.request_id
-          ? `<a class="link" href="${incident.action_href}" data-request-id="${escapeHtml(incident.request_id)}">req ${escapeHtml(truncId(incident.request_id))}</a>`
+          ? `<a class="link" href="${traceHref}" data-request-id="${escapeHtml(incident.request_id)}">req ${escapeHtml(truncId(incident.request_id))}</a>`
           : '';
         return `<div class="incident-card severity-${escapeHtml(incident.severity || 'low')}" data-action-href="${escapeHtml(incident.action_href || '/_/')}" data-request-id="${escapeHtml(incident.request_id || '')}">
           <div class="incident-head">
@@ -314,13 +361,13 @@ function initHome() {
           const reqId = card.dataset.requestId;
           if (reqId && e.target.closest('a[data-request-id]')) {
             document.getElementById('trace-request-id').value = reqId;
-            _navigate('traces');
+            _navigate('traces', true, `/_/traces/${encodeURIComponent(reqId)}`);
             setTimeout(() => document.getElementById('trace-lookup-btn')?.click(), 50);
             return;
           }
           const href = card.dataset.actionHref || '/_/';
-          const page = href.replace(/^\/_\/?/, '').split('/')[0] || 'home';
-          _navigate(page);
+          const page = dashboardPageFromPath(href);
+          _navigate(page, true, href);
         });
       });
     } catch (e) {
@@ -407,6 +454,17 @@ function initHome() {
   });
 }
 
+function openWebhookDetail(whId, pushUrl) {
+  _selectedWebhookId = whId;
+  document.querySelectorAll('.clickable-row[data-wh-id]').forEach(r => {
+    r.classList.toggle('selected-row', r.dataset.whId === whId);
+  });
+  if (pushUrl !== false) {
+    history.pushState({ page: 'webhooks' }, '', `/_/webhooks/${encodeURIComponent(whId)}`);
+  }
+  loadWebhookDetail(whId);
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // WEBHOOKS PAGE
 // ═══════════════════════════════════════════════════════════════════
@@ -454,15 +512,12 @@ async function loadWebhookGrid() {
 
     document.querySelectorAll('.clickable-row[data-wh-id]').forEach(row => {
       row.addEventListener('click', () => {
-        _selectedWebhookId = row.dataset.whId;
-        document.querySelectorAll('.clickable-row[data-wh-id]').forEach(r => r.classList.remove('selected-row'));
-        row.classList.add('selected-row');
-        loadWebhookDetail(row.dataset.whId);
+        openWebhookDetail(row.dataset.whId, true);
       });
     });
 
     // Auto-reload selected webhook detail
-    if (_selectedWebhookId) loadWebhookDetail(_selectedWebhookId);
+    if (_selectedWebhookId) openWebhookDetail(_selectedWebhookId, false);
   } catch (e) {
     mnemo.error('webhooks-grid', 'Failed to load webhooks: ' + e.message);
   }
@@ -578,6 +633,7 @@ async function deleteWebhook(whId) {
     await mnemo.api('DELETE', `/api/v1/memory/webhooks/${whId}`);
     toast.success('Webhook deleted', `ID: ${truncId(whId)}`);
     _selectedWebhookId = null;
+    history.pushState({ page: 'webhooks' }, '', '/_/webhooks');
     mnemo.hide('webhook-detail');
     loadWebhookGrid();
   } catch (e) { toast.error('Delete failed', e.message); }
@@ -754,6 +810,7 @@ function initGovernance() {
     const user = document.getElementById('gov-user').value.trim();
     if (!user) { toast.warn('Input required', 'Enter a username.'); return; }
     govCurrentUser = user;
+    history.pushState({ page: 'governance' }, '', `/_/governance/${encodeURIComponent(user)}`);
     loadGovernance(user);
   });
   document.getElementById('gov-user').addEventListener('keydown', e => {
@@ -944,6 +1001,7 @@ function initTraces() {
       if (chkGov  && !chkGov.checked)  params.set('include_governance_audit', 'false');
       const qs = params.toString();
       const data = await mnemo.api('GET', `/api/v1/traces/${encodeURIComponent(reqId)}${qs ? '?' + qs : ''}`);
+      history.pushState({ page: 'traces' }, '', `/_/traces/${encodeURIComponent(reqId)}`);
       renderTraceResults(data);
     } catch (e) {
       mnemo.error('trace-results', 'Trace lookup failed: ' + e.message);

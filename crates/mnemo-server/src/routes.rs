@@ -1437,7 +1437,7 @@ async fn get_ops_incidents(
                         rt.consecutive_failures
                     ),
                     action_label: "Open Webhook Ops".to_string(),
-                    action_href: "/_/webhooks".to_string(),
+                    action_href: format!("/_/webhooks/{}", hook.id),
                     resource_id: Some(hook.id.to_string()),
                     resource_label: Some(hook.target_url.clone()),
                     request_id: None,
@@ -1530,7 +1530,7 @@ async fn get_ops_incidents(
                 title: format!("Policy violation: {}", row.action),
                 summary: summarize_governance_violation(row),
                 action_label: "Open governance center".to_string(),
-                action_href: "/_/governance".to_string(),
+                action_href: format!("/_/governance/{}", row.user_id),
                 resource_id: Some(row.user_id.to_string()),
                 resource_label: None,
                 request_id: row.request_id.clone(),
