@@ -184,6 +184,16 @@ function traceLink(requestId, label) {
   return `<a class="link" href="${href}" data-trace-link="${escapeHtml(requestId)}">${escapeHtml(text)}</a>`;
 }
 
+function webhookHref(webhookId, focus) {
+  if (!webhookId) return '/_/webhooks';
+  const suffix = focus ? ('?focus=' + encodeURIComponent(focus)) : '';
+  return `/_/webhooks/${encodeURIComponent(webhookId)}${suffix}`;
+}
+
+function governanceHref(userId) {
+  return userId ? `/_/governance/${encodeURIComponent(userId)}` : '/_/governance';
+}
+
 function syncPageFromPath(pageName) {
   const segments = dashboardSegments();
 
@@ -530,6 +540,25 @@ async function loadWebhookGrid() {
       if (filterMode === 'backlog') return (s.pending_events || 0) > 0 || (s.dead_letter_events || 0) > 0;
       return true;
     });
+
+    if (filteredHooks.length === 0) {
+      const label = filterMode ? escapeHtml(filterMode.replace('-', ' ')) : 'current';
+      mnemo.hide('webhook-detail');
+      mnemo.setHtml('webhooks-grid', `
+        <div class="panel">
+          <h2>No matching webhooks</h2>
+          <p class="muted">No webhooks currently match the ${label} incident filter.</p>
+          <p><a class="link" href="/_/webhooks" data-reset-webhook-filter="true">Clear filter and view all webhooks</a></p>
+        </div>`);
+      document.querySelectorAll('[data-reset-webhook-filter]').forEach(link => {
+        link.addEventListener('click', e => {
+          e.preventDefault();
+          history.pushState({ page: 'webhooks' }, '', '/_/webhooks');
+          _navigate('webhooks', false);
+        });
+      });
+      return;
+    }
 
     const rows = filteredHooks.map(h => {
       const i = webhooksData.findIndex(row => row.id === h.id);
@@ -1104,35 +1133,38 @@ function renderTraceResults(d) {
   if (whEvts.length > 0) {
     const rows = whEvts.map(e => `<tr>
       <td><code>${escapeHtml(truncId(e.id))}</code></td>
+      <td><a class="link" href="${webhookHref(e.webhook_id, e.dead_letter ? 'dead-letter' : '')}">open webhook</a></td>
       <td>${escapeHtml(e.event_type)}</td>
       <td>${e.delivered ? badge('yes','green') : badge('no','gray')}</td>
       <td>${e.dead_letter ? badge('yes','red') : badge('no','gray')}</td>
       <td>${fmtDateAgo(e.created_at)}</td>
     </tr>`).join('');
     html += `<h2>Webhook Events</h2><div class="panel"><div class="table-wrap"><table>
-      <thead><tr><th>ID</th><th>Type</th><th>Delivered</th><th>Dead Letter</th><th>Created</th></tr></thead>
+      <thead><tr><th>ID</th><th>Action</th><th>Type</th><th>Delivered</th><th>Dead Letter</th><th>Created</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`;
   }
 
   if (whAudit.length > 0) {
     const rows = whAudit.map(a => `<tr>
       <td>${escapeHtml(a.action)}</td>
+      <td><a class="link" href="${webhookHref(a.webhook_id)}">open webhook</a></td>
       <td style="font-size:11px">${escapeHtml(JSON.stringify(a.details).substring(0,100))}</td>
       <td>${fmtDateAgo(a.at)}</td>
     </tr>`).join('');
     html += `<h2>Webhook Audit</h2><div class="panel"><div class="table-wrap"><table>
-      <thead><tr><th>Action</th><th>Details</th><th>Time</th></tr></thead>
+      <thead><tr><th>Action</th><th>Drilldown</th><th>Details</th><th>Time</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`;
   }
 
   if (govAudit.length > 0) {
     const rows = govAudit.map(a => `<tr>
       <td>${escapeHtml(a.action)}</td>
+      <td><a class="link" href="${governanceHref(a.user_id)}">open governance</a></td>
       <td style="font-size:11px">${escapeHtml(JSON.stringify(a.details).substring(0,100))}</td>
       <td>${fmtDateAgo(a.at)}</td>
     </tr>`).join('');
     html += `<h2>Governance Audit</h2><div class="panel"><div class="table-wrap"><table>
-      <thead><tr><th>Action</th><th>Details</th><th>Time</th></tr></thead>
+      <thead><tr><th>Action</th><th>Drilldown</th><th>Details</th><th>Time</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`;
   }
 

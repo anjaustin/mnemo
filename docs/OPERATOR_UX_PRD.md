@@ -167,6 +167,7 @@ Cross-cutting latency targets for incident UX:
 - Highlight anomaly deltas over 5m, 1h, 24h windows.
 - Link each anomaly card to filtered operational views.
 - Dashboard is triage-only: no metric card without deep-link action path.
+- Incident drilldowns should preserve operator context, including filtered webhook views for dead-letter and backlog lanes.
 
 ### 10.2 Webhook Ops
 
@@ -202,6 +203,7 @@ Cross-cutting latency targets for incident UX:
   - timeline events and change rows
   - webhook events/delivery attempts/audit rows
 - progressive disclosure: summary first, deep raw records on demand.
+- correlated webhook and governance rows should expose direct drilldowns back into the relevant webhook detail and governance views.
 
 ## 11) API/Backend Mapping
 

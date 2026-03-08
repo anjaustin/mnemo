@@ -26,7 +26,8 @@ use mnemo_retrieval::RetrievalEngine;
 use mnemo_server::middleware::{request_context_middleware, REQUEST_ID_HEADER};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
-    AppState, MetadataPrefilterConfig, RerankerMode, ServerMetrics, WebhookDeliveryConfig,
+    AppState, GovernanceAuditRecord, MemoryWebhookEventRecord, MetadataPrefilterConfig,
+    RerankerMode, ServerMetrics, WebhookDeliveryConfig, WebhookRuntimeState,
 };
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
@@ -47,7 +48,7 @@ async fn build_test_app_with_prefilter(prefilter: MetadataPrefilterConfig) -> ax
 async fn build_test_harness_with_prefilter(
     prefilter: MetadataPrefilterConfig,
 ) -> (axum::Router, Arc<RedisStateStore>) {
-    build_test_harness_with_prefilter_and_webhooks(
+    let (app, _state, state_store) = build_test_harness_with_state_and_prefilter_and_webhooks(
         prefilter,
         WebhookDeliveryConfig {
             enabled: false,
@@ -61,13 +62,23 @@ async fn build_test_harness_with_prefilter(
             persistence_enabled: false,
         },
     )
-    .await
+    .await;
+    (app, state_store)
 }
 
 async fn build_test_harness_with_prefilter_and_webhooks(
     prefilter: MetadataPrefilterConfig,
     webhook_delivery: WebhookDeliveryConfig,
 ) -> (axum::Router, Arc<RedisStateStore>) {
+    let (app, _state, state_store) =
+        build_test_harness_with_state_and_prefilter_and_webhooks(prefilter, webhook_delivery).await;
+    (app, state_store)
+}
+
+async fn build_test_harness_with_state_and_prefilter_and_webhooks(
+    prefilter: MetadataPrefilterConfig,
+    webhook_delivery: WebhookDeliveryConfig,
+) -> (axum::Router, AppState, Arc<RedisStateStore>) {
     let redis_url = std::env::var("MNEMO_TEST_REDIS_URL")
         .unwrap_or_else(|_| "redis://localhost:6379".to_string());
     let qdrant_url = std::env::var("MNEMO_TEST_QDRANT_URL")
@@ -139,10 +150,12 @@ async fn build_test_harness_with_prefilter_and_webhooks(
         metrics: Arc::new(ServerMetrics::default()),
     };
 
-    let app =
-        build_router(state.clone()).layer(from_fn_with_state(state, request_context_middleware));
+    let app = build_router(state.clone()).layer(from_fn_with_state(
+        state.clone(),
+        request_context_middleware,
+    ));
 
-    (app, state_store.clone())
+    (app, state, state_store.clone())
 }
 
 async fn json_request(
@@ -3657,6 +3670,170 @@ async fn test_ops_summary_endpoint_returns_operator_counters() {
 }
 
 #[tokio::test]
+async fn test_ops_incidents_endpoint_shapes_action_hrefs_for_drilldowns() {
+    let (app, state, _store) = build_test_harness_with_state_and_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: false,
+            max_attempts: 3,
+            base_backoff_ms: 20,
+            request_timeout_ms: 150,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
+        },
+    )
+    .await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "ops-incident-user",
+            "external_id": "ops-incident-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap().to_string();
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "ops-incident-user",
+            "target_url": "https://hooks.acme.example/incident",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+    let webhook_uuid = Uuid::parse_str(&webhook_id).unwrap();
+    let user_uuid = Uuid::parse_str(&user_id).unwrap();
+    let now = Utc::now();
+
+    let mut events = Vec::new();
+    events.push(MemoryWebhookEventRecord {
+        id: Uuid::now_v7(),
+        webhook_id: webhook_uuid,
+        event_type: mnemo_server::state::MemoryWebhookEventType::HeadAdvanced,
+        user_id: user_uuid,
+        payload: serde_json::json!({"kind": "dead-letter"}),
+        created_at: now,
+        attempts: 3,
+        delivered: false,
+        dead_letter: true,
+        request_id: Some("ops-dead-letter-req".to_string()),
+        delivered_at: None,
+        last_error: Some("timeout".to_string()),
+    });
+    for _ in 0..25 {
+        events.push(MemoryWebhookEventRecord {
+            id: Uuid::now_v7(),
+            webhook_id: webhook_uuid,
+            event_type: mnemo_server::state::MemoryWebhookEventType::HeadAdvanced,
+            user_id: user_uuid,
+            payload: serde_json::json!({"kind": "pending"}),
+            created_at: now,
+            attempts: 0,
+            delivered: false,
+            dead_letter: false,
+            request_id: None,
+            delivered_at: None,
+            last_error: None,
+        });
+    }
+    state
+        .memory_webhook_events
+        .write()
+        .await
+        .insert(webhook_uuid, events);
+    state.webhook_runtime.write().await.insert(
+        webhook_uuid,
+        WebhookRuntimeState {
+            window_started_at: now,
+            sent_in_window: 0,
+            consecutive_failures: 5,
+            circuit_open_until: Some(now + chrono::Duration::minutes(5)),
+        },
+    );
+    state.governance_audit.write().await.insert(
+        user_uuid,
+        vec![GovernanceAuditRecord {
+            id: Uuid::now_v7(),
+            user_id: user_uuid,
+            action: "policy_violation_webhook_domain".to_string(),
+            request_id: Some("ops-policy-req".to_string()),
+            details: serde_json::json!({
+                "target_url": "https://blocked.example.com/hook"
+            }),
+            at: now,
+        }],
+    );
+    state
+        .metrics
+        .policy_violation_total
+        .fetch_add(1, Ordering::Relaxed);
+
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/ops/incidents?window_seconds=600",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let incidents = body["incidents"].as_array().cloned().unwrap_or_default();
+    let dead_letter = incidents
+        .iter()
+        .find(|row| row["kind"] == "dead_letter_spike")
+        .expect("dead-letter incident present");
+    assert_eq!(
+        dead_letter["action_href"],
+        serde_json::json!("/_/webhooks?filter=dead-letter")
+    );
+
+    let backlog = incidents
+        .iter()
+        .find(|row| row["kind"] == "pending_backlog")
+        .expect("backlog incident present");
+    assert_eq!(
+        backlog["action_href"],
+        serde_json::json!("/_/webhooks?filter=backlog")
+    );
+
+    let circuit = incidents
+        .iter()
+        .find(|row| row["kind"] == "circuit_open")
+        .expect("circuit incident present");
+    assert_eq!(
+        circuit["action_href"],
+        serde_json::json!(format!("/_/webhooks/{webhook_id}"))
+    );
+
+    let policy = incidents
+        .iter()
+        .find(|row| row["kind"] == "policy_violation")
+        .expect("policy incident present");
+    assert_eq!(
+        policy["action_href"],
+        serde_json::json!(format!("/_/governance/{user_id}"))
+    );
+    assert_eq!(policy["request_id"], serde_json::json!("ops-policy-req"));
+}
+
+#[tokio::test]
 async fn test_trace_lookup_joins_episode_webhook_and_governance_records() {
     let app = build_test_app().await;
     let req_id = "trace-join-req-9001";
@@ -6034,12 +6211,18 @@ async fn test_trace_lookup_uses_request_id_index() {
         ))
         .unwrap();
     let resp = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED, "memory write should succeed");
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "memory write should succeed"
+    );
 
     // Trace lookup — should find the episode via the O(1) index
     let (status, body) = get_request(&app, &format!("/api/v1/traces/{request_id}")).await;
     assert_eq!(status, StatusCode::OK, "trace lookup should succeed");
-    let episodes = body["matched_episodes"].as_array().expect("episodes should be array");
+    let episodes = body["matched_episodes"]
+        .as_array()
+        .expect("episodes should be array");
     assert_eq!(episodes.len(), 1, "should find exactly 1 episode via index");
     let ep = &episodes[0];
     assert!(
@@ -6057,8 +6240,14 @@ async fn test_trace_lookup_returns_empty_for_unknown_request_id() {
     let unknown_rid = format!("req-never-written-{}", Uuid::now_v7().simple());
     let (status, body) = get_request(&app, &format!("/api/v1/traces/{unknown_rid}")).await;
     assert_eq!(status, StatusCode::OK);
-    let episodes = body["matched_episodes"].as_array().expect("episodes should be array");
-    assert_eq!(episodes.len(), 0, "unknown request_id should return 0 episodes");
+    let episodes = body["matched_episodes"]
+        .as_array()
+        .expect("episodes should be array");
+    assert_eq!(
+        episodes.len(),
+        0,
+        "unknown request_id should return 0 episodes"
+    );
 }
 
 #[tokio::test]
@@ -6098,17 +6287,22 @@ async fn test_trace_lookup_user_filter_scopes_results() {
     let (status, body) = get_request(&app, &format!("/api/v1/traces/{request_id}")).await;
     assert_eq!(status, StatusCode::OK);
     let all_eps = body["matched_episodes"].as_array().unwrap();
-    assert_eq!(all_eps.len(), 2, "unfiltered trace should return episodes from both users");
+    assert_eq!(
+        all_eps.len(),
+        2,
+        "unfiltered trace should return episodes from both users"
+    );
 
     // Filtered to user_a: should return only user_a's episode
-    let (status, body) = get_request(
-        &app,
-        &format!("/api/v1/traces/{request_id}?user={user_a}"),
-    )
-    .await;
+    let (status, body) =
+        get_request(&app, &format!("/api/v1/traces/{request_id}?user={user_a}")).await;
     assert_eq!(status, StatusCode::OK);
     let filtered_eps = body["matched_episodes"].as_array().unwrap();
-    assert_eq!(filtered_eps.len(), 1, "user_a filter should return 1 episode");
+    assert_eq!(
+        filtered_eps.len(),
+        1,
+        "user_a filter should return 1 episode"
+    );
 }
 
 // ── Item 2: POST /api/v1/memory/extract ────────────────────────────
@@ -6126,7 +6320,11 @@ async fn test_extract_endpoint_returns_ok_with_no_llm() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "extract should return 200 even with no LLM");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "extract should return 200 even with no LLM"
+    );
     assert_eq!(body["ok"].as_bool(), Some(true));
     assert_eq!(
         body["entity_count"].as_u64(),
@@ -6138,8 +6336,13 @@ async fn test_extract_endpoint_returns_ok_with_no_llm() {
         Some(0),
         "no LLM → relationship_count should be 0"
     );
-    let note = body["note"].as_str().expect("no_llm note should be present");
-    assert!(note.contains("no_llm"), "note should contain 'no_llm' marker");
+    let note = body["note"]
+        .as_str()
+        .expect("no_llm note should be present");
+    assert!(
+        note.contains("no_llm"),
+        "note should contain 'no_llm' marker"
+    );
 }
 
 #[tokio::test]
@@ -6152,7 +6355,11 @@ async fn test_extract_endpoint_rejects_empty_text() {
         serde_json::json!({ "text": "" }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "empty text should return 400");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "empty text should return 400"
+    );
     assert!(
         body["error"]["message"]
             .as_str()
@@ -6191,7 +6398,10 @@ async fn test_audit_export_returns_ok_when_empty() {
     assert_eq!(body["ok"].as_bool(), Some(true));
     assert!(body["records"].is_array(), "records should be array");
     let total = body["total"].as_u64().unwrap_or(u64::MAX);
-    assert!(total < 1000, "fresh test namespace should have < 1000 audit records");
+    assert!(
+        total < 1000,
+        "fresh test namespace should have < 1000 audit records"
+    );
 }
 
 #[tokio::test]
@@ -6207,7 +6417,11 @@ async fn test_audit_export_returns_governance_events() {
         serde_json::json!({ "user": user, "text": "seed episode for audit export test" }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "seed memory write should succeed");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "seed memory write should succeed"
+    );
 
     // Write a governance policy to generate an audit event
     let (status, _) = json_request(
@@ -6226,7 +6440,10 @@ async fn test_audit_export_returns_governance_events() {
     let has_governance_event = records
         .iter()
         .any(|r| r["audit_type"].as_str() == Some("governance"));
-    assert!(has_governance_event, "audit export should contain governance events after policy write");
+    assert!(
+        has_governance_event,
+        "audit export should contain governance events after policy write"
+    );
 }
 
 #[tokio::test]
@@ -6255,7 +6472,11 @@ async fn test_audit_export_to_before_from_returns_400() {
         "/api/v1/audit/export?from=2025-12-01T00:00:00Z&to=2025-01-01T00:00:00Z",
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "to < from should return 400");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "to < from should return 400"
+    );
 }
 
 #[tokio::test]
@@ -6270,5 +6491,9 @@ async fn test_audit_export_include_flags() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let records = body["records"].as_array().unwrap();
-    assert_eq!(records.len(), 0, "both include flags false should return 0 records");
+    assert_eq!(
+        records.len(),
+        0,
+        "both include flags false should return 0 records"
+    );
 }
