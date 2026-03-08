@@ -38,9 +38,14 @@ Deploy the full Mnemo stack on a single EC2 instance with a persistent EBS data 
 | `DataVolumeSize` | No | Default: 20 GiB. Increase for high write volume. |
 | `KeyName` | **Yes** | Must exist in the target region. |
 | `SSHCidr` | No | Default: `0.0.0.0/0`. Restrict to your IP in production. |
-| `MnemoVersion` | No | Default: `latest`. Pin to `0.3.1` for reproducibility. |
+| `MnemoVersion` | No | Legacy tag parameter. Leave default when using `MnemoImage`. |
+| `MnemoImage` | No | Full image reference. Default is the distroless local-embed image used in falsification. |
 | `MnemoLlmProvider` | No | Leave blank to skip enrichment. |
 | `MnemoLlmApiKey` | No | Your OpenAI/Anthropic key. |
+| `MnemoEmbeddingProvider` | No | `local` or remote `openai`-compatible provider. |
+| `MnemoEmbeddingDimensions` | No | `384` for `AllMiniLML6V2`; keep aligned with collection prefix. |
+| `MnemoQdrantPrefix` | No | Fresh collection namespace for this deployment. |
+| `MnemoSessionSummaryThreshold` | No | Progressive summarization threshold; default `10`. |
 | `MnemoAuthEnabled` | No | Default: `false`. Set `true` before public exposure. |
 | `MnemoAuthApiKeys` | No | Comma-separated keys when auth is enabled. |
 
@@ -58,10 +63,15 @@ aws cloudformation create-stack \
   --parameters \
     ParameterKey=KeyName,ParameterValue=YOUR_KEY_PAIR_NAME \
     ParameterKey=SSHCidr,ParameterValue=$(curl -s https://checkip.amazonaws.com)/32 \
-    ParameterKey=MnemoVersion,ParameterValue=0.3.1 \
+    ParameterKey=MnemoImage,ParameterValue=ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h \
+    ParameterKey=MnemoLlmProvider,ParameterValue=anthropic \
     ParameterKey=MnemoLlmApiKey,ParameterValue=sk-YOUR_KEY \
-    ParameterKey=MnemoEmbeddingApiKey,ParameterValue=sk-YOUR_KEY \
-  --region us-east-1
+    ParameterKey=MnemoLlmModel,ParameterValue=claude-haiku-4-20250514 \
+    ParameterKey=MnemoEmbeddingProvider,ParameterValue=local \
+    ParameterKey=MnemoEmbeddingModel,ParameterValue=AllMiniLML6V2 \
+    ParameterKey=MnemoEmbeddingDimensions,ParameterValue=384 \
+    ParameterKey=MnemoQdrantPrefix,ParameterValue=mnemo_aws_384_ \
+    --region us-east-1
 
 # Watch stack events
 aws cloudformation wait stack-create-complete \
@@ -86,7 +96,7 @@ IP=$(aws cloudformation describe-stacks \
 
 # Health check
 curl http://$IP:8080/health
-# Expected: {"status":"ok","version":"0.3.1"}
+# Expected: {"status":"ok","version":"0.3.7"}
 
 # Write a memory
 curl -s -X POST http://$IP:8080/api/v1/memory \

@@ -10,7 +10,7 @@ Deploy Mnemo on a [Vultr](https://www.vultr.com) VPS instance using Terraform. T
 |---|---|
 | `vultr_instance` | Ubuntu 24.04 LTS, `vc2-2c-4gb` (2 vCPU / 4 GB RAM) |
 | `vultr_firewall_group` | Rules for SSH (22), Mnemo API (8080), HTTPS (443) |
-| Docker stack | `redis-stack-server:7.4.0-v1`, `qdrant:v1.12.4`, `mnemo-server:latest` |
+| Docker stack | `redis-stack-server:7.4.0-v1`, `qdrant:v1.12.4`, `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` |
 
 **Cost estimate:** ~$20/month for the `vc2-2c-4gb` plan.
 
@@ -33,8 +33,15 @@ cd deploy/vultr/terraform
 cat > terraform.tfvars <<EOF
 vultr_api_key       = "your-api-key"
 ssh_key_name        = "your-ssh-key-name"
-mnemo_llm_api_key   = "sk-..."
-mnemo_embedding_api_key = "sk-..."
+ mnemo_image                     = "ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h"
+ mnemo_llm_provider              = "anthropic"
+ mnemo_llm_api_key               = "sk-ant-..."
+ mnemo_llm_model                 = "claude-haiku-4-20250514"
+ mnemo_embedding_provider        = "local"
+ mnemo_embedding_model           = "AllMiniLML6V2"
+ mnemo_embedding_dimensions      = "384"
+ mnemo_qdrant_prefix             = "mnemo_vultr_384_"
+ mnemo_session_summary_threshold = "10"
 EOF
 
 terraform init
@@ -55,7 +62,7 @@ ssh root@$IP 'tail -f /var/log/mnemo-init.log'
 
 # Health check
 curl http://$IP:8080/health
-# Expected: {"status":"ok","version":"0.3.3"}
+# Expected: {"status":"ok","version":"0.3.7"}
 
 # Write test
 curl -s -X POST http://$IP:8080/api/v1/memory \

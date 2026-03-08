@@ -60,10 +60,10 @@ docker ps --filter name=mnemo
 # Option A: use the update script (recommended — handles checksum verification)
 chmod +x update.sh
 sudo ./update.sh           # latest release
-# sudo ./update.sh 0.3.1  # specific version
+# sudo ./update.sh 0.3.7  # specific version
 
 # Option B: manual download
-VERSION=0.3.1
+VERSION=0.3.7
 ARCH=x86_64-unknown-linux-gnu  # or aarch64-unknown-linux-gnu
 curl -fsSL -o /tmp/mnemo-server \
   "https://github.com/anjaustin/mnemo/releases/download/v${VERSION}/mnemo-server-${ARCH}"
@@ -180,7 +180,7 @@ sudo certbot --nginx -d your.domain.example
 ```bash
 # Health via loopback
 curl http://127.0.0.1:8080/health
-# Expected: {"status":"ok","version":"0.3.1"}
+# Expected: {"status":"ok","version":"0.3.7"}
 
 # Health via domain (after nginx + TLS)
 curl https://your.domain.example/health

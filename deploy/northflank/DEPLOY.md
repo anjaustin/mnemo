@@ -10,7 +10,7 @@
 |---|---|---|
 | `mnemo-redis` | `redis/redis-stack-server:7.4.0-v1` | 10 GB SSD volume at `/data`; uses `REDIS_ARGS` env var |
 | `mnemo-qdrant` | `qdrant/qdrant:v1.12.4` | 20 GB SSD volume at `/qdrant/storage` |
-| `mnemo-server` | `ghcr.io/anjaustin/mnemo/mnemo-server:latest` | Public HTTP port 8080 |
+| `mnemo-server` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | Public HTTP port 8080; local embeddings enabled |
 
 **Cost estimate:** ~$20–$40/month depending on compute plan.
 
@@ -51,11 +51,17 @@ northflank create stack \
 After stack creation, add these to `mnemo-server`:
 
 ```bash
-# LLM (optional)
-MNEMO_LLM_PROVIDER=openai
-MNEMO_LLM_API_KEY=sk-...
-MNEMO_LLM_MODEL=gpt-4o-mini
-MNEMO_EMBEDDING_API_KEY=sk-...
+# LLM
+MNEMO_LLM_PROVIDER=anthropic
+MNEMO_LLM_API_KEY=sk-ant-...
+MNEMO_LLM_MODEL=claude-haiku-4-20250514
+
+# Embedding
+MNEMO_EMBEDDING_PROVIDER=local
+MNEMO_EMBEDDING_MODEL=AllMiniLML6V2
+MNEMO_EMBEDDING_DIMENSIONS=384
+MNEMO_QDRANT_PREFIX=mnemo_nf_384_
+MNEMO_SESSION_SUMMARY_THRESHOLD=10
 
 # Auth (recommended)
 MNEMO_AUTH_ENABLED=true
@@ -70,7 +76,7 @@ Northflank provides a public URL for the `mnemo-server` service. Test it:
 
 ```bash
 curl https://mnemo-server-xxxx.northflank.app/health
-# Expected: {"status":"ok","version":"0.3.3"}
+# Expected: {"status":"ok","version":"0.3.7"}
 
 curl -s -X POST https://mnemo-server-xxxx.northflank.app/api/v1/memory \
   -H "Content-Type: application/json" \

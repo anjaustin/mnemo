@@ -38,11 +38,16 @@ ssh_key_name = "my-key"           # Name of SSH key in your DO account
 region       = "nyc3"             # Change to nearest region
 droplet_size = "s-2vcpu-4gb"      # 2 vCPU / 4 GB / ~$24/month
 
-# Optional LLM config
-# mnemo_llm_provider      = "openai"
-# mnemo_llm_api_key       = "sk-..."
-# mnemo_llm_model         = "gpt-4o-mini"
-# mnemo_embedding_api_key = "sk-..."
+# Recommended image + local embedding config
+mnemo_image                = "ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h"
+mnemo_llm_provider         = "anthropic"
+mnemo_llm_api_key          = "sk-ant-..."
+mnemo_llm_model            = "claude-haiku-4-20250514"
+mnemo_embedding_provider   = "local"
+mnemo_embedding_model      = "AllMiniLML6V2"
+mnemo_embedding_dimensions = "384"
+mnemo_qdrant_prefix        = "mnemo_do_384_"
+mnemo_session_summary_threshold = "10"
 
 # Enable auth before public exposure
 # mnemo_auth_enabled  = "true"
@@ -84,7 +89,7 @@ IP=$(terraform output -raw droplet_ip)
 
 # Health check (wait ~3 min after apply)
 curl http://$IP:8080/health
-# Expected: {"status":"ok","version":"0.3.2"}
+# Expected: {"status":"ok","version":"0.3.7"}
 
 # Write a memory
 curl -s -X POST http://$IP:8080/api/v1/memory \

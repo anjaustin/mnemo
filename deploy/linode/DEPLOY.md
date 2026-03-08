@@ -41,11 +41,16 @@ instance_type       = "g6-standard-2" # 2 vCPU / 4 GB / ~$18/month
 
 ssh_authorized_keys = ["ssh-ed25519 AAAA... your@key"]
 
-# Optional LLM config
-# mnemo_llm_provider      = "openai"
-# mnemo_llm_api_key       = "sk-..."
-# mnemo_llm_model         = "gpt-4o-mini"
-# mnemo_embedding_api_key = "sk-..."
+# Recommended image + local embedding config
+# mnemo_image                = "ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h"
+# mnemo_llm_provider         = "anthropic"
+# mnemo_llm_api_key          = "sk-ant-..."
+# mnemo_llm_model            = "claude-haiku-4-20250514"
+# mnemo_embedding_provider   = "local"
+# mnemo_embedding_model      = "AllMiniLML6V2"
+# mnemo_embedding_dimensions = "384"
+# mnemo_qdrant_prefix        = "mnemo_linode_384_"
+# mnemo_session_summary_threshold = "10"
 
 # Enable auth before public exposure
 # mnemo_auth_enabled  = "true"
@@ -88,7 +93,9 @@ IP=$(terraform output -raw instance_ip)
 
 # Health check (wait ~3 min after apply)
 curl http://$IP:8080/health
-# Expected: {"status":"ok","version":"0.3.2"}
+# Expected: {"status":"ok","version":"0.3.7"}
+
+If you already have shell access to the host, you can also update the stack in place without a working Linode API token by replacing the `mnemo` image in the compose file and keeping `/data/redis` and `/data/qdrant` mounted.
 
 # Write a memory
 curl -s -X POST http://$IP:8080/api/v1/memory \

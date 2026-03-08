@@ -505,11 +505,13 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_LLM_API_KEY` | API key for entity extraction | (none) |
 | `MNEMO_LLM_PROVIDER` | `openai`, `anthropic`, `ollama`, `liquid` | `openai` |
 | `MNEMO_LLM_MODEL` | Model for extraction | `gpt-4o-mini` |
+| `MNEMO_EMBEDDING_PROVIDER` | `openai`-compatible remote embeddings or `local` fastembed | `openai` |
 | `MNEMO_EMBEDDING_API_KEY` | Embedding API key | (none) |
 | `MNEMO_AUTH_ENABLED` | Require API key auth (`true`/`false`) | `false` |
 | `MNEMO_AUTH_API_KEYS` | Comma-separated accepted API keys | (none) |
 | `MNEMO_REDIS_URL` | Redis connection | `redis://localhost:6379` |
 | `MNEMO_QDRANT_URL` | Qdrant connection | `http://localhost:6334` |
+| `MNEMO_QDRANT_PREFIX` | Qdrant collection prefix / namespace | `mnemo_` |
 | `MNEMO_METADATA_PREFILTER_ENABLED` | Enable metadata prefilter planner | `true` |
 | `MNEMO_METADATA_SCAN_LIMIT` | Candidate scan limit for prefilter planner | `400` |
 | `MNEMO_METADATA_RELAX_IF_EMPTY` | Relax strict metadata filters when empty | `false` |
@@ -531,6 +533,13 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_EMBEDDING_MODEL` | Model for embedding generation | `text-embedding-3-small` |
 | `MNEMO_EMBEDDING_BASE_URL` | Base URL for embedding provider | Provider default |
 | `MNEMO_EMBEDDING_DIMENSIONS` | Embedding vector dimensions | `1536` |
+
+For cloud targets that do not have a managed embedding API available, Mnemo also supports a self-hosted embedding path:
+
+- `MNEMO_EMBEDDING_PROVIDER=local`
+- `MNEMO_EMBEDDING_MODEL=AllMiniLML6V2`
+- `MNEMO_EMBEDDING_DIMENSIONS=384`
+- `MNEMO_QDRANT_PREFIX=<provider-specific-prefix>` to avoid collection-dimension clashes during migrations or side-by-side rollouts
 
 Webhook outbound delivery defaults are configured in `config/default.toml` and can be overridden with env vars:
 

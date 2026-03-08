@@ -10,7 +10,7 @@
 
 | Service | Type | Render Type | Notes |
 |---|---|---|---|
-| `mnemo` | API server | `web` (public) | GHCR image, port 8080, health check at `/health` |
+| `mnemo` | API server | `web` (public) | Distroless image, port 8080, health check at `/health` |
 | `mnemo-redis` | Redis Stack | `pserv` (private) | Persistent disk, AOF + RDB, not internet-reachable |
 | `mnemo-qdrant` | Qdrant vector DB | `pserv` (private) | Persistent disk, gRPC on 6334, not internet-reachable |
 
@@ -25,8 +25,7 @@
 3. Connect your forked repo
 4. Set the **Blueprint path** to `deploy/render/render.yaml`
 5. Set secret env vars when prompted:
-   - `MNEMO_LLM_API_KEY` — your OpenAI (or other LLM provider) API key
-   - `MNEMO_EMBEDDING_API_KEY` — your embedding API key (same as LLM key for OpenAI)
+   - `MNEMO_LLM_API_KEY` — your Anthropic (or other supported provider) API key
    - `MNEMO_AUTH_API_KEYS` — comma-separated API keys for auth (optional)
 6. Click **Apply**
 
@@ -49,7 +48,7 @@ If not using Blueprint:
    - Set env: `QDRANT__SERVICE__GRPC_PORT=6334`, `QDRANT__LOG_LEVEL=WARN`
 
 3. **Create Mnemo (web service)**:
-   - New → Web Service → Docker image `ghcr.io/anjaustin/mnemo/mnemo-server:latest`
+   - New → Web Service → Docker image `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h`
    - Health check path: `/health`
    - Set env vars (see below)
 
@@ -62,17 +61,20 @@ MNEMO_SERVER_HOST=0.0.0.0
 MNEMO_SERVER_PORT=8080
 MNEMO_REDIS_URL=redis://mnemo-redis:6379      # Render private network hostname
 MNEMO_QDRANT_URL=http://mnemo-qdrant:6334      # Render private network hostname
+MNEMO_QDRANT_PREFIX=mnemo_render_384_
+MNEMO_SESSION_SUMMARY_THRESHOLD=10
 MNEMO_WEBHOOKS_ENABLED=true
 RUST_LOG=mnemo=info
 
-# LLM (optional — needed for entity extraction)
-MNEMO_LLM_PROVIDER=openai
-MNEMO_LLM_API_KEY=sk-...
-MNEMO_LLM_MODEL=gpt-4o-mini
+# LLM
+MNEMO_LLM_PROVIDER=anthropic
+MNEMO_LLM_API_KEY=sk-ant-...
+MNEMO_LLM_MODEL=claude-haiku-4-20250514
 
-# Embedding (optional — needed for vector search)
-MNEMO_EMBEDDING_API_KEY=sk-...
-MNEMO_EMBEDDING_MODEL=text-embedding-3-small
+# Embedding
+MNEMO_EMBEDDING_PROVIDER=local
+MNEMO_EMBEDDING_MODEL=AllMiniLML6V2
+MNEMO_EMBEDDING_DIMENSIONS=384
 
 # Auth (recommended for production)
 MNEMO_AUTH_ENABLED=true
@@ -87,7 +89,7 @@ Render provides a public HTTPS URL for the `mnemo` web service:
 
 ```bash
 curl https://mnemo-xxxx.onrender.com/health
-# Expected: {"status":"ok","version":"0.3.3"}
+# Expected: {"status":"ok","version":"0.3.7"}
 ```
 
 ---
