@@ -273,6 +273,63 @@ function initHome() {
 
   mnemo.poll(async () => {
     try {
+      const data = await mnemo.api('GET', '/api/v1/ops/incidents');
+      const incidents = data.incidents || [];
+      const incidentsEl = document.getElementById('card-incidents');
+      if (incidentsEl) {
+        incidentsEl.textContent = String(data.total_active || incidents.length || 0);
+        incidentsEl.className = 'card-value' + ((data.total_active || incidents.length || 0) > 0 ? ' error' : '');
+      }
+
+      if (incidents.length === 0) {
+        mnemo.setHtml('incident-panel', '<p class="muted">No active incidents. System is clear.</p>');
+        return;
+      }
+
+      const severityTone = sev => sev === 'high' ? 'red' : (sev === 'medium' ? 'yellow' : 'blue');
+      const rows = incidents.map(incident => {
+        const requestLink = incident.request_id
+          ? `<a class="link" href="${incident.action_href}" data-request-id="${escapeHtml(incident.request_id)}">req ${escapeHtml(truncId(incident.request_id))}</a>`
+          : '';
+        return `<div class="incident-card severity-${escapeHtml(incident.severity || 'low')}" data-action-href="${escapeHtml(incident.action_href || '/_/')}" data-request-id="${escapeHtml(incident.request_id || '')}">
+          <div class="incident-head">
+            <div class="incident-title-wrap">
+              ${badge(incident.kind.replaceAll('_', ' '), severityTone(incident.severity))}
+              <strong>${escapeHtml(incident.title)}</strong>
+            </div>
+            <button class="btn btn-sm">${escapeHtml(incident.action_label || 'Open')}</button>
+          </div>
+          <p class="incident-summary">${escapeHtml(incident.summary || '')}</p>
+          <div class="incident-meta">
+            ${incident.resource_label ? `<span>${escapeHtml(incident.resource_label)}</span>` : ''}
+            ${incident.opened_at ? `<span>${fmtDateAgo(incident.opened_at)}</span>` : ''}
+            ${requestLink}
+          </div>
+        </div>`;
+      }).join('');
+      mnemo.setHtml('incident-panel', rows);
+
+      document.querySelectorAll('#incident-panel .incident-card').forEach(card => {
+        card.addEventListener('click', e => {
+          const reqId = card.dataset.requestId;
+          if (reqId && e.target.closest('a[data-request-id]')) {
+            document.getElementById('trace-request-id').value = reqId;
+            _navigate('traces');
+            setTimeout(() => document.getElementById('trace-lookup-btn')?.click(), 50);
+            return;
+          }
+          const href = card.dataset.actionHref || '/_/';
+          const page = href.replace(/^\/_\/?/, '').split('/')[0] || 'home';
+          _navigate(page);
+        });
+      });
+    } catch (e) {
+      mnemo.error('incident-panel', 'Failed to load active incidents: ' + e.message);
+    }
+  }, 10000);
+
+  mnemo.poll(async () => {
+    try {
       const data = await mnemo.api('GET', '/api/v1/memory/webhooks');
       const hooks = data.data || [];
       if (hooks.length === 0) {
@@ -332,9 +389,10 @@ function initHome() {
   // Make metric cards clickable as deep-links
   const cardActions = {
     'card-webhooks':     'webhooks',
-    'card-dead-letter':  'webhooks',
-    'card-violations':   'governance',
-    'card-http-requests': null,
+     'card-dead-letter':  'webhooks',
+     'card-violations':   'governance',
+     'card-incidents':    'webhooks',
+     'card-http-requests': null,
     'card-status':       null,
     'card-version':      null,
   };

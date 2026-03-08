@@ -14,7 +14,7 @@ use redis::AsyncCommands;
 use sha2::Sha256;
 use tracing::warn;
 
-use mnemo_core::error::{MnemoError, ApiErrorResponse};
+use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
     agent::{
         AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest,
@@ -1014,6 +1014,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/metrics", get(metrics))
         .route("/api/v1/ops/summary", get(get_ops_summary))
+        .route("/api/v1/ops/incidents", get(get_ops_incidents))
         .route("/api/v1/traces/:request_id", get(get_trace_by_request_id))
         .route("/api/v1/audit/export", get(audit_export))
         // Users
@@ -1389,6 +1390,205 @@ async fn get_ops_summary(
         governance_audit_events_in_window,
         webhook_audit_events_in_window,
     })
+}
+
+async fn get_ops_incidents(
+    State(state): State<AppState>,
+    Query(query): Query<OpsSummaryQuery>,
+) -> Json<OpsIncidentsResponse> {
+    let window_seconds = query.window_seconds.unwrap_or(300).clamp(1, 86_400);
+    let window_start = chrono::Utc::now() - chrono::Duration::seconds(window_seconds as i64);
+
+    let http_responses_5xx = state.metrics.http_responses_5xx.load(Ordering::Relaxed);
+    let policy_violation_total = state.metrics.policy_violation_total.load(Ordering::Relaxed);
+
+    let (dead_letter_backlog, pending_webhook_events, open_circuit_incidents) = {
+        let events_map = state.memory_webhook_events.read().await;
+        let dead = events_map
+            .values()
+            .map(|rows| rows.iter().filter(|row| row.dead_letter).count())
+            .sum::<usize>();
+        let pending = events_map
+            .values()
+            .map(|rows| {
+                rows.iter()
+                    .filter(|row| !row.delivered && !row.dead_letter)
+                    .count()
+            })
+            .sum::<usize>();
+
+        let hooks = state.memory_webhooks.read().await;
+        let runtime = state.webhook_runtime.read().await;
+        let incidents = hooks
+            .values()
+            .filter_map(|hook| {
+                let rt = runtime.get(&hook.id)?;
+                let until = rt.circuit_open_until?;
+                if until < chrono::Utc::now() {
+                    return None;
+                }
+                Some(OpsIncidentResponse {
+                    id: format!("circuit-open-{}", hook.id),
+                    kind: "circuit_open".to_string(),
+                    severity: "high".to_string(),
+                    title: format!("Circuit open: {}", hook.target_url),
+                    summary: format!(
+                        "Webhook delivery is paused after {} consecutive failures.",
+                        rt.consecutive_failures
+                    ),
+                    action_label: "Open Webhook Ops".to_string(),
+                    action_href: "/_/webhooks".to_string(),
+                    resource_id: Some(hook.id.to_string()),
+                    resource_label: Some(hook.target_url.clone()),
+                    request_id: None,
+                    opened_at: Some(until),
+                })
+            })
+            .collect::<Vec<_>>();
+        (dead, pending, incidents)
+    };
+
+    let mut incidents = Vec::new();
+
+    if dead_letter_backlog > 0 {
+        incidents.push(OpsIncidentResponse {
+            id: "dead-letter-backlog".to_string(),
+            kind: "dead_letter_spike".to_string(),
+            severity: if dead_letter_backlog >= 10 {
+                "high".to_string()
+            } else {
+                "medium".to_string()
+            },
+            title: format!("Dead-letter backlog: {} event(s)", dead_letter_backlog),
+            summary: format!(
+                "Webhook delivery has {} dead-letter event(s) awaiting operator action.",
+                dead_letter_backlog
+            ),
+            action_label: "Review dead-letter queue".to_string(),
+            action_href: "/_/webhooks".to_string(),
+            resource_id: None,
+            resource_label: None,
+            request_id: None,
+            opened_at: None,
+        });
+    }
+
+    if pending_webhook_events >= 25 {
+        incidents.push(OpsIncidentResponse {
+            id: "pending-webhook-backlog".to_string(),
+            kind: "pending_backlog".to_string(),
+            severity: "medium".to_string(),
+            title: format!(
+                "Pending delivery backlog: {} event(s)",
+                pending_webhook_events
+            ),
+            summary: "Webhook deliveries are accumulating faster than they are clearing."
+                .to_string(),
+            action_label: "Inspect webhook throughput".to_string(),
+            action_href: "/_/webhooks".to_string(),
+            resource_id: None,
+            resource_label: None,
+            request_id: None,
+            opened_at: None,
+        });
+    }
+
+    if http_responses_5xx > 0 {
+        incidents.push(OpsIncidentResponse {
+            id: "server-5xx".to_string(),
+            kind: "server_errors".to_string(),
+            severity: "high".to_string(),
+            title: format!("Server 5xx responses observed: {}", http_responses_5xx),
+            summary: "The API has emitted one or more server-side errors during the current process lifetime.".to_string(),
+            action_label: "Inspect traces".to_string(),
+            action_href: "/_/traces".to_string(),
+            resource_id: None,
+            resource_label: None,
+            request_id: None,
+            opened_at: None,
+        });
+    }
+
+    let recent_policy_violations = {
+        let governance = state.governance_audit.read().await;
+        let mut rows = governance
+            .values()
+            .flat_map(|rows| rows.iter())
+            .filter(|row| row.at >= window_start && row.action.contains("policy_violation"))
+            .cloned()
+            .collect::<Vec<GovernanceAuditRecord>>();
+        rows.sort_by(|a, b| b.at.cmp(&a.at));
+        rows
+    };
+
+    if policy_violation_total > 0 || !recent_policy_violations.is_empty() {
+        for row in recent_policy_violations.iter().take(3) {
+            incidents.push(OpsIncidentResponse {
+                id: format!("policy-violation-{}", row.id),
+                kind: "policy_violation".to_string(),
+                severity: "medium".to_string(),
+                title: format!("Policy violation: {}", row.action),
+                summary: summarize_governance_violation(row),
+                action_label: "Open governance center".to_string(),
+                action_href: "/_/governance".to_string(),
+                resource_id: Some(row.user_id.to_string()),
+                resource_label: None,
+                request_id: row.request_id.clone(),
+                opened_at: Some(row.at),
+            });
+        }
+        if recent_policy_violations.is_empty() {
+            incidents.push(OpsIncidentResponse {
+                id: "policy-violation-total".to_string(),
+                kind: "policy_violation".to_string(),
+                severity: "medium".to_string(),
+                title: format!("Policy violations observed: {}", policy_violation_total),
+                summary:
+                    "One or more policy checks have blocked operations in this process lifetime."
+                        .to_string(),
+                action_label: "Open governance center".to_string(),
+                action_href: "/_/governance".to_string(),
+                resource_id: None,
+                resource_label: None,
+                request_id: None,
+                opened_at: None,
+            });
+        }
+    }
+
+    incidents.extend(open_circuit_incidents);
+    incidents.sort_by(|a, b| incident_sort_key(b).cmp(&incident_sort_key(a)));
+
+    Json(OpsIncidentsResponse {
+        window_seconds,
+        total_active: incidents.len(),
+        incidents,
+    })
+}
+
+fn summarize_governance_violation(row: &GovernanceAuditRecord) -> String {
+    if let Some(target) = row.details.get("target_url").and_then(|v| v.as_str()) {
+        return format!("Blocked target: {}", target);
+    }
+    if let Some(kind) = row.details.get("episode_type").and_then(|v| v.as_str()) {
+        return format!("Blocked {} policy action.", kind);
+    }
+    if let Some(reason) = row.details.get("reason").and_then(|v| v.as_str()) {
+        return reason.to_string();
+    }
+    "A governance policy blocked an operation and should be reviewed.".to_string()
+}
+
+fn incident_sort_key(incident: &OpsIncidentResponse) -> (u8, chrono::DateTime<chrono::Utc>) {
+    let sev = match incident.severity.as_str() {
+        "high" => 3,
+        "medium" => 2,
+        _ => 1,
+    };
+    let at = incident
+        .opened_at
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+    (sev, at)
 }
 
 // ── GET /api/v1/audit/export ────────────────────────────────────────
@@ -2366,7 +2566,10 @@ async fn get_context(
     Path(user_id): Path<Uuid>,
     Json(req): Json<ContextRequest>,
 ) -> Result<Json<ContextBlock>, AppError> {
-    let context = state.retrieval.get_context(user_id, &req, reranker_for_state(&state)).await?;
+    let context = state
+        .retrieval
+        .get_context(user_id, &req, reranker_for_state(&state))
+        .await?;
     Ok(Json(context))
 }
 
@@ -2670,6 +2873,32 @@ struct OpsSummaryResponse {
     pending_webhook_events: usize,
     governance_audit_events_in_window: usize,
     webhook_audit_events_in_window: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsIncidentsResponse {
+    window_seconds: u64,
+    total_active: usize,
+    incidents: Vec<OpsIncidentResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OpsIncidentResponse {
+    id: String,
+    kind: String,
+    severity: String,
+    title: String,
+    summary: String,
+    action_label: String,
+    action_href: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opened_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3270,7 +3499,9 @@ async fn extract_memory(
             relationships: Vec::new(),
             entity_count: 0,
             relationship_count: 0,
-            note: Some("no_llm: LLM is not configured; set MNEMO_LLM_API_KEY to enable extraction".into()),
+            note: Some(
+                "no_llm: LLM is not configured; set MNEMO_LLM_API_KEY to enable extraction".into(),
+            ),
             provider: None,
         }));
     };
@@ -3606,7 +3837,10 @@ async fn get_memory_context(
         min_relevance,
     };
 
-    let mut context = state.retrieval.get_context(user.id, &context_req, reranker_for_state(&state)).await?;
+    let mut context = state
+        .retrieval
+        .get_context(user.id, &context_req, reranker_for_state(&state))
+        .await?;
     maybe_attach_recent_episode_fallback(
         &state,
         user.id,
@@ -4018,7 +4252,11 @@ async fn time_travel_trace(
 
     let mut context_from = state
         .retrieval
-        .get_context(user.id, &make_context_req(req.from), reranker_for_state(&state))
+        .get_context(
+            user.id,
+            &make_context_req(req.from),
+            reranker_for_state(&state),
+        )
         .await?;
     maybe_attach_recent_episode_fallback(
         &state,
@@ -4037,7 +4275,11 @@ async fn time_travel_trace(
 
     let mut context_to = state
         .retrieval
-        .get_context(user.id, &make_context_req(req.to), reranker_for_state(&state))
+        .get_context(
+            user.id,
+            &make_context_req(req.to),
+            reranker_for_state(&state),
+        )
         .await?;
     maybe_attach_recent_episode_fallback(
         &state,
@@ -4446,7 +4688,11 @@ async fn time_travel_summary(
 
     let mut context_from = state
         .retrieval
-        .get_context(user.id, &make_context_req(req.from), reranker_for_state(&state))
+        .get_context(
+            user.id,
+            &make_context_req(req.from),
+            reranker_for_state(&state),
+        )
         .await?;
     maybe_attach_recent_episode_fallback(
         &state,
@@ -4465,7 +4711,11 @@ async fn time_travel_summary(
 
     let mut context_to = state
         .retrieval
-        .get_context(user.id, &make_context_req(req.to), reranker_for_state(&state))
+        .get_context(
+            user.id,
+            &make_context_req(req.to),
+            reranker_for_state(&state),
+        )
         .await?;
     maybe_attach_recent_episode_fallback(
         &state,
@@ -4709,7 +4959,10 @@ async fn causal_recall_chains(
         min_relevance: 0.3,
     };
 
-    let mut context = state.retrieval.get_context(user.id, &context_req, reranker_for_state(&state)).await?;
+    let mut context = state
+        .retrieval
+        .get_context(user.id, &context_req, reranker_for_state(&state))
+        .await?;
     maybe_attach_recent_episode_fallback(
         &state,
         user.id,
@@ -5557,7 +5810,10 @@ async fn get_agent_context(
         min_relevance: req.min_relevance.unwrap_or(0.3),
     };
 
-    let mut context = state.retrieval.get_context(user.id, &context_req, reranker_for_state(&state)).await?;
+    let mut context = state
+        .retrieval
+        .get_context(user.id, &context_req, reranker_for_state(&state))
+        .await?;
     maybe_attach_recent_episode_fallback(
         &state,
         user.id,
@@ -7074,4 +7330,99 @@ async fn vectors_exists(
         "namespace": namespace,
         "exists": exists,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        incident_sort_key, summarize_governance_violation, GovernanceAuditRecord,
+        OpsIncidentResponse,
+    };
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn incident(
+        severity: &str,
+        opened_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> OpsIncidentResponse {
+        OpsIncidentResponse {
+            id: "incident-1".to_string(),
+            kind: "policy_violation".to_string(),
+            severity: severity.to_string(),
+            title: "Test incident".to_string(),
+            summary: "Test summary".to_string(),
+            action_label: "Open".to_string(),
+            action_href: "/_/governance".to_string(),
+            resource_id: None,
+            resource_label: None,
+            request_id: None,
+            opened_at,
+        }
+    }
+
+    fn governance_record(details: serde_json::Value) -> GovernanceAuditRecord {
+        GovernanceAuditRecord {
+            id: Uuid::parse_str("11111111-1111-1111-1111-111111111111").expect("valid uuid"),
+            user_id: Uuid::parse_str("22222222-2222-2222-2222-222222222222").expect("valid uuid"),
+            request_id: None,
+            action: "policy_violation.webhook_domain_allowlist".to_string(),
+            details,
+            at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn incident_sort_key_uses_stable_epoch_for_missing_timestamp() {
+        let low_missing = incident("low", None);
+        let low_with_time = incident("low", Some(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH));
+
+        assert_eq!(
+            incident_sort_key(&low_missing),
+            incident_sort_key(&low_with_time)
+        );
+    }
+
+    #[test]
+    fn incident_sort_key_prioritizes_severity_then_recency() {
+        let older_high = incident(
+            "high",
+            Some(chrono::DateTime::from_timestamp(100, 0).expect("valid timestamp")),
+        );
+        let newer_medium = incident(
+            "medium",
+            Some(chrono::DateTime::from_timestamp(200, 0).expect("valid timestamp")),
+        );
+        let newer_high = incident(
+            "high",
+            Some(chrono::DateTime::from_timestamp(300, 0).expect("valid timestamp")),
+        );
+
+        assert!(incident_sort_key(&older_high) > incident_sort_key(&newer_medium));
+        assert!(incident_sort_key(&newer_high) > incident_sort_key(&older_high));
+    }
+
+    #[test]
+    fn summarize_governance_violation_prefers_target_url() {
+        let record = governance_record(json!({
+            "target_url": "https://blocked.example.com",
+            "reason": "should not be used",
+        }));
+
+        assert_eq!(
+            summarize_governance_violation(&record),
+            "Blocked target: https://blocked.example.com"
+        );
+    }
+
+    #[test]
+    fn summarize_governance_violation_falls_back_to_reason() {
+        let record = governance_record(json!({
+            "reason": "Retention window exceeded",
+        }));
+
+        assert_eq!(
+            summarize_governance_violation(&record),
+            "Retention window exceeded"
+        );
+    }
 }
