@@ -189,6 +189,9 @@
           <label>Query
             <input type="text" id="rca-query" placeholder="What changed?" autocomplete="off">
           </label>
+          <label>Session
+            <input type="text" id="rca-session" placeholder="optional session UUID" autocomplete="off" style="font-family:var(--font-mono)">
+          </label>
         </div>
         <div class="form-row">
           <label>From
@@ -223,6 +226,7 @@
           </button>
         </div>
       </form>
+      <div id="rca-focus-banner" class="hidden"></div>
       <div id="rca-results" class="hidden"></div>
     </section>
 

@@ -166,7 +166,11 @@ function dashboardSegments() {
 }
 
 function dashboardPageFromPath(pathname) {
-  return pathname.replace(/^\/_\/?/, '').split('/')[0] || 'home';
+  return String(pathname || '')
+    .split('?')[0]
+    .split('#')[0]
+    .replace(/^\/_\/?/, '')
+    .split('/')[0] || 'home';
 }
 
 function dashboardQuery() {
@@ -256,10 +260,69 @@ function downloadJson(filename, payload) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+async function fetchDownloadJson(path, fallbackFilename) {
+  const res = await fetch(path, { method: 'GET' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: { message: res.statusText } }));
+    throw new Error(err.error?.message || res.statusText);
+  }
+  const payload = await res.json();
+  downloadJson(fallbackFilename, payload);
+}
+
 function evidenceFilename(prefix, key) {
   const safeKey = (key || 'bundle').replace(/[^a-zA-Z0-9._-]+/g, '-');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return `mnemo-${prefix}-${safeKey}-${stamp}.json`;
+}
+
+function currentSourcePath() {
+  return location.pathname + location.search;
+}
+
+function buildTraceLookupParams() {
+  return new URLSearchParams();
+}
+
+function openDashboardHref(href) {
+  if (!href) return;
+  _navigate(dashboardPageFromPath(href), true, href);
+}
+
+function localDatetimeValueFromIso(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function rcaHref(params) {
+  const query = new URLSearchParams();
+  if (params.user) query.set('user', params.user);
+  if (params.query) query.set('query', params.query);
+  if (params.from) query.set('from', params.from);
+  if (params.to) query.set('to', params.to);
+  if (params.session) query.set('session', params.session);
+  if (params.contract) query.set('contract', params.contract);
+  if (params.policy) query.set('policy', params.policy);
+  if (params.episodeId) query.set('episode_id', params.episodeId);
+  return `/_/rca${query.toString() ? '?' + query.toString() : ''}`;
+}
+
+function episodeRcaHref(row) {
+  const createdAt = new Date(row.created_at || Date.now());
+  const from = new Date(createdAt.getTime() - (24 * 60 * 60 * 1000)).toISOString();
+  const to = new Date(createdAt.getTime() + (10 * 60 * 1000)).toISOString();
+  return rcaHref({
+    user: row.user_id,
+    query: row.preview || row.episode_id,
+    from,
+    to,
+    session: row.session_id,
+    contract: 'default',
+    policy: 'stability',
+    episodeId: row.episode_id,
+  });
 }
 
 function syncPageFromPath(pageName) {
@@ -295,6 +358,43 @@ function syncPageFromPath(pageName) {
     if (reqId && input && input.value !== reqId) {
       input.value = reqId;
       setTimeout(() => document.getElementById('trace-lookup-btn')?.click(), 0);
+    }
+    return;
+  }
+
+  if (pageName === 'rca') {
+    const query = dashboardQuery();
+    const user = query.get('user') || '';
+    const prompt = query.get('query') || '';
+    const from = query.get('from') || '';
+    const to = query.get('to') || '';
+    const session = query.get('session') || '';
+    const contract = query.get('contract') || 'default';
+    const policy = query.get('policy') || 'balanced';
+    const episodeId = query.get('episode_id') || '';
+    const userEl = document.getElementById('rca-user');
+    const queryEl = document.getElementById('rca-query');
+    const fromEl = document.getElementById('rca-from');
+    const toEl = document.getElementById('rca-to');
+    const sessionEl = document.getElementById('rca-session');
+    const contractEl = document.getElementById('rca-contract');
+    const policyEl = document.getElementById('rca-policy');
+    const bannerEl = document.getElementById('rca-focus-banner');
+    if (userEl) userEl.value = user;
+    if (queryEl) queryEl.value = prompt;
+    if (fromEl && from) fromEl.value = localDatetimeValueFromIso(from);
+    if (toEl && to) toEl.value = localDatetimeValueFromIso(to);
+    if (sessionEl) sessionEl.value = session;
+    if (contractEl) contractEl.value = contract;
+    if (policyEl) policyEl.value = policy;
+    if (bannerEl) {
+      if (episodeId) {
+        bannerEl.innerHTML = `<div class="trace-focus-banner"><strong>Episode RCA Focus</strong><span>Seeded from episode <code>${escapeHtml(truncId(episodeId))}</code>${session ? ` in session <code>${escapeHtml(truncId(session))}</code>` : ''}. Review the prefilled window, then run trace.</span></div>`;
+        bannerEl.classList.remove('hidden');
+      } else {
+        bannerEl.classList.add('hidden');
+        bannerEl.innerHTML = '';
+      }
     }
   }
 }
@@ -590,15 +690,14 @@ function exportWebhookEvidenceBundle() {
     toast.warn('No webhook evidence', 'Load a webhook detail view first.');
     return;
   }
-  downloadJson(
-    evidenceFilename('webhook-evidence', _webhookEvidenceBundle.webhook?.id),
-    {
-      kind: 'webhook_evidence_bundle',
-      exported_at: new Date().toISOString(),
-      source_path: location.pathname + location.search,
-      payload: _webhookEvidenceBundle,
-    },
-  );
+  const webhookId = _webhookEvidenceBundle.webhook?.id;
+  const params = new URLSearchParams();
+  if (_webhookEvidenceBundle.focus) params.set('focus', _webhookEvidenceBundle.focus);
+  params.set('source_path', currentSourcePath());
+  fetchDownloadJson(
+    `/api/v1/evidence/webhooks/${encodeURIComponent(webhookId)}/export?${params.toString()}`,
+    evidenceFilename('webhook-evidence', webhookId),
+  ).catch(e => toast.error('Export failed', e.message));
 }
 
 function exportGovernanceEvidenceBundle() {
@@ -606,15 +705,13 @@ function exportGovernanceEvidenceBundle() {
     toast.warn('No governance evidence', 'Load a governance record first.');
     return;
   }
-  downloadJson(
-    evidenceFilename('governance-evidence', _governanceEvidenceBundle.user),
-    {
-      kind: 'governance_evidence_bundle',
-      exported_at: new Date().toISOString(),
-      source_path: location.pathname + location.search,
-      payload: _governanceEvidenceBundle,
-    },
-  );
+  const user = _governanceEvidenceBundle.user;
+  const params = new URLSearchParams();
+  params.set('source_path', currentSourcePath());
+  fetchDownloadJson(
+    `/api/v1/evidence/governance/${encodeURIComponent(user)}/export?${params.toString()}`,
+    evidenceFilename('governance-evidence', user),
+  ).catch(e => toast.error('Export failed', e.message));
 }
 
 function exportTraceEvidenceBundle() {
@@ -622,15 +719,14 @@ function exportTraceEvidenceBundle() {
     toast.warn('No trace evidence', 'Run a trace lookup first.');
     return;
   }
-  downloadJson(
-    evidenceFilename('trace-evidence', _traceEvidenceBundle.request_id),
-    {
-      kind: 'trace_evidence_bundle',
-      exported_at: new Date().toISOString(),
-      source_path: location.pathname + location.search,
-      payload: _traceEvidenceBundle,
-    },
-  );
+  const requestId = _traceEvidenceBundle.request_id;
+  const params = buildTraceLookupParams();
+  if (_traceEvidenceBundle.focus) params.set('focus', _traceEvidenceBundle.focus);
+  params.set('source_path', currentSourcePath());
+  fetchDownloadJson(
+    `/api/v1/evidence/traces/${encodeURIComponent(requestId)}/export?${params.toString()}`,
+    evidenceFilename('trace-evidence', requestId),
+  ).catch(e => toast.error('Export failed', e.message));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -883,6 +979,7 @@ function initRca() {
     const query = document.getElementById('rca-query').value.trim();
     const from = toIso(document.getElementById('rca-from').value);
     const to = toIso(document.getElementById('rca-to').value);
+    const session = document.getElementById('rca-session').value.trim();
     const contract = document.getElementById('rca-contract').value;
     const policy = document.getElementById('rca-policy').value;
     if (!user || !query || !from || !to) {
@@ -890,11 +987,22 @@ function initRca() {
       return;
     }
 
+    history.pushState({ page: 'rca' }, '', rcaHref({
+      user,
+      query,
+      from,
+      to,
+      session,
+      contract,
+      policy,
+      episodeId: dashboardQuery().get('episode_id') || '',
+    }));
+
     mnemo.loading('rca-results');
     mnemo.show('rca-results');
     try {
       const data = await mnemo.api('POST', `/api/v1/memory/${encodeURIComponent(user)}/time_travel/trace`, {
-        query, from, to, contract, retrieval_policy: policy
+        query, from, to, session: session || undefined, contract, retrieval_policy: policy
       });
       renderRcaResults(data);
     } catch (e) {
@@ -1221,24 +1329,30 @@ function initTraces() {
   if (trFrom && !trFrom.value) trFrom.value = toLocal(ago30);
   if (trTo   && !trTo.value)   trTo.value   = toLocal(now);
 
+  function buildParams() {
+    const params = new URLSearchParams();
+    const fromVal = trFrom && trFrom.value ? toIso(trFrom.value) : null;
+    const toVal   = trTo   && trTo.value   ? toIso(trTo.value)   : null;
+    if (fromVal) params.set('from', fromVal);
+    if (toVal)   params.set('to', toVal);
+    const chkEps  = document.getElementById('trace-chk-episodes');
+    const chkWh   = document.getElementById('trace-chk-webhooks');
+    const chkGov  = document.getElementById('trace-chk-governance');
+    if (chkEps  && !chkEps.checked)  params.set('include_episodes', 'false');
+    if (chkWh   && !chkWh.checked)   params.set('include_webhook_events', 'false');
+    if (chkGov  && !chkGov.checked)  params.set('include_governance_audit', 'false');
+    return params;
+  }
+
+  window.buildTraceLookupParams = buildParams;
+
   async function doLookup() {
     const reqId = input.value.trim();
     if (!reqId) { toast.warn('Input required', 'Enter a request ID.'); return; }
     mnemo.loading('trace-results');
     mnemo.show('trace-results');
     try {
-      // Build query params from source filter checkboxes + time window
-      const params = new URLSearchParams();
-      const fromVal = trFrom && trFrom.value ? toIso(trFrom.value) : null;
-      const toVal   = trTo   && trTo.value   ? toIso(trTo.value)   : null;
-      if (fromVal) params.set('from', fromVal);
-      if (toVal)   params.set('to', toVal);
-      const chkEps  = document.getElementById('trace-chk-episodes');
-      const chkWh   = document.getElementById('trace-chk-webhooks');
-      const chkGov  = document.getElementById('trace-chk-governance');
-      if (chkEps  && !chkEps.checked)  params.set('include_episodes', 'false');
-      if (chkWh   && !chkWh.checked)   params.set('include_webhook_events', 'false');
-      if (chkGov  && !chkGov.checked)  params.set('include_governance_audit', 'false');
+      const params = buildParams();
       const qs = params.toString();
       const data = await mnemo.api('GET', `/api/v1/traces/${encodeURIComponent(reqId)}${qs ? '?' + qs : ''}`);
       const focus = currentTraceFocus();
@@ -1274,6 +1388,8 @@ function buildTraceEvidenceGraphData(d, focus) {
       kind: 'episode',
       size: 15,
       layer: 1,
+      href: episodeRcaHref(row),
+      actionLabel: 'Open episode RCA lane',
     });
     links.push({ source: centerId, target: id, label: 'episode' });
   });
@@ -1287,6 +1403,8 @@ function buildTraceEvidenceGraphData(d, focus) {
       kind: row.dead_letter ? 'dead_letter' : 'webhook_event',
       size: row.dead_letter ? 18 : 14,
       layer: 2,
+      href: webhookHref(row.webhook_id, row.dead_letter ? 'dead-letter' : ''),
+      actionLabel: row.dead_letter ? 'Open dead-letter webhook' : 'Open webhook detail',
     });
     links.push({ source: centerId, target: id, label: 'delivery' });
   });
@@ -1300,6 +1418,8 @@ function buildTraceEvidenceGraphData(d, focus) {
       kind: 'webhook_audit',
       size: 13,
       layer: 2,
+      href: webhookHref(row.webhook_id),
+      actionLabel: 'Open webhook audit context',
     });
     links.push({ source: centerId, target: id, label: 'audit' });
   });
@@ -1313,6 +1433,8 @@ function buildTraceEvidenceGraphData(d, focus) {
       kind: 'governance',
       size: 16,
       layer: 3,
+      href: governanceHref(row.user_id),
+      actionLabel: 'Open governance detail',
     });
     links.push({ source: centerId, target: id, label: 'policy' });
   });
@@ -1415,7 +1537,24 @@ function renderTraceEvidenceGraph(d) {
     .selectAll('g')
     .data(graph.nodes)
     .join('g')
-    .attr('transform', d => `translate(${d.x},${d.y})`);
+    .attr('transform', d => `translate(${d.x},${d.y})`)
+    .attr('class', d => `trace-graph-node${d.href ? ' interactive' : ''}`)
+    .attr('data-kind', d => d.kind)
+    .attr('data-href', d => d.href || '')
+    .attr('data-action-label', d => d.actionLabel || '')
+    .attr('tabindex', d => d.href ? 0 : null)
+    .attr('role', d => d.href ? 'link' : null)
+    .attr('aria-label', d => d.actionLabel || d.title)
+    .on('click', (_, datum) => {
+      if (datum.href) openDashboardHref(datum.href);
+    })
+    .on('keydown', (event, datum) => {
+      if (!datum.href) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openDashboardHref(datum.href);
+      }
+    });
 
   node.append('circle')
     .attr('r', d => d.size + 8)
@@ -1427,7 +1566,8 @@ function renderTraceEvidenceGraph(d) {
     .attr('r', d => d.size)
     .attr('fill', d => colors[d.kind] || '#94a3b8')
     .attr('stroke', 'rgba(255,255,255,0.75)')
-    .attr('stroke-width', d => d.kind === 'request' ? 2.2 : 1.2);
+    .attr('stroke-width', d => d.kind === 'request' ? 2.2 : 1.2)
+    .attr('class', d => d.href ? 'trace-graph-node-core interactive' : 'trace-graph-node-core');
 
   node.append('text')
     .attr('y', d => d.size + 16)
@@ -1452,6 +1592,13 @@ function renderTraceEvidenceGraph(d) {
     .attr('fill', 'rgba(148,163,184,0.86)')
     .attr('font-size', 11)
     .text(`${graph.nodes.length} nodes · ${graph.links.length} joins · request-centric trace map`);
+  bg.append('text')
+    .attr('x', width - 18)
+    .attr('y', 28)
+    .attr('text-anchor', 'end')
+    .attr('fill', 'rgba(125,211,252,0.82)')
+    .attr('font-size', 11)
+    .text('click linked nodes to drill in');
 }
 
 function renderTraceResults(d) {

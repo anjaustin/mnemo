@@ -1016,6 +1016,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/ops/summary", get(get_ops_summary))
         .route("/api/v1/ops/incidents", get(get_ops_incidents))
         .route("/api/v1/traces/:request_id", get(get_trace_by_request_id))
+        .route(
+            "/api/v1/evidence/webhooks/:id/export",
+            get(export_webhook_evidence_bundle),
+        )
+        .route(
+            "/api/v1/evidence/governance/:user/export",
+            get(export_governance_evidence_bundle),
+        )
+        .route(
+            "/api/v1/evidence/traces/:request_id/export",
+            get(export_trace_evidence_bundle),
+        )
         .route("/api/v1/audit/export", get(audit_export))
         // Users
         .route("/api/v1/users", post(create_user))
@@ -1764,6 +1776,16 @@ async fn get_trace_by_request_id(
     Path(request_id): Path<String>,
     Query(query): Query<TraceLookupQuery>,
 ) -> Result<Json<TraceLookupResponse>, AppError> {
+    Ok(Json(
+        lookup_trace_by_request_id(&state, request_id, query).await?,
+    ))
+}
+
+async fn lookup_trace_by_request_id(
+    state: &AppState,
+    request_id: String,
+    query: TraceLookupQuery,
+) -> Result<TraceLookupResponse, AppError> {
     let request_id = request_id.trim().to_string();
     if request_id.is_empty() {
         return Err(AppError(MnemoError::Validation(
@@ -1925,14 +1947,14 @@ async fn get_trace_by_request_id(
         }
     });
 
-    Ok(Json(TraceLookupResponse {
+    Ok(TraceLookupResponse {
         request_id,
         matched_episodes,
         matched_webhook_events,
         matched_webhook_audit,
         matched_governance_audit,
         summary,
-    }))
+    })
 }
 
 // ─── User routes ───────────────────────────────────────────────────
@@ -2931,6 +2953,107 @@ struct TraceLookupQuery {
     user: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct TraceLookupQueryWithEvidence {
+    #[serde(default = "default_trace_lookup_from")]
+    from: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_trace_lookup_to")]
+    to: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_trace_lookup_limit")]
+    limit: u32,
+    #[serde(default = "default_true")]
+    include_episodes: bool,
+    #[serde(default = "default_true")]
+    include_webhook_events: bool,
+    #[serde(default = "default_true")]
+    include_webhook_audit: bool,
+    #[serde(default = "default_true")]
+    include_governance_audit: bool,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
+    focus: Option<String>,
+    #[serde(default)]
+    source_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EvidenceExportQuery {
+    #[serde(default)]
+    focus: Option<String>,
+    #[serde(default)]
+    source_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GovernanceEvidenceExportQuery {
+    #[serde(default)]
+    focus: Option<String>,
+    #[serde(default)]
+    source_path: Option<String>,
+    #[serde(default = "default_governance_evidence_from")]
+    violations_from: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_governance_evidence_to")]
+    violations_to: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "default_governance_evidence_limit")]
+    limit: u32,
+}
+
+fn default_governance_evidence_from() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() - chrono::Duration::hours(24)
+}
+
+fn default_governance_evidence_to() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+}
+
+fn default_governance_evidence_limit() -> u32 {
+    50
+}
+
+#[derive(Debug, Serialize)]
+struct EvidenceBundleEnvelope<T: Serialize> {
+    kind: &'static str,
+    exported_at: chrono::DateTime<chrono::Utc>,
+    source_path: String,
+    payload: T,
+}
+
+#[derive(Debug, Serialize)]
+struct WebhookEvidenceBundlePayload {
+    webhook: MemoryWebhookSubscription,
+    stats: WebhookStatsResponse,
+    dead_letters: ListWebhookEventsResponse,
+    audit: WebhookAuditResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    focus: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GovernanceEvidenceWindow {
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct GovernanceEvidenceBundlePayload {
+    user: String,
+    policy: UserPolicyRecord,
+    violations: Vec<GovernanceAuditRecord>,
+    audit: Vec<GovernanceAuditRecord>,
+    violations_window: GovernanceEvidenceWindow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    focus: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TraceEvidenceBundlePayload {
+    request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    focus: Option<String>,
+    trace: TraceLookupResponse,
+}
+
 fn default_trace_lookup_from() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() - chrono::Duration::days(30)
 }
@@ -2941,6 +3064,79 @@ fn default_trace_lookup_to() -> chrono::DateTime<chrono::Utc> {
 
 fn default_trace_lookup_limit() -> u32 {
     100
+}
+
+fn normalize_evidence_focus(focus: Option<String>) -> Option<String> {
+    focus
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn default_evidence_source_path(source_path: Option<String>, fallback: String) -> String {
+    source_path
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+}
+
+async fn build_webhook_stats_response(
+    state: &AppState,
+    id: Uuid,
+    query: WebhookStatsQuery,
+) -> Result<WebhookStatsResponse, AppError> {
+    {
+        let hooks = state.memory_webhooks.read().await;
+        if !hooks.contains_key(&id) {
+            return Err(AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: id.to_string(),
+            }));
+        }
+    }
+
+    let window_seconds = query.window_seconds.unwrap_or(300).clamp(1, 86_400) as i64;
+    let window_start = chrono::Utc::now() - chrono::Duration::seconds(window_seconds);
+    let events = {
+        let event_map = state.memory_webhook_events.read().await;
+        event_map.get(&id).cloned().unwrap_or_default()
+    };
+    let runtime = {
+        let runtime_map = state.webhook_runtime.read().await;
+        runtime_map.get(&id).cloned()
+    };
+
+    let total_events = events.len();
+    let delivered_events = events.iter().filter(|e| e.delivered).count();
+    let dead_letter_events = events.iter().filter(|e| e.dead_letter).count();
+    let pending_events = events
+        .iter()
+        .filter(|e| !e.delivered && !e.dead_letter)
+        .count();
+    let failed_events = events
+        .iter()
+        .filter(|e| !e.delivered && e.last_error.is_some())
+        .count();
+    let recent_failures = events
+        .iter()
+        .filter(|e| e.created_at >= window_start)
+        .filter(|e| !e.delivered && e.last_error.is_some())
+        .count();
+
+    let circuit_open_until = runtime.and_then(|row| row.circuit_open_until);
+    let circuit_open = circuit_open_until.is_some_and(|until| chrono::Utc::now() < until);
+
+    Ok(WebhookStatsResponse {
+        webhook_id: id,
+        total_events,
+        delivered_events,
+        pending_events,
+        dead_letter_events,
+        failed_events,
+        recent_failures,
+        circuit_open,
+        circuit_open_until,
+        rate_limit_per_minute: state.webhook_delivery.rate_limit_per_minute,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -5475,59 +5671,7 @@ async fn get_memory_webhook_stats(
     Path(id): Path<Uuid>,
     Query(query): Query<WebhookStatsQuery>,
 ) -> Result<Json<WebhookStatsResponse>, AppError> {
-    {
-        let hooks = state.memory_webhooks.read().await;
-        if !hooks.contains_key(&id) {
-            return Err(AppError(MnemoError::NotFound {
-                resource_type: "MemoryWebhook".into(),
-                id: id.to_string(),
-            }));
-        }
-    }
-
-    let window_seconds = query.window_seconds.unwrap_or(300).clamp(1, 86_400) as i64;
-    let window_start = chrono::Utc::now() - chrono::Duration::seconds(window_seconds);
-    let events = {
-        let event_map = state.memory_webhook_events.read().await;
-        event_map.get(&id).cloned().unwrap_or_default()
-    };
-    let runtime = {
-        let runtime_map = state.webhook_runtime.read().await;
-        runtime_map.get(&id).cloned()
-    };
-
-    let total_events = events.len();
-    let delivered_events = events.iter().filter(|e| e.delivered).count();
-    let dead_letter_events = events.iter().filter(|e| e.dead_letter).count();
-    let pending_events = events
-        .iter()
-        .filter(|e| !e.delivered && !e.dead_letter)
-        .count();
-    let failed_events = events
-        .iter()
-        .filter(|e| !e.delivered && e.last_error.is_some())
-        .count();
-    let recent_failures = events
-        .iter()
-        .filter(|e| e.created_at >= window_start)
-        .filter(|e| !e.delivered && e.last_error.is_some())
-        .count();
-
-    let circuit_open_until = runtime.and_then(|row| row.circuit_open_until);
-    let circuit_open = circuit_open_until.is_some_and(|until| chrono::Utc::now() < until);
-
-    Ok(Json(WebhookStatsResponse {
-        webhook_id: id,
-        total_events,
-        delivered_events,
-        pending_events,
-        dead_letter_events,
-        failed_events,
-        recent_failures,
-        circuit_open,
-        circuit_open_until,
-        rate_limit_per_minute: state.webhook_delivery.rate_limit_per_minute,
-    }))
+    Ok(Json(build_webhook_stats_response(&state, id, query).await?))
 }
 
 async fn list_memory_webhook_audit(
@@ -5557,6 +5701,178 @@ async fn list_memory_webhook_audit(
         webhook_id: id,
         count: audit.len(),
         audit,
+    }))
+}
+
+async fn export_webhook_evidence_bundle(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<EvidenceExportQuery>,
+) -> Result<Json<EvidenceBundleEnvelope<WebhookEvidenceBundlePayload>>, AppError> {
+    let focus = normalize_evidence_focus(query.focus);
+    let source_path = default_evidence_source_path(
+        query.source_path,
+        format!(
+            "/_/webhooks/{id}{}",
+            focus
+                .as_ref()
+                .map(|v| format!("?focus={v}"))
+                .unwrap_or_default()
+        ),
+    );
+    let webhook = {
+        let hooks = state.memory_webhooks.read().await;
+        hooks.get(&id).cloned().ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: id.to_string(),
+            })
+        })?
+    };
+    let stats = build_webhook_stats_response(
+        &state,
+        id,
+        WebhookStatsQuery {
+            window_seconds: None,
+        },
+    )
+    .await?;
+    let dead_letters = {
+        let mut events = {
+            let event_map = state.memory_webhook_events.read().await;
+            event_map.get(&id).cloned().unwrap_or_default()
+        };
+        events.retain(|event| event.dead_letter);
+        events.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        events.truncate(50);
+        ListWebhookEventsResponse {
+            webhook_id: id,
+            count: events.len(),
+            events,
+        }
+    };
+    let audit = {
+        let mut rows = {
+            let map = state.memory_webhook_audit.read().await;
+            map.get(&id).cloned().unwrap_or_default()
+        };
+        rows.sort_by(|a, b| b.at.cmp(&a.at));
+        rows.truncate(50);
+        WebhookAuditResponse {
+            webhook_id: id,
+            count: rows.len(),
+            audit: rows,
+        }
+    };
+
+    Ok(Json(EvidenceBundleEnvelope {
+        kind: "webhook_evidence_bundle",
+        exported_at: chrono::Utc::now(),
+        source_path,
+        payload: WebhookEvidenceBundlePayload {
+            webhook,
+            stats,
+            dead_letters,
+            audit,
+            focus,
+        },
+    }))
+}
+
+async fn export_governance_evidence_bundle(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Query(query): Query<GovernanceEvidenceExportQuery>,
+) -> Result<Json<EvidenceBundleEnvelope<GovernanceEvidenceBundlePayload>>, AppError> {
+    if query.violations_to <= query.violations_from {
+        return Err(AppError(MnemoError::Validation(
+            "'violations_to' must be after 'violations_from'".to_string(),
+        )));
+    }
+
+    let focus = normalize_evidence_focus(query.focus);
+    let user_identifier = user_identifier.trim().to_string();
+    let user = find_user_by_identifier(&state, &user_identifier).await?;
+    let policy = get_or_create_user_policy(&state, user.id, user_identifier.clone()).await;
+    let limit = query.limit.clamp(1, 200) as usize;
+    let source_path =
+        default_evidence_source_path(query.source_path, format!("/_/governance/{}", user.id));
+    let all_rows = {
+        let audit = state.governance_audit.read().await;
+        audit.get(&user.id).cloned().unwrap_or_default()
+    };
+
+    let mut audit = all_rows.clone();
+    audit.sort_by(|a, b| b.at.cmp(&a.at));
+    audit.truncate(limit);
+
+    let mut violations = all_rows
+        .into_iter()
+        .filter(|row| {
+            row.action.starts_with("policy_violation_")
+                && row.at >= query.violations_from
+                && row.at <= query.violations_to
+        })
+        .collect::<Vec<_>>();
+    violations.sort_by(|a, b| b.at.cmp(&a.at));
+    violations.truncate(limit);
+
+    Ok(Json(EvidenceBundleEnvelope {
+        kind: "governance_evidence_bundle",
+        exported_at: chrono::Utc::now(),
+        source_path,
+        payload: GovernanceEvidenceBundlePayload {
+            user: user_identifier,
+            policy,
+            violations,
+            audit,
+            violations_window: GovernanceEvidenceWindow {
+                from: query.violations_from,
+                to: query.violations_to,
+            },
+            focus,
+        },
+    }))
+}
+
+async fn export_trace_evidence_bundle(
+    State(state): State<AppState>,
+    Path(request_id): Path<String>,
+    Query(query): Query<TraceLookupQueryWithEvidence>,
+) -> Result<Json<EvidenceBundleEnvelope<TraceEvidenceBundlePayload>>, AppError> {
+    let focus = normalize_evidence_focus(query.focus.clone());
+    let trace_query = TraceLookupQuery {
+        from: query.from,
+        to: query.to,
+        limit: query.limit,
+        include_episodes: query.include_episodes,
+        include_webhook_events: query.include_webhook_events,
+        include_webhook_audit: query.include_webhook_audit,
+        include_governance_audit: query.include_governance_audit,
+        user: query.user.clone(),
+    };
+    let trace = lookup_trace_by_request_id(&state, request_id.clone(), trace_query).await?;
+    let source_path = default_evidence_source_path(
+        query.source_path,
+        format!(
+            "/_/traces/{}{}",
+            request_id,
+            focus
+                .as_ref()
+                .map(|value| format!("?focus={value}"))
+                .unwrap_or_default()
+        ),
+    );
+
+    Ok(Json(EvidenceBundleEnvelope {
+        kind: "trace_evidence_bundle",
+        exported_at: chrono::Utc::now(),
+        source_path,
+        payload: TraceEvidenceBundlePayload {
+            request_id: trace.request_id.clone(),
+            focus,
+            trace,
+        },
     }))
 }
 

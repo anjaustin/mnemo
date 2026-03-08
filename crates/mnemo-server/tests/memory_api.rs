@@ -4013,6 +4013,154 @@ async fn test_trace_lookup_rejects_invalid_window() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn test_evidence_export_endpoints_return_request_centric_bundles() {
+    let app = build_test_app().await;
+    let req_id = "trace-export-req-77";
+
+    let (status, created_user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "trace-export-user",
+            "external_id": "trace-export-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = created_user["id"].as_str().unwrap();
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "PUT",
+        "/api/v1/policies/trace-export-user",
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({
+            "webhook_domain_allowlist": []
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "trace-export-user",
+            "target_url": "https://example.com/hooks/export",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({
+            "user": "trace-export-user",
+            "session": "default",
+            "text": "trace export payload"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request_with_header(
+        &app,
+        "GET",
+        &format!("/api/v1/memory/webhooks/{webhook_id}/events/replay?limit=5"),
+        REQUEST_ID_HEADER,
+        req_id,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, webhook_bundle) = get_request(
+        &app,
+        &format!(
+            "/api/v1/evidence/webhooks/{webhook_id}/export?focus=dead-letter&source_path=%2F_%2Fwebhooks%2F{webhook_id}%3Ffocus%3Ddead-letter"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        webhook_bundle["kind"],
+        serde_json::json!("webhook_evidence_bundle")
+    );
+    assert_eq!(
+        webhook_bundle["payload"]["webhook"]["id"],
+        serde_json::json!(webhook_id)
+    );
+    assert_eq!(
+        webhook_bundle["payload"]["focus"],
+        serde_json::json!("dead-letter")
+    );
+
+    let (status, governance_bundle) = get_request(
+        &app,
+        "/api/v1/evidence/governance/trace-export-user/export?source_path=%2F_%2Fgovernance%2Ftrace-export-user",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        governance_bundle["kind"],
+        serde_json::json!("governance_evidence_bundle")
+    );
+    assert_eq!(
+        governance_bundle["payload"]["policy"]["user_identifier"],
+        serde_json::json!("trace-export-user")
+    );
+    assert_eq!(
+        governance_bundle["source_path"],
+        serde_json::json!("/_/governance/trace-export-user")
+    );
+
+    let (status, trace_bundle) = get_request(
+        &app,
+        &format!(
+            "/api/v1/evidence/traces/{req_id}/export?focus=governance&include_episodes=false&source_path=%2F_%2Ftraces%2F{req_id}%3Ffocus%3Dgovernance"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        trace_bundle["kind"],
+        serde_json::json!("trace_evidence_bundle")
+    );
+    assert_eq!(
+        trace_bundle["payload"]["request_id"],
+        serde_json::json!(req_id)
+    );
+    assert_eq!(
+        trace_bundle["payload"]["focus"],
+        serde_json::json!("governance")
+    );
+    assert_eq!(
+        trace_bundle["payload"]["trace"]["summary"]["episode_matches"],
+        serde_json::json!(0)
+    );
+    assert_eq!(
+        trace_bundle["payload"]["trace"]["summary"]["governance_audit_matches"]
+            .as_u64()
+            .unwrap_or(0),
+        1
+    );
+    assert_eq!(
+        governance_bundle["payload"]["policy"]["user_id"],
+        serde_json::json!(user_id)
+    );
+}
+
 // ─── Falsification: Replay cursor pagination under sparse event IDs ───
 
 #[tokio::test]

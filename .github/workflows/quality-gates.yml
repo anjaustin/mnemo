@@ -189,3 +189,132 @@ jobs:
           if [ -f /tmp/mnemo-server.log ]; then
             cat /tmp/mnemo-server.log
           fi
+
+  dashboard-browser-smoke:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis/redis-stack:latest
+        ports:
+          - 6379:6379
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+          - 6334:6334
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Wait for Redis and Qdrant
+        run: |
+          python3 - <<'PY'
+          import socket
+          import time
+
+          targets = [
+              ("127.0.0.1", 6379, "redis"),
+              ("127.0.0.1", 6334, "qdrant-grpc"),
+          ]
+
+          deadline = time.time() + 90
+          for host, port, name in targets:
+              while True:
+                  try:
+                      with socket.create_connection((host, port), timeout=2):
+                          print(f"{name} is up on {host}:{port}")
+                          break
+                  except OSError:
+                      if time.time() > deadline:
+                          raise SystemExit(f"Timed out waiting for {name} on {host}:{port}")
+                      time.sleep(1)
+          PY
+
+      - name: Install browser smoke dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install requests playwright
+          python3 -m playwright install --with-deps chromium
+
+      - name: Launch mock OpenAI server
+        run: |
+          python3 tests/mock_openai_chat_server.py > /tmp/mnemo-mock-openai.log 2>&1 &
+          echo $! > /tmp/mnemo-mock-openai.pid
+
+      - name: Launch Mnemo server for dashboard browser smoke
+        env:
+          MNEMO_SERVER_HOST: 127.0.0.1
+          MNEMO_SERVER_PORT: 8080
+          MNEMO_REDIS_URL: redis://localhost:6379
+          MNEMO_QDRANT_URL: http://localhost:6334
+          MNEMO_QDRANT_PREFIX: ci_browser_smoke_
+          MNEMO_EMBEDDING_PROVIDER: local
+          MNEMO_EMBEDDING_MODEL: AllMiniLML6V2
+          MNEMO_EMBEDDING_DIMENSIONS: 384
+          MNEMO_LLM_PROVIDER: openai
+          MNEMO_LLM_MODEL: mock-extractor
+          MNEMO_LLM_API_KEY: dummy
+          MNEMO_LLM_BASE_URL: http://127.0.0.1:18080/v1
+          RUST_LOG: info
+        run: |
+          cargo run -p mnemo-server > /tmp/mnemo-browser-smoke-server.log 2>&1 &
+          echo $! > /tmp/mnemo-browser-smoke-server.pid
+
+      - name: Wait for Mnemo server health
+        run: |
+          python3 - <<'PY'
+          import time
+          import urllib.request
+
+          deadline = time.time() + 180
+          url = "http://127.0.0.1:8080/health"
+          while True:
+              try:
+                  with urllib.request.urlopen(url, timeout=2) as resp:
+                      if resp.status == 200:
+                          print("mnemo server healthy")
+                          break
+              except Exception:
+                  pass
+              if time.time() > deadline:
+                  raise SystemExit("Timed out waiting for mnemo server health")
+              time.sleep(1)
+          PY
+
+      - name: Run dashboard browser smoke
+        env:
+          MNEMO_BROWSER_SMOKE_TIMEOUT: 90
+        run: python3 tests/dashboard_browser_smoke.py
+
+      - name: Stop dashboard browser smoke services
+        if: always()
+        run: |
+          if [ -f /tmp/mnemo-browser-smoke-server.pid ]; then
+            kill "$(cat /tmp/mnemo-browser-smoke-server.pid)" || true
+          fi
+          if [ -f /tmp/mnemo-mock-openai.pid ]; then
+            kill "$(cat /tmp/mnemo-mock-openai.pid)" || true
+          fi
+
+      - name: Dump dashboard browser smoke logs on failure
+        if: failure()
+        run: |
+          if [ -f /tmp/mnemo-browser-smoke-server.log ]; then
+            cat /tmp/mnemo-browser-smoke-server.log
+          fi
+          if [ -f /tmp/mnemo-mock-openai.log ]; then
+            cat /tmp/mnemo-mock-openai.log
+          fi

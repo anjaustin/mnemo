@@ -9,9 +9,11 @@ then drives the embedded dashboard end-to-end in a real browser.
 from __future__ import annotations
 
 import os
+import json
 import time
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import requests
 from playwright.sync_api import sync_playwright, expect
@@ -26,6 +28,8 @@ API_TIMEOUT = float(os.environ.get("MNEMO_BROWSER_SMOKE_TIMEOUT", "60"))
 @dataclass
 class Seeded:
     user: str
+    user_id: str
+    session_id: str
     governance_user_path: str
     webhook_id: str
     policy_request_id: str
@@ -37,6 +41,12 @@ class Seeded:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def read_download(download, download_dir: str) -> dict:
+    target = Path(download_dir) / download.suggested_filename
+    download.save_as(target)
+    return json.loads(target.read_text())
 
 
 def api(method: str, path: str, payload=None, request_id: str | None = None):
@@ -133,6 +143,8 @@ def seed() -> Seeded:
 
     return Seeded(
         user=user,
+        user_id=user_id,
+        session_id="00000000-0000-0000-0000-00000000feed",
         governance_user_path=f"/_/governance/{user_id}",
         webhook_id=webhook_id,
         policy_request_id=policy_request_id,
@@ -184,11 +196,20 @@ def run_browser(seed: Seeded) -> None:
             print("browser: export webhook evidence bundle")
             with page.expect_download() as download_info:
                 page.get_by_role("button", name="Export Evidence").first.click()
+            webhook_bundle = read_download(download_info.value, download_dir)
             require(
                 download_info.value.suggested_filename.startswith(
                     "mnemo-webhook-evidence-"
                 ),
                 "webhook evidence export did not start",
+            )
+            require(
+                webhook_bundle.get("kind") == "webhook_evidence_bundle",
+                "webhook evidence export returned unexpected payload",
+            )
+            require(
+                webhook_bundle.get("source_path", "").startswith("/_/webhooks"),
+                "webhook evidence export should preserve dashboard source path",
             )
 
             print("browser: follow webhook audit trace link")
@@ -220,12 +241,120 @@ def run_browser(seed: Seeded) -> None:
                 page.locator(
                     '#trace-results button:has-text("Export Evidence")'
                 ).click()
+            trace_bundle = read_download(download_info.value, download_dir)
             require(
                 download_info.value.suggested_filename.startswith(
                     "mnemo-trace-evidence-"
                 ),
                 "trace evidence export did not start",
             )
+            require(
+                trace_bundle.get("kind") == "trace_evidence_bundle",
+                "trace evidence export returned unexpected payload",
+            )
+            require(
+                trace_bundle.get("payload", {}).get("focus") == "webhooks",
+                "trace evidence export should preserve webhook focus",
+            )
+
+            print("browser: render synthetic episode graph node")
+            page.evaluate(
+                """
+                seed => {
+                  history.pushState({}, '', `/_/traces/${seed.replay_request_id}`);
+                  renderTraceResults({
+                    request_id: seed.replay_request_id,
+                    matched_episodes: [{
+                      user_id: seed.user_id,
+                      session_id: seed.session_id,
+                      episode_id: 'synthetic-episode-id',
+                      created_at: '2026-03-08T12:00:00Z',
+                      preview: 'synthetic episode preview'
+                    }],
+                    matched_webhook_events: [],
+                    matched_webhook_audit: [],
+                    matched_governance_audit: [],
+                    summary: {
+                      episode_matches: 1,
+                      webhook_event_matches: 0,
+                      webhook_audit_matches: 0,
+                      governance_audit_matches: 0
+                    }
+                  });
+                }
+                """,
+                {
+                    "replay_request_id": seed.replay_request_id,
+                    "user_id": seed.user_id,
+                    "session_id": seed.session_id,
+                },
+            )
+
+            print("browser: click episode graph node drilldown")
+            page.eval_on_selector(
+                '#trace-evidence-graph .trace-graph-node.interactive[data-kind="episode"]',
+                "el => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))",
+            )
+            page.wait_for_url(
+                lambda url: "/_/rca?" in url
+                and "episode_id=synthetic-episode-id" in url
+            )
+            expect(page.locator("#rca-focus-banner")).to_contain_text(
+                "Episode RCA Focus"
+            )
+            require(
+                page.locator("#rca-user").input_value() == seed.user_id,
+                "episode drilldown should prefill RCA user",
+            )
+            require(
+                page.locator("#rca-session").input_value() == seed.session_id,
+                "episode drilldown should prefill RCA session",
+            )
+            require(
+                page.locator("#rca-query").input_value() == "synthetic episode preview",
+                "episode drilldown should prefill RCA query",
+            )
+
+            print("browser: render synthetic webhook graph node")
+            page.evaluate(
+                """
+                seed => {
+                  history.pushState({}, '', `/_/traces/${seed.replay_request_id}?focus=webhooks`);
+                  renderTraceResults({
+                    request_id: seed.replay_request_id,
+                    matched_episodes: [],
+                    matched_webhook_events: [{
+                      id: 'synthetic-webhook-event',
+                      webhook_id: seed.webhook_id,
+                      event_type: 'head_advanced',
+                      delivered: false,
+                      dead_letter: false,
+                      created_at: new Date().toISOString()
+                    }],
+                    matched_webhook_audit: [],
+                    matched_governance_audit: [],
+                    summary: {
+                      episode_matches: 0,
+                      webhook_event_matches: 1,
+                      webhook_audit_matches: 0,
+                      governance_audit_matches: 0
+                    }
+                  });
+                }
+                """,
+                {
+                    "replay_request_id": seed.replay_request_id,
+                    "webhook_id": seed.webhook_id,
+                },
+            )
+
+            print("browser: click webhook graph node drilldown")
+            page.eval_on_selector(
+                '#trace-evidence-graph .trace-graph-node.interactive[data-kind="webhook_event"]',
+                "el => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))",
+            )
+            page.wait_for_url(lambda url: f"/_/webhooks/{seed.webhook_id}" in url)
+            expect(page.locator("#wh-detail-content")).to_contain_text("Audit Log")
 
             print("browser: open governance drilldown")
             page.goto(
@@ -242,11 +371,23 @@ def run_browser(seed: Seeded) -> None:
             print("browser: export governance evidence bundle")
             with page.expect_download() as download_info:
                 page.get_by_role("button", name="Export Evidence").first.click()
+            governance_bundle = read_download(download_info.value, download_dir)
             require(
                 download_info.value.suggested_filename.startswith(
                     "mnemo-governance-evidence-"
                 ),
                 "governance evidence export did not start",
+            )
+            require(
+                governance_bundle.get("kind") == "governance_evidence_bundle",
+                "governance evidence export returned unexpected payload",
+            )
+            require(
+                governance_bundle.get("payload", {})
+                .get("policy", {})
+                .get("user_identifier")
+                == seed.user,
+                "governance evidence export should include the current user policy",
             )
 
             print("browser: follow governance audit trace link")
@@ -280,6 +421,46 @@ def run_browser(seed: Seeded) -> None:
                 graph_nodes >= 2,
                 "governance-focused trace should render a non-trivial evidence graph",
             )
+
+            print("browser: render synthetic governance graph node")
+            page.evaluate(
+                """
+                seed => {
+                  history.pushState({}, '', `/_/traces/${seed.policy_request_id}?focus=governance`);
+                  renderTraceResults({
+                    request_id: seed.policy_request_id,
+                    matched_episodes: [],
+                    matched_webhook_events: [],
+                    matched_webhook_audit: [],
+                    matched_governance_audit: [{
+                      id: 'synthetic-governance-audit',
+                      user_id: seed.user_id,
+                      action: 'policy_updated',
+                      at: new Date().toISOString(),
+                      details: { synthetic: true }
+                    }],
+                    summary: {
+                      episode_matches: 0,
+                      webhook_event_matches: 0,
+                      webhook_audit_matches: 0,
+                      governance_audit_matches: 1
+                    }
+                  });
+                }
+                """,
+                {
+                    "policy_request_id": seed.policy_request_id,
+                    "user_id": seed.user_id,
+                },
+            )
+
+            print("browser: click governance graph node drilldown")
+            page.eval_on_selector(
+                '#trace-evidence-graph .trace-graph-node.interactive[data-kind="governance"]',
+                "el => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))",
+            )
+            page.wait_for_url(lambda url: seed.governance_user_path in url)
+            expect(page.locator("#gov-policy-panel")).to_contain_text(seed.user)
 
             browser.close()
 

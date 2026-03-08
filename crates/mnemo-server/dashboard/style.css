@@ -802,6 +802,16 @@ input::placeholder { color: var(--text-muted); }
   min-height: 360px;
 }
 
+.trace-graph-node.interactive {
+  cursor: pointer;
+}
+
+.trace-graph-node.interactive:focus-visible .trace-graph-node-core,
+.trace-graph-node.interactive:hover .trace-graph-node-core {
+  stroke: rgba(255,255,255,0.96);
+  stroke-width: 2.6;
+}
+
 .trace-evidence-svg {
   display: block;
   width: 100%;
