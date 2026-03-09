@@ -78,6 +78,16 @@
           Explorer
         </a>
       </li>
+      <li>
+        <a href="/_/spans" class="nav-link" data-page="spans">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="1" y="4" width="8" height="2.5" rx="0.5"/>
+            <rect x="5" y="8" width="10" height="2.5" rx="0.5"/>
+            <rect x="2" y="12" width="6" height="2.5" rx="0.5"/>
+          </svg>
+          LLM Spans
+        </a>
+      </li>
     </ul>
 
     <div class="sidebar-footer">
@@ -287,7 +297,7 @@
     <!-- ─────────── EXPLORER ─────────── -->
     <section class="page hidden" id="page-explorer" aria-label="Knowledge Graph Explorer">
       <h1>Knowledge Graph Explorer</h1>
-      <p class="page-subtitle">Browse entities and explore relationship subgraphs — drag nodes, scroll to zoom</p>
+      <p class="page-subtitle">Browse entities, explore relationship subgraphs, and generate memory digests</p>
 
       <div class="form-panel">
         <div class="form-row">
@@ -296,10 +306,13 @@
           </label>
           <div class="btn-group" style="align-self:flex-end">
             <button type="button" class="btn" id="explorer-load-btn">Load Entities</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="explorer-digest-btn" title="Generate or refresh memory digest">Digest</button>
             <button type="button" class="btn btn-ghost btn-sm" id="explorer-reset-btn" title="Reset graph view">Reset</button>
           </div>
         </div>
       </div>
+
+      <div id="explorer-digest-panel" class="hidden"></div>
 
       <div id="explorer-entities" class="hidden"></div>
 
@@ -320,6 +333,28 @@
         </div>
         <div class="node-detail-panel hidden" id="node-detail-panel"></div>
       </div>
+    </section>
+
+    <!-- ─────────── LLM SPANS ─────────── -->
+    <section class="page hidden" id="page-spans" aria-label="LLM Span Viewer">
+      <h1>LLM Span Viewer</h1>
+      <p class="page-subtitle">Inspect LLM call traces — token counts, latency, and operations per request</p>
+
+      <div class="form-panel">
+        <div class="form-row">
+          <label>Request ID
+            <input type="text" id="spans-request-id" placeholder="019cc15a-5470-7711-8d51-a3af1ace5522" autocomplete="off" style="font-family:var(--font-mono)">
+          </label>
+          <button type="button" class="btn" id="spans-lookup-btn">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="6.5" cy="6.5" r="4"/>
+              <line x1="10" y1="10" x2="14" y2="14"/>
+            </svg>
+            Lookup
+          </button>
+        </div>
+      </div>
+      <div id="spans-results" class="hidden"></div>
     </section>
 
   </main><!-- /.content -->

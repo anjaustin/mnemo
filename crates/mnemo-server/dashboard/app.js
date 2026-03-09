@@ -1728,6 +1728,12 @@ function initExplorer() {
   document.getElementById('explorer-user').addEventListener('keydown', e => {
     if (e.key === 'Enter') loadEntities();
   });
+  const digestBtn = document.getElementById('explorer-digest-btn');
+  if (digestBtn) digestBtn.addEventListener('click', () => {
+    const user = document.getElementById('explorer-user').value.trim();
+    if (!user) { toast.warn('Input required', 'Enter a username first.'); return; }
+    loadMemoryDigest(user, false);
+  });
   const resetBtn = document.getElementById('explorer-reset-btn');
   if (resetBtn) resetBtn.addEventListener('click', resetGraphView);
 
@@ -2170,6 +2176,106 @@ function resetGraphView() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// MEMORY DIGEST (sleep-time compute panel in Explorer)
+// ═══════════════════════════════════════════════════════════════════
+
+async function loadMemoryDigest(user, refresh) {
+  const panel = document.getElementById('explorer-digest-panel');
+  if (!panel) return;
+  mnemo.loading('explorer-digest-panel');
+  mnemo.show('explorer-digest-panel');
+  try {
+    let digest;
+    if (refresh) {
+      digest = await mnemo.api('POST', `/api/v1/memory/${encodeURIComponent(user)}/digest`);
+    } else {
+      try {
+        digest = await mnemo.api('GET', `/api/v1/memory/${encodeURIComponent(user)}/digest`);
+      } catch (_) {
+        // No cached digest yet — generate one
+        digest = await mnemo.api('POST', `/api/v1/memory/${encodeURIComponent(user)}/digest`);
+      }
+    }
+    const topics = (digest.dominant_topics || [])
+      .map(t => badge(t, 'blue')).join(' ') || '<span class="muted">none</span>';
+    panel.innerHTML = `
+      <div class="panel" style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <h3 style="margin:0">Memory Digest</h3>
+          <button class="btn btn-ghost btn-sm" id="explorer-digest-refresh-btn">Refresh</button>
+        </div>
+        <p style="margin:0 0 10px">${escapeHtml(digest.summary || '(no summary)')}</p>
+        <div class="stat-grid">
+          <div class="stat-row"><span>Entities</span><span>${digest.entity_count ?? '--'}</span></div>
+          <div class="stat-row"><span>Edges</span><span>${digest.edge_count ?? '--'}</span></div>
+          <div class="stat-row"><span>Model</span><span><code>${escapeHtml(digest.model || '--')}</code></span></div>
+          <div class="stat-row"><span>Generated</span><span>${fmtDateAgo(digest.generated_at)}</span></div>
+          <div class="stat-row"><span>Topics</span><span>${topics}</span></div>
+        </div>
+      </div>`;
+    const refreshBtn = document.getElementById('explorer-digest-refresh-btn');
+    if (refreshBtn) refreshBtn.addEventListener('click', () => {
+      const u = document.getElementById('explorer-user').value.trim();
+      if (u) loadMemoryDigest(u, true);
+    });
+  } catch (e) {
+    mnemo.error('explorer-digest-panel', 'Digest generation failed: ' + e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LLM SPANS PAGE
+// ═══════════════════════════════════════════════════════════════════
+
+function initSpans() {
+  document.getElementById('spans-lookup-btn').addEventListener('click', () => loadSpans());
+  document.getElementById('spans-request-id').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadSpans();
+  });
+}
+
+async function loadSpans() {
+  const requestId = document.getElementById('spans-request-id').value.trim();
+  if (!requestId) { toast.warn('Input required', 'Enter a request ID.'); return; }
+  mnemo.loading('spans-results');
+  mnemo.show('spans-results');
+  try {
+    const data = await mnemo.api('GET', `/api/v1/spans/request/${encodeURIComponent(requestId)}`);
+    const spans = data.spans || [];
+    if (spans.length === 0) {
+      document.getElementById('spans-results').innerHTML = `<p class="muted">No LLM spans found for request <code>${escapeHtml(requestId)}</code>.</p>`;
+      return;
+    }
+    const rows = spans.map(s => {
+      const latency = s.latency_ms != null ? `${s.latency_ms}ms` : '--';
+      const status = s.success ? badge('ok', 'green') : badge('error', 'red');
+      return `<tr>
+        <td>${badge(s.operation || '--', 'blue')}</td>
+        <td><code>${escapeHtml(s.model || '--')}</code></td>
+        <td>${s.prompt_tokens ?? '--'}</td>
+        <td>${s.completion_tokens ?? '--'}</td>
+        <td>${s.total_tokens ?? '--'}</td>
+        <td>${latency}</td>
+        <td>${status}</td>
+        <td style="font-size:11px">${fmtDateAgo(s.started_at)}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('spans-results').innerHTML = `
+      <div class="stat-grid" style="margin-bottom:12px">
+        <div class="stat-row"><span>Spans</span><span>${data.count}</span></div>
+        <div class="stat-row"><span>Total tokens</span><span>${data.total_tokens ?? '--'}</span></div>
+        <div class="stat-row"><span>Total latency</span><span>${data.total_latency_ms != null ? data.total_latency_ms + 'ms' : '--'}</span></div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Operation</th><th>Model</th><th>Prompt tk</th><th>Compl tk</th><th>Total tk</th><th>Latency</th><th>Status</th><th>Time</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  } catch (e) {
+    mnemo.error('spans-results', 'Failed to load spans: ' + e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // BOOT
 // ═══════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
@@ -2179,6 +2285,7 @@ document.addEventListener('DOMContentLoaded', () => {
   _pageInits['governance'] = { init: initGovernance };
   _pageInits['traces'] = { init: initTraces };
   _pageInits['explorer'] = { init: initExplorer };
+  _pageInits['spans'] = { init: initSpans };
 
   initNav();
 
