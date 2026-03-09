@@ -75,6 +75,12 @@ Runs a real browser through the operator dashboard drilldown lanes, including tr
 python3 tests/dashboard_browser_smoke.py
 ```
 
+The smoke now falsifies all three graph drilldown families from the trace Evidence Constellation:
+
+- episode node -> RCA with prefilled user/session/window context
+- webhook node -> webhook detail lane
+- governance node -> governance detail lane
+
 If you do not want to point Mnemo at a real LLM during browser smoke, pair it with the local OpenAI-compatible mock:
 
 ```bash
@@ -85,6 +91,8 @@ MNEMO_LLM_API_KEY=dummy \
 MNEMO_LLM_BASE_URL=http://127.0.0.1:18080/v1 \
 cargo run -p mnemo-server
 ```
+
+CI note: `quality-gates` now includes a `dashboard-browser-smoke` job that installs Playwright Chromium, launches `tests/mock_openai_chat_server.py`, starts Mnemo with local embeddings plus an isolated `MNEMO_QDRANT_PREFIX`, and runs `python3 tests/dashboard_browser_smoke.py`.
 
 ## 3.5) Recall quality eval harness
 
@@ -139,6 +147,7 @@ It verifies:
 - memory webhook checks (`/api/v1/memory/webhooks`) for event capture, replay cursors, manual retry flows (including retry response event envelope), delivery telemetry, retry/backoff, dead-letter transitions, stats endpoint, audit rows, and signature correctness
 - observability checks (`/metrics`, `x-mnemo-request-id`) for telemetry exposure and request correlation propagation
 - governance policy checks (`/api/v1/policies/:user`, `/api/v1/policies/:user/preview`, `/api/v1/policies/:user/violations`) for webhook allowlist enforcement, default contract/retrieval fallback behavior, retention write guards, preview impact estimation, violation-window filtering, and destructive-operation audit trail coverage
+- evidence export checks (`/api/v1/evidence/webhooks/:id/export`, `/api/v1/evidence/governance/:user/export`, `/api/v1/evidence/traces/:request_id/export`) for request-centric incident bundles with preserved source context
 
 ## 5) QA/QC Falsification Tests
 

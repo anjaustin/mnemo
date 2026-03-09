@@ -205,6 +205,7 @@ Cross-cutting latency targets for incident UX:
 - progressive disclosure: summary first, deep raw records on demand.
 - correlated webhook and governance rows should expose direct drilldowns back into the relevant webhook detail and governance views.
 - operators should be able to export a request-centric incident evidence bundle directly from trace, governance, or webhook drilldowns.
+- correlated episode evidence should expose a direct RCA handoff with prefilled user/session/window context so operators can jump from request trace to why-changed analysis in one click.
 
 ## 11) API/Backend Mapping
 
@@ -221,6 +222,9 @@ Existing APIs powering v1 UX:
 - `/api/v1/policies/:user/violations`
 - `/api/v1/ops/summary`
 - `/api/v1/traces/:request_id`
+- `/api/v1/evidence/webhooks/:id/export`
+- `/api/v1/evidence/governance/:user/export`
+- `/api/v1/evidence/traces/:request_id/export`
 
 Likely backend additions for UX polish:
 
@@ -230,6 +234,7 @@ Backend API mapping status:
 
 - Hero-lane backend primitives are now present in this repository.
 - Remaining PRD scope is primarily operator-facing UX surfaces and latency evidence capture.
+- Current operator UX also includes clickable Evidence Constellation nodes that route request-correlated episode evidence into RCA, webhook evidence into Webhook Ops, and governance evidence into Governance Center.
 
 ## 12) Proposed Data Contracts for UI
 
