@@ -7,16 +7,19 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 use mnemo_server::config::MnemoConfig;
+use mnemo_server::config::RerankerConfig;
 use mnemo_server::middleware::{request_context_middleware, AuthConfig, AuthLayer};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
-    AppState, LlmHandle, MetadataPrefilterConfig, RerankerMode, ServerMetrics, WebhookDeliveryConfig,
+    AppState, LlmHandle, MetadataPrefilterConfig, RerankerMode, ServerMetrics,
+    WebhookDeliveryConfig,
 };
-use mnemo_server::config::RerankerConfig;
 
 use mnemo_graph::GraphEngine;
 use mnemo_ingest::{IngestConfig, IngestWorker};
-use mnemo_llm::{AnthropicProvider, EmbedderKind, OpenAiCompatibleEmbedder, OpenAiCompatibleProvider};
+use mnemo_llm::{
+    AnthropicProvider, EmbedderKind, OpenAiCompatibleEmbedder, OpenAiCompatibleProvider,
+};
 #[cfg(feature = "local-embed")]
 use mnemo_llm::{FastEmbedder, DEFAULT_LOCAL_DIMENSIONS, DEFAULT_LOCAL_MODEL};
 use mnemo_retrieval::RetrievalEngine;
@@ -238,6 +241,8 @@ async fn main() -> anyhow::Result<()> {
             config.redis.prefix, config.webhooks.persistence_prefix
         ),
         metrics: Arc::new(ServerMetrics::default()),
+        llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
 
     if let Err(err) = restore_webhook_state(&app_state).await {

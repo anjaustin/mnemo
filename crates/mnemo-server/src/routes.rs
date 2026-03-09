@@ -1171,8 +1171,39 @@ pub fn build_router(state: AppState) -> Router {
             post(reject_promotion_proposal),
         )
         .route("/api/v1/agents/:agent_id/context", post(get_agent_context))
-        // Graph
+        // Graph knowledge API
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
+        .route(
+            "/api/v1/graph/:user/entities",
+            get(graph_list_entities),
+        )
+        .route(
+            "/api/v1/graph/:user/entities/:entity_id",
+            get(graph_get_entity),
+        )
+        .route("/api/v1/graph/:user/edges", get(graph_list_edges))
+        .route(
+            "/api/v1/graph/:user/neighbors/:entity_id",
+            get(graph_neighbors),
+        )
+        .route(
+            "/api/v1/graph/:user/community",
+            get(graph_community),
+        )
+        // LLM span tracing
+        .route(
+            "/api/v1/spans/request/:request_id",
+            get(list_spans_by_request),
+        )
+        .route(
+            "/api/v1/spans/user/:user_id",
+            get(list_spans_by_user),
+        )
+        // Sleep-time compute — memory digest
+        .route(
+            "/api/v1/memory/:user/digest",
+            get(get_memory_digest).post(refresh_memory_digest),
+        )
         // Raw Vector API (external vector DB interface for AnythingLLM, etc.)
         .route(
             "/api/v1/vectors/:namespace",
@@ -7646,6 +7677,451 @@ async fn vectors_exists(
         "namespace": namespace,
         "exists": exists,
     })))
+}
+
+// ─── Knowledge Graph API ───────────────────────────────────────────────────
+
+/// `GET /api/v1/graph/:user/entities`
+///
+/// List all entities for a user in a graph-API response envelope.
+async fn graph_list_entities(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+    Query(params): Query<PaginationParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use mnemo_core::traits::storage::UserStore;
+    let user_rec = find_user_by_identifier(&state, &user).await?;
+    let entities = state
+        .state_store
+        .list_entities(user_rec.id, params.limit, params.after)
+        .await?;
+    let data: Vec<serde_json::Value> = entities
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "name": e.name,
+                "entity_type": e.entity_type.as_str(),
+                "summary": e.summary,
+                "mention_count": e.mention_count,
+                "community_id": e.community_id,
+                "created_at": e.created_at,
+                "updated_at": e.updated_at,
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "data": data,
+        "count": data.len(),
+        "user_id": user_rec.id,
+    })))
+}
+
+/// `GET /api/v1/graph/:user/entities/:entity_id`
+///
+/// Get a single entity with its adjacency.
+async fn graph_get_entity(
+    State(state): State<AppState>,
+    Path((user, entity_id)): Path<(String, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use mnemo_core::traits::storage::UserStore;
+    let _user_rec = find_user_by_identifier(&state, &user).await?;
+    let entity = state.state_store.get_entity(entity_id).await?;
+    let outgoing = state
+        .state_store
+        .get_outgoing_edges(entity_id)
+        .await
+        .unwrap_or_default();
+    let incoming = state
+        .state_store
+        .get_incoming_edges(entity_id)
+        .await
+        .unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "id": entity.id,
+        "name": entity.name,
+        "entity_type": entity.entity_type.as_str(),
+        "summary": entity.summary,
+        "mention_count": entity.mention_count,
+        "community_id": entity.community_id,
+        "created_at": entity.created_at,
+        "updated_at": entity.updated_at,
+        "outgoing_edges": outgoing.iter().map(|e| serde_json::json!({
+            "id": e.id,
+            "target_entity_id": e.target_entity_id,
+            "label": e.label,
+            "fact": e.fact,
+            "valid": e.is_valid(),
+        })).collect::<Vec<_>>(),
+        "incoming_edges": incoming.iter().map(|e| serde_json::json!({
+            "id": e.id,
+            "source_entity_id": e.source_entity_id,
+            "label": e.label,
+            "fact": e.fact,
+            "valid": e.is_valid(),
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+/// `GET /api/v1/graph/:user/edges`
+///
+/// List edges for a user with optional label filter.
+#[derive(Deserialize)]
+struct GraphEdgesParams {
+    #[serde(default = "default_limit")]
+    limit: u32,
+    label: Option<String>,
+    valid_only: Option<bool>,
+}
+
+async fn graph_list_edges(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+    Query(params): Query<GraphEdgesParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use mnemo_core::traits::storage::UserStore;
+    let user_rec = find_user_by_identifier(&state, &user).await?;
+    let include_invalidated = !params.valid_only.unwrap_or(true);
+    let filter = EdgeFilter {
+        label: params.label.clone(),
+        include_invalidated,
+        limit: params.limit,
+        ..Default::default()
+    };
+    let edges = state
+        .state_store
+        .query_edges(user_rec.id, filter)
+        .await?;
+    let data: Vec<serde_json::Value> = edges
+        .iter()
+        .map(|e| serde_json::json!({
+            "id": e.id,
+            "source_entity_id": e.source_entity_id,
+            "target_entity_id": e.target_entity_id,
+            "label": e.label,
+            "fact": e.fact,
+            "confidence": e.confidence,
+            "valid_at": e.valid_at,
+            "invalid_at": e.invalid_at,
+            "valid": e.is_valid(),
+            "created_at": e.created_at,
+        }))
+        .collect();
+    Ok(Json(serde_json::json!({
+        "data": data,
+        "count": data.len(),
+        "user_id": user_rec.id,
+    })))
+}
+
+/// `GET /api/v1/graph/:user/neighbors/:entity_id`
+///
+/// Return 1-hop neighbors of an entity.
+#[derive(Deserialize)]
+struct NeighborsParams {
+    #[serde(default = "default_neighbor_depth")]
+    depth: u32,
+    #[serde(default = "default_neighbor_max")]
+    max_nodes: usize,
+    #[serde(default = "default_true")]
+    valid_only: bool,
+}
+
+fn default_neighbor_depth() -> u32 {
+    1
+}
+fn default_neighbor_max() -> usize {
+    50
+}
+
+async fn graph_neighbors(
+    State(state): State<AppState>,
+    Path((user, entity_id)): Path<(String, Uuid)>,
+    Query(params): Query<NeighborsParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use mnemo_core::traits::storage::UserStore;
+    let _user_rec = find_user_by_identifier(&state, &user).await?;
+    let subgraph = state
+        .graph
+        .traverse_bfs(entity_id, params.depth, params.max_nodes, params.valid_only)
+        .await?;
+    let nodes: Vec<serde_json::Value> = subgraph
+        .nodes
+        .iter()
+        .map(|n| serde_json::json!({
+            "id": n.entity.id,
+            "name": n.entity.name,
+            "entity_type": n.entity.entity_type.as_str(),
+            "summary": n.entity.summary,
+            "depth": n.depth,
+        }))
+        .collect();
+    let edges: Vec<serde_json::Value> = subgraph
+        .edges
+        .iter()
+        .map(|e| serde_json::json!({
+            "id": e.id,
+            "source_entity_id": e.source_entity_id,
+            "target_entity_id": e.target_entity_id,
+            "label": e.label,
+            "fact": e.fact,
+            "valid": e.is_valid(),
+        }))
+        .collect();
+    Ok(Json(serde_json::json!({
+        "seed_entity_id": entity_id,
+        "depth": params.depth,
+        "nodes": nodes,
+        "edges": edges,
+        "entities_visited": subgraph.entities_visited,
+    })))
+}
+
+/// `GET /api/v1/graph/:user/community`
+///
+/// Run community detection and return entity→community assignments.
+#[derive(Deserialize)]
+struct CommunityParams {
+    #[serde(default = "default_community_iterations")]
+    max_iterations: u32,
+}
+
+fn default_community_iterations() -> u32 {
+    20
+}
+
+async fn graph_community(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+    Query(params): Query<CommunityParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use mnemo_core::traits::storage::UserStore;
+    let user_rec = find_user_by_identifier(&state, &user).await?;
+    let labels = state
+        .graph
+        .detect_communities(user_rec.id, params.max_iterations)
+        .await?;
+
+    // Group entity ids by community id
+    let mut communities: std::collections::HashMap<uuid::Uuid, Vec<uuid::Uuid>> =
+        std::collections::HashMap::new();
+    for (entity_id, community_id) in &labels {
+        communities
+            .entry(*community_id)
+            .or_default()
+            .push(*entity_id);
+    }
+    let community_list: Vec<serde_json::Value> = communities
+        .iter()
+        .map(|(cid, members)| serde_json::json!({
+            "community_id": cid,
+            "member_count": members.len(),
+            "entity_ids": members,
+        }))
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "user_id": user_rec.id,
+        "total_entities": labels.len(),
+        "community_count": communities.len(),
+        "communities": community_list,
+    })))
+}
+
+// ─── LLM Span Tracing API ──────────────────────────────────────────────────
+
+use crate::state::{LlmSpan, MemoryDigest};
+
+/// `GET /api/v1/spans/request/:request_id`
+///
+/// Return all LLM call spans associated with a specific request ID.
+async fn list_spans_by_request(
+    State(state): State<AppState>,
+    Path(request_id): Path<String>,
+) -> Json<serde_json::Value> {
+    let spans = state.llm_spans.read().await;
+    let matched: Vec<&LlmSpan> = spans
+        .iter()
+        .filter(|s| s.request_id.as_deref() == Some(request_id.as_str()))
+        .collect();
+    Json(serde_json::json!({
+        "request_id": request_id,
+        "spans": matched,
+        "count": matched.len(),
+        "total_tokens": matched.iter().map(|s| s.total_tokens).sum::<u32>(),
+        "total_latency_ms": matched.iter().map(|s| s.latency_ms).sum::<u64>(),
+    }))
+}
+
+/// `GET /api/v1/spans/user/:user_id`
+///
+/// Return recent LLM spans for a given user ID.
+#[derive(Deserialize)]
+struct SpansUserParams {
+    #[serde(default = "default_spans_limit")]
+    limit: usize,
+}
+
+fn default_spans_limit() -> usize {
+    100
+}
+
+async fn list_spans_by_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+    Query(params): Query<SpansUserParams>,
+) -> Json<serde_json::Value> {
+    let spans = state.llm_spans.read().await;
+    let matched: Vec<&LlmSpan> = spans
+        .iter()
+        .filter(|s| s.user_id == Some(user_id))
+        .take(params.limit)
+        .collect();
+    Json(serde_json::json!({
+        "user_id": user_id,
+        "spans": matched,
+        "count": matched.len(),
+        "total_tokens": matched.iter().map(|s| s.total_tokens).sum::<u32>(),
+    }))
+}
+
+// ─── Sleep-time compute: Memory Digest API ────────────────────────────────
+
+/// `GET /api/v1/memory/:user/digest`
+///
+/// Return the cached memory digest for a user. Returns 404 if not yet generated.
+async fn get_memory_digest(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+) -> Result<Json<MemoryDigest>, AppError> {
+    let user_rec = find_user_by_identifier(&state, &user).await?;
+    let digests = state.memory_digests.read().await;
+    match digests.get(&user_rec.id) {
+        Some(digest) => Ok(Json(digest.clone())),
+        None => Err(AppError(MnemoError::NotFound {
+            resource_type: "memory_digest".into(),
+            id: user.clone(),
+        })),
+    }
+}
+
+/// `POST /api/v1/memory/:user/digest`
+///
+/// Trigger a fresh memory digest generation using the LLM.
+/// The digest summarises the user's entity graph into a compact prose form.
+async fn refresh_memory_digest(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+) -> Result<Json<MemoryDigest>, AppError> {
+    let user_rec = find_user_by_identifier(&state, &user).await?;
+
+    let Some(ref llm) = state.llm else {
+        return Err(AppError(MnemoError::Validation(
+            "LLM provider is not configured; cannot generate memory digest".into(),
+        )));
+    };
+
+    // Gather raw material: entities + top edges
+    let entities = state
+        .state_store
+        .list_entities(user_rec.id, 200, None)
+        .await?;
+    let filter = EdgeFilter {
+        include_invalidated: false,
+        limit: 300,
+        ..Default::default()
+    };
+    let edges = state
+        .state_store
+        .query_edges(user_rec.id, filter)
+        .await?;
+
+    let entity_count = entities.len();
+    let edge_count = edges.len();
+
+    if entity_count == 0 {
+        return Err(AppError(MnemoError::Validation(
+            "No entities found for user — ingest some episodes first".into(),
+        )));
+    }
+
+    // Build a compact prompt
+    let entity_lines: Vec<String> = entities
+        .iter()
+        .take(80)
+        .map(|e| {
+            if let Some(ref s) = e.summary {
+                format!("- {} ({}): {}", e.name, e.entity_type.as_str(), s)
+            } else {
+                format!("- {} ({})", e.name, e.entity_type.as_str())
+            }
+        })
+        .collect();
+    let edge_lines: Vec<String> = edges
+        .iter()
+        .take(60)
+        .map(|e| format!("- {}", e.fact))
+        .collect();
+
+    let prompt = format!(
+        "You are analyzing a user's long-term memory knowledge graph.\n\
+        Entities ({} total, showing up to 80):\n{}\n\n\
+        Key relationships ({} total, showing up to 60):\n{}\n\n\
+        Write a concise 2-4 sentence prose summary of what this person knows, \
+        their main areas of interest, and any dominant themes. \
+        Then on a new line write: TOPICS: topic1, topic2, topic3 (list 3-6 key topics).",
+        entity_count,
+        entity_lines.join("\n"),
+        edge_count,
+        edge_lines.join("\n"),
+    );
+
+    let model_name = llm.model_name().to_string();
+
+    use mnemo_core::traits::llm::LlmProvider as _;
+    let started = std::time::Instant::now();
+    let raw: String = match llm {
+        crate::state::LlmHandle::Anthropic(ref llm) => llm.summarize(&prompt, 512).await,
+        crate::state::LlmHandle::OpenAiCompat(ref llm) => llm.summarize(&prompt, 512).await,
+    }
+    .map_err(|e: mnemo_core::error::MnemoError| AppError(MnemoError::LlmProvider {
+        provider: "digest".into(),
+        message: e.to_string(),
+    }))?;
+    let _latency_ms = started.elapsed().as_millis() as u64;
+
+    // Parse topics from response
+    let (summary_text, dominant_topics) = if let Some(topics_idx) = raw.find("TOPICS:") {
+        let summary = raw[..topics_idx].trim().to_string();
+        let topics_raw = raw[topics_idx + 7..].trim();
+        let topics: Vec<String> = topics_raw
+            .split(',')
+            .map(|t: &str| t.trim().to_string())
+            .filter(|t: &String| !t.is_empty())
+            .take(6)
+            .collect();
+        (summary, topics)
+    } else {
+        (raw.trim().to_string(), Vec::new())
+    };
+
+    let digest = MemoryDigest {
+        user_id: user_rec.id,
+        summary: summary_text,
+        entity_count,
+        edge_count,
+        dominant_topics,
+        generated_at: chrono::Utc::now(),
+        model: model_name,
+    };
+
+    // Cache the digest
+    {
+        let mut digests = state.memory_digests.write().await;
+        digests.insert(user_rec.id, digest.clone());
+    }
+
+    Ok(Json(digest))
 }
 
 #[cfg(test)]

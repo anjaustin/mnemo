@@ -210,13 +210,47 @@ impl LlmHandle {
     }
 }
 
+/// A single LLM call span captured for tracing/observability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmSpan {
+    pub id: Uuid,
+    /// The `x-mnemo-request-id` that triggered this call (if available).
+    pub request_id: Option<String>,
+    pub user_id: Option<Uuid>,
+    pub provider: String,
+    pub model: String,
+    /// "extract", "summarize", "detect_contradictions", "chat_completion"
+    pub operation: String,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    pub latency_ms: u64,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A memory digest summarizing a user's long-term knowledge state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryDigest {
+    pub user_id: Uuid,
+    pub summary: String,
+    pub entity_count: usize,
+    pub edge_count: usize,
+    pub dominant_topics: Vec<String>,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// Which model generated this digest.
+    pub model: String,
+}
+
 /// Shared application state passed to all Axum route handlers.
 #[derive(Clone)]
 pub struct AppState {
     pub state_store: Arc<RedisStateStore>,
     pub vector_store: Arc<QdrantVectorStore>,
-    pub retrieval:
-        Arc<RetrievalEngine<RedisStateStore, QdrantVectorStore, EmbedderKind>>,
+    pub retrieval: Arc<RetrievalEngine<RedisStateStore, QdrantVectorStore, EmbedderKind>>,
     pub graph: Arc<GraphEngine<RedisStateStore>>,
     /// LLM provider for on-demand extraction (e.g. `POST /api/v1/memory/extract`).
     /// `None` when no LLM is configured (no-op mode).
@@ -236,4 +270,9 @@ pub struct AppState {
     pub webhook_redis: Option<redis::aio::ConnectionManager>,
     pub webhook_redis_prefix: String,
     pub metrics: Arc<ServerMetrics>,
+    /// LLM call spans — keyed by request_id then by span id.
+    /// Bounded ring-buffer per request (last 500 requests retained).
+    pub llm_spans: Arc<RwLock<std::collections::VecDeque<LlmSpan>>>,
+    /// Latest memory digest per user.
+    pub memory_digests: Arc<RwLock<HashMap<Uuid, MemoryDigest>>>,
 }

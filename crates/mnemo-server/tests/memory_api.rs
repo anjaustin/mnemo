@@ -148,6 +148,8 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         webhook_redis: None,
         webhook_redis_prefix: "mnemo_test:webhooks".to_string(),
         metrics: Arc::new(ServerMetrics::default()),
+        llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
 
     let app = build_router(state.clone()).layer(from_fn_with_state(
@@ -4939,6 +4941,8 @@ async fn test_webhook_persistence_survives_restart() {
         webhook_redis: Some(webhook_conn.clone()),
         webhook_redis_prefix: webhook_redis_prefix.clone(),
         metrics: Arc::new(ServerMetrics::default()),
+        llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
 
     let app1 = build_router(state1.clone()).layer(from_fn_with_state(
@@ -5027,6 +5031,8 @@ async fn test_webhook_persistence_survives_restart() {
         webhook_redis: Some(webhook_conn2),
         webhook_redis_prefix: webhook_redis_prefix.clone(),
         metrics: Arc::new(ServerMetrics::default()),
+        llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
 
     // Verify state2 starts empty
