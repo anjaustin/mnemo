@@ -1,17 +1,25 @@
 # ============================================================================
-# Mnemo Local Development Stack
-# Memory that evolves. Context that matters.
+# Mnemo — one-line production stack
+# docker compose up -d
+#
+# Required env vars (set in .env or shell):
+#   MNEMO_LLM_API_KEY      — Anthropic or OpenAI key
+#   MNEMO_LLM_PROVIDER     — "anthropic" (default) or "openai"
+#   MNEMO_LLM_MODEL        — e.g. "claude-haiku-4-20250514"
+#
+# Optional:
+#   MNEMO_API_KEY          — bearer token for API auth (leave blank = open)
+#   MNEMO_PORT             — host port (default 8080)
 # ============================================================================
 
 services:
-  # ── Redis ─────────────────────────────────────────────────────────
-  # Used for: user/session/episode state, graph adjacency lists, caching
+  # ── Redis (with RediSearch / RedisStack) ──────────────────────────
   redis:
     image: redis/redis-stack:7.4.0-v1
     container_name: mnemo-redis
     ports:
-      - "6379:6379"      # Redis protocol
-      - "8001:8001"      # RedisInsight (web UI)
+      - "6379:6379"
+      - "8001:8001"      # RedisInsight UI (optional)
     volumes:
       - redis-data:/data
     environment:
@@ -20,22 +28,21 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
   # ── Qdrant ────────────────────────────────────────────────────────
-  # Used for: vector embeddings, semantic search, hybrid retrieval
   qdrant:
     image: qdrant/qdrant:v1.12.4
     container_name: mnemo-qdrant
     ports:
-      - "6333:6333"      # REST API
-      - "6334:6334"      # gRPC
+      - "6333:6333"
+      - "6334:6334"
     volumes:
       - qdrant-data:/qdrant/storage
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
-      - QDRANT__LOG_LEVEL=INFO
+      - QDRANT__LOG_LEVEL=WARN
     ulimits:
       nofile:
         soft: 65536
@@ -44,30 +51,37 @@ services:
       test: ["CMD-SHELL", "pidof qdrant || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
   # ── Mnemo Server ──────────────────────────────────────────────────
-  # The main application server
+  # Uses the pre-built GHCR image (no local Rust toolchain needed).
+  # To build from source instead: comment out `image:` and uncomment `build:`.
   mnemo:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/anomalyco/mnemo/mnemo-server:latest
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     container_name: mnemo-server
     ports:
-      - "8080:8080"      # REST API
-      - "50051:50051"    # gRPC (future)
+      - "${MNEMO_PORT:-8080}:8080"
     environment:
-      - MNEMO_CONFIG=/app/config/default.toml
       - MNEMO_SERVER_HOST=0.0.0.0
       - MNEMO_SERVER_PORT=8080
       - MNEMO_REDIS_URL=redis://redis:6379
       - MNEMO_QDRANT_URL=http://qdrant:6334
+      # LLM — set MNEMO_LLM_API_KEY in your shell or .env file
+      - MNEMO_LLM_PROVIDER=${MNEMO_LLM_PROVIDER:-anthropic}
+      - MNEMO_LLM_MODEL=${MNEMO_LLM_MODEL:-claude-haiku-4-20250514}
       - MNEMO_LLM_API_KEY=${MNEMO_LLM_API_KEY:-}
-      - MNEMO_EMBEDDING_API_KEY=${MNEMO_EMBEDDING_API_KEY:-}
-      - RUST_LOG=mnemo=debug,tower_http=debug
-    volumes:
-      - ./config:/app/config:ro
+      # Embeddings — local fastembed (no key needed) or openai-compat
+      - MNEMO_EMBEDDING_PROVIDER=${MNEMO_EMBEDDING_PROVIDER:-local}
+      - MNEMO_EMBEDDING_MODEL=${MNEMO_EMBEDDING_MODEL:-AllMiniLML6V2}
+      - MNEMO_EMBEDDING_DIMENSIONS=${MNEMO_EMBEDDING_DIMENSIONS:-384}
+      # Auth (optional)
+      - MNEMO_AUTH_ENABLED=${MNEMO_AUTH_ENABLED:-false}
+      - MNEMO_AUTH_API_KEYS=${MNEMO_API_KEY:-}
+      - RUST_LOG=${RUST_LOG:-mnemo=info,tower_http=warn}
     depends_on:
       redis:
         condition: service_healthy
@@ -77,7 +91,7 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
     restart: unless-stopped
 
 volumes:
