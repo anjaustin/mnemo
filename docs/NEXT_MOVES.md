@@ -17,10 +17,13 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
 ## Tier 1: Hardening (deferred MAJOR findings)
 
 ### P0-1: Sleep-time compute
-4. ~~**Idle-triggered consolidation scheduler**~~ — **DONE.** Background
-   scheduler in `IngestWorker` triggers digest generation after configurable
-   idle window (`MNEMO_SLEEP_IDLE_WINDOW_SECONDS`, default 300s) per user.
-   Supports local LLM providers (Ollama, Liquid AI) for zero cloud cost.
+4. ~~**Idle-triggered consolidation scheduler**~~ — **DONE + FALSIFIED.**
+   Background scheduler in `IngestWorker` triggers digest generation after
+   configurable idle window (min 30s, default 300s) per user. Falsification
+   fixed: consolidation now runs unconditionally (not only on idle cycles),
+   lock contention removed in `record_user_activity`, 24h eviction added for
+   unbounded `user_activity` map, minimum 30s idle window enforced, error
+   variant fixed for no-entities case.
 5. **Persist digests to Redis** — Currently in-memory only; lost on restart.
 6. **Integration tests for digest endpoints** — GET (404 + success) and POST.
 
@@ -52,11 +55,17 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
     return a typed model.
 
 ### P0-5b: LlamaIndex adapter
-    ~~**Harden LlamaIndex adapter**~~ — **DONE.** `MnemoChatStore` now
-    registers as `BaseChatStore` virtual subclass (isinstance passes),
-    `get_keys()` queries server-side session list via new
-    `client.list_sessions()` with graceful fallback, `_user_uuid` resolved
-    on first write. 36 unit tests in `test_llamaindex_adapter.py` all pass.
+    ~~**Harden LlamaIndex adapter**~~ — **DONE + FALSIFIED.** Falsification
+    found `BaseChatStore.register()` does NOT enable `isinstance()` with
+    Pydantic's `ModelMetaclass` — removed; adapter works via duck typing
+    (which is how `ChatMemoryBuffer` actually dispatches). Other fixes:
+    `delete_message`/`delete_last_message` now use server-side `idx` field
+    (not list position), `delete_last_message` single-fetch (no TOCTOU race),
+    `_safe_content()` handles `None`/list content, `asyncio.Lock` for async
+    dict safety, `except MnemoError` replaces bare `except Exception`,
+    `_role_value` normalizes case, `_ensure_uuid` resolves sessions created
+    externally, `async_add_message` alias added for LlamaIndex compat.
+    59 unit tests (36 sync + 13 async + 10 edge cases).
 
 ### P0-6: TypeScript SDK
 18. **Feature parity with Python SDK** — Missing: time travel, conflict radar,

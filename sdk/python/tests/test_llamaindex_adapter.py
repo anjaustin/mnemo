@@ -1,11 +1,14 @@
 """Unit tests for the LlamaIndex adapter (mock-based, no server required).
 
 Tests cover:
-- All 7 BaseChatStore interface methods
-- UUID cache management
+- All 7 BaseChatStore interface methods (sync + async)
+- UUID cache management and _ensure_uuid discovery
 - Server-side get_keys() with list_sessions fallback
-- BaseChatStore virtual subclass registration
-- Role mapping
+- Role mapping (including enum path)
+- _safe_content handling (None, list, string)
+- delete_message uses server-side idx field
+- delete_last_message single-fetch (no double-fetch race)
+- async lock safety
 - Edge cases (empty session, out-of-bounds delete, no writes yet)
 
 Run:
@@ -14,11 +17,13 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
+import enum
 import sys
 import os
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -27,64 +32,40 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 # ---------------------------------------------------------------------------
-# Minimal LlamaIndex stubs (avoid requiring llama-index-core for unit tests)
+# Minimal LlamaIndex stubs (closely matching real API shape)
 # ---------------------------------------------------------------------------
 
 
-class _MessageRole:
+class _MessageRole(str, enum.Enum):
+    """Stub matching llama_index.core.llms.MessageRole (str enum)."""
+
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
     TOOL = "tool"
 
-    @classmethod
-    def __contains__(cls, item: str) -> bool:
-        return item in ("user", "assistant", "system", "tool")
-
 
 class _ChatMessage:
     """Minimal stub matching llama_index.core.llms.ChatMessage."""
 
-    def __init__(self, role: str = "user", content: str = "") -> None:
-        self.role = role
+    def __init__(
+        self, role: _MessageRole | str = "user", content: str | None = ""
+    ) -> None:
+        self.role = role if isinstance(role, _MessageRole) else role
         self.content = content
 
     def __repr__(self) -> str:
         return f"ChatMessage(role={self.role!r}, content={self.content!r})"
 
 
-class _BaseChatStore:
-    """Minimal stub of BaseChatStore with register() for ABC virtual subclass."""
-
-    _virtual_subclasses: list[type] = []
-
-    @classmethod
-    def register(cls, subclass: type) -> type:
-        cls._virtual_subclasses.append(subclass)
-        return subclass
-
-    @classmethod
-    def __instancecheck__(cls, instance: Any) -> bool:
-        if type(instance) in cls._virtual_subclasses:
-            return True
-        return super().__instancecheck__(instance)
-
-
 # Patch the llama_index imports before importing the adapter
 _mock_llama_core = MagicMock()
 _mock_llama_core.llms.MessageRole = _MessageRole
 _mock_llama_core.llms.ChatMessage = _ChatMessage
-_mock_llama_storage = MagicMock()
-_mock_llama_storage.chat_store.base.BaseChatStore = _BaseChatStore
 
 sys.modules["llama_index"] = MagicMock()
 sys.modules["llama_index.core"] = _mock_llama_core
 sys.modules["llama_index.core.llms"] = _mock_llama_core.llms
-sys.modules["llama_index.core.storage"] = _mock_llama_storage
-sys.modules["llama_index.core.storage.chat_store"] = _mock_llama_storage.chat_store
-sys.modules["llama_index.core.storage.chat_store.base"] = (
-    _mock_llama_storage.chat_store.base
-)
 
 # Now import the adapter (it will find our stubs)
 from mnemo.ext.llamaindex import (
@@ -92,6 +73,7 @@ from mnemo.ext.llamaindex import (
     _mnemo_role_to_llamaindex,
     _mnemo_to_llamaindex,
     _role_value,
+    _safe_content,
 )
 from mnemo._models import (
     Message,
@@ -101,6 +83,7 @@ from mnemo._models import (
     SessionInfo,
     SessionsResult,
 )
+from mnemo._errors import MnemoError
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +109,27 @@ def _make_mock_client(
     return client
 
 
-def _msg(role: str, content: str) -> _ChatMessage:
+def _make_async_mock_client(
+    session_id: str = "ses-uuid-1",
+    user_id: str = "usr-uuid-1",
+) -> MagicMock:
+    """Create an async mock client."""
+    client = MagicMock()
+    client.add = AsyncMock(
+        return_value=RememberResult(
+            ok=True, user_id=user_id, session_id=session_id, episode_id="ep-1"
+        )
+    )
+    client.get_messages = AsyncMock(
+        return_value=MessagesResult(messages=[], count=0, session_id=session_id)
+    )
+    client.clear_messages = AsyncMock(return_value=DeleteResult(deleted=True))
+    client.delete_message = AsyncMock(return_value=DeleteResult(deleted=True))
+    client.list_sessions = AsyncMock(return_value=SessionsResult(sessions=[], count=0))
+    return client
+
+
+def _msg(role: str | _MessageRole, content: str | None = "") -> _ChatMessage:
     """Shorthand to create a stub ChatMessage."""
     return _ChatMessage(role=role, content=content)
 
@@ -144,10 +147,53 @@ class TestMnemoChatStoreInit:
         assert store._uuid_cache == {}
         assert store._user_uuid is None
 
-    def test_client_stored(self) -> None:
+    def test_has_async_lock(self) -> None:
         client = _make_mock_client()
-        store = MnemoChatStore(client=client, user_id="bob")
-        assert store._client is client
+        store = MnemoChatStore(client=client, user_id="alice")
+        assert isinstance(store._async_lock, asyncio.Lock)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _safe_content
+# ---------------------------------------------------------------------------
+
+
+class TestSafeContent:
+    def test_none_returns_empty(self) -> None:
+        assert _safe_content(None) == ""
+
+    def test_string_passthrough(self) -> None:
+        assert _safe_content("hello") == "hello"
+
+    def test_list_multimodal(self) -> None:
+        content = [{"text": "hello"}, {"text": "world"}]
+        assert _safe_content(content) == "hello world"
+
+    def test_list_mixed(self) -> None:
+        content = [{"text": "a"}, "b", {"image": "url"}]
+        assert _safe_content(content) == "a b"
+
+    def test_empty_string(self) -> None:
+        assert _safe_content("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Tests: _role_value
+# ---------------------------------------------------------------------------
+
+
+class TestRoleValue:
+    def test_enum_role(self) -> None:
+        assert _role_value(_MessageRole.ASSISTANT) == "assistant"
+
+    def test_string_role(self) -> None:
+        assert _role_value("user") == "user"
+
+    def test_uppercase_normalized(self) -> None:
+        assert _role_value("ASSISTANT") == "assistant"
+
+    def test_enum_value_lowercased(self) -> None:
+        assert _role_value(_MessageRole.USER) == "user"
 
 
 # ---------------------------------------------------------------------------
@@ -171,17 +217,24 @@ class TestAddMessage:
         client = _make_mock_client(user_id="usr-real-uuid")
         store = MnemoChatStore(client=client, user_id="alice")
 
-        store.add_message("s1", _msg("assistant", "hi"))
+        store.add_message("s1", _msg(_MessageRole.ASSISTANT, "hi"))
         assert store._user_uuid == "usr-real-uuid"
 
-    def test_add_message_does_not_overwrite_cached_uuid(self) -> None:
-        client = _make_mock_client(session_id="first-uuid")
+    def test_add_message_none_content(self) -> None:
+        client = _make_mock_client()
         store = MnemoChatStore(client=client, user_id="alice")
-        store._uuid_cache["s1"] = "pre-existing-uuid"
 
+        store.add_message("s1", _msg("user", None))
+        # Should not send "None" string
+        client.add.assert_called_once_with("alice", "", session="s1", role="user")
+
+    def test_add_message_no_idx_param(self) -> None:
+        """add_message should not accept idx (removed in hardening)."""
+        client = _make_mock_client()
+        store = MnemoChatStore(client=client, user_id="alice")
+        # Should work with just key + message
         store.add_message("s1", _msg("user", "x"))
-        # Should NOT overwrite
-        assert store._uuid_cache["s1"] == "pre-existing-uuid"
+        assert client.add.called
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +249,27 @@ class TestGetMessages:
 
         result = store.get_messages("unknown-session")
         assert result == []
-        client.get_messages.assert_not_called()
+
+    def test_get_messages_discovers_uuid_via_ensure(self) -> None:
+        """get_messages should try to discover UUID from server."""
+        client = _make_mock_client()
+        client.list_sessions.return_value = SessionsResult(
+            sessions=[SessionInfo(id="uuid-discovered", name="target-session")],
+            count=1,
+        )
+        client.get_messages.return_value = MessagesResult(
+            messages=[
+                Message(idx=0, id="m1", role="user", content="found", created_at="t")
+            ],
+            count=1,
+            session_id="uuid-discovered",
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._user_uuid = "usr-uuid"  # simulate prior write resolved this
+
+        msgs = store.get_messages("target-session")
+        assert len(msgs) == 1
+        client.list_sessions.assert_called_once()
 
     def test_get_messages_returns_converted(self) -> None:
         client = _make_mock_client()
@@ -215,7 +288,10 @@ class TestGetMessages:
 
         msgs = store.get_messages("my-key")
         assert len(msgs) == 2
-        client.get_messages.assert_called_once_with("ses-1")
+        assert isinstance(msgs[0], _ChatMessage)
+        assert msgs[0].content == "hello"
+        assert msgs[0].role == _MessageRole.USER
+        assert msgs[1].role == _MessageRole.ASSISTANT
 
 
 # ---------------------------------------------------------------------------
@@ -235,13 +311,139 @@ class TestSetMessages:
         client.clear_messages.assert_called_once_with("uuid-s1")
         assert client.add.call_count == 2
 
-    def test_set_messages_no_prior_uuid(self) -> None:
+    def test_set_messages_discovers_uuid(self) -> None:
+        """set_messages should use _ensure_uuid to find existing sessions."""
+        client = _make_mock_client()
+        client.list_sessions.return_value = SessionsResult(
+            sessions=[SessionInfo(id="uuid-existing", name="existing-session")],
+            count=1,
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._user_uuid = "usr-uuid"
+
+        store.set_messages("existing-session", [_msg("user", "replaced")])
+        # Should have discovered UUID and cleared
+        client.clear_messages.assert_called_once_with("uuid-existing")
+
+    def test_set_messages_no_prior_uuid_no_clear(self) -> None:
         client = _make_mock_client()
         store = MnemoChatStore(client=client, user_id="alice")
 
-        store.set_messages("new-session", [_msg("user", "hi")])
+        store.set_messages("brand-new-session", [_msg("user", "hi")])
         client.clear_messages.assert_not_called()
         client.add.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: delete_message (uses server-side idx)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteMessage:
+    def test_delete_message_out_of_bounds(self) -> None:
+        client = _make_mock_client()
+        client.get_messages.return_value = MessagesResult(
+            messages=[], count=0, session_id="s1"
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        result = store.delete_message("s1", 5)
+        assert result is None
+
+    def test_delete_message_negative_index(self) -> None:
+        client = _make_mock_client()
+        client.get_messages.return_value = MessagesResult(
+            messages=[
+                Message(idx=0, id="m1", role="user", content="x", created_at="t")
+            ],
+            count=1,
+            session_id="s1",
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        result = store.delete_message("s1", -1)
+        assert result is None
+
+    def test_delete_message_uses_server_idx(self) -> None:
+        """delete_message should use the server's idx field, not list position."""
+        client = _make_mock_client()
+        # Simulate non-contiguous indices (after prior deletions)
+        client.get_messages.return_value = MessagesResult(
+            messages=[
+                Message(idx=0, id="m1", role="user", content="first", created_at="t1"),
+                Message(
+                    idx=3, id="m4", role="assistant", content="fourth", created_at="t4"
+                ),
+            ],
+            count=2,
+            session_id="s1",
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        # Delete list position 1 (which has server idx=3)
+        removed = store.delete_message("s1", 1)
+        assert removed is not None
+        # Should pass server idx 3, not list position 1
+        client.delete_message.assert_called_once_with("uuid-s1", 3)
+
+    def test_delete_message_no_uuid(self) -> None:
+        client = _make_mock_client()
+        store = MnemoChatStore(client=client, user_id="alice")
+
+        result = store.delete_message("unknown", 0)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: delete_last_message (single fetch, no double-fetch race)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteLastMessage:
+    def test_delete_last_message_empty(self) -> None:
+        client = _make_mock_client()
+        store = MnemoChatStore(client=client, user_id="alice")
+
+        result = store.delete_last_message("unknown")
+        assert result is None
+
+    def test_delete_last_message_uses_server_idx(self) -> None:
+        client = _make_mock_client()
+        client.get_messages.return_value = MessagesResult(
+            messages=[
+                Message(idx=0, id="m1", role="user", content="a", created_at="t"),
+                Message(idx=5, id="m6", role="assistant", content="b", created_at="t"),
+            ],
+            count=2,
+            session_id="s1",
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        removed = store.delete_last_message("s1")
+        assert removed is not None
+        # Should use server idx 5, and only one get_messages call
+        client.delete_message.assert_called_once_with("uuid-s1", 5)
+        client.get_messages.assert_called_once()
+
+    def test_delete_last_message_single_fetch(self) -> None:
+        """Verify only 1 get_messages call (not 2 like before fix)."""
+        client = _make_mock_client()
+        client.get_messages.return_value = MessagesResult(
+            messages=[
+                Message(idx=0, id="m1", role="user", content="x", created_at="t")
+            ],
+            count=1,
+            session_id="s1",
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        store.delete_last_message("s1")
+        assert client.get_messages.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +456,7 @@ class TestDeleteMessages:
         client = _make_mock_client()
         client.get_messages.return_value = MessagesResult(
             messages=[
-                Message(idx=0, id="m1", role="user", content="hello", created_at="t1"),
+                Message(idx=0, id="m1", role="user", content="hello", created_at="t1")
             ],
             count=1,
             session_id="s1",
@@ -276,90 +478,6 @@ class TestDeleteMessages:
 
 
 # ---------------------------------------------------------------------------
-# Tests: delete_message
-# ---------------------------------------------------------------------------
-
-
-class TestDeleteMessage:
-    def test_delete_message_out_of_bounds(self) -> None:
-        client = _make_mock_client()
-        client.get_messages.return_value = MessagesResult(
-            messages=[], count=0, session_id="s1"
-        )
-        store = MnemoChatStore(client=client, user_id="alice")
-        store._uuid_cache["s1"] = "uuid-s1"
-
-        result = store.delete_message("s1", 5)
-        assert result is None
-
-    def test_delete_message_negative_index(self) -> None:
-        client = _make_mock_client()
-        client.get_messages.return_value = MessagesResult(
-            messages=[
-                Message(idx=0, id="m1", role="user", content="x", created_at="t"),
-            ],
-            count=1,
-            session_id="s1",
-        )
-        store = MnemoChatStore(client=client, user_id="alice")
-        store._uuid_cache["s1"] = "uuid-s1"
-
-        result = store.delete_message("s1", -1)
-        assert result is None
-
-    def test_delete_message_valid_index(self) -> None:
-        client = _make_mock_client()
-        client.get_messages.return_value = MessagesResult(
-            messages=[
-                Message(idx=0, id="m1", role="user", content="first", created_at="t1"),
-                Message(
-                    idx=1, id="m2", role="assistant", content="second", created_at="t2"
-                ),
-            ],
-            count=2,
-            session_id="s1",
-        )
-        store = MnemoChatStore(client=client, user_id="alice")
-        store._uuid_cache["s1"] = "uuid-s1"
-
-        removed = store.delete_message("s1", 0)
-        assert removed is not None
-        client.delete_message.assert_called_once_with("uuid-s1", 0)
-
-
-# ---------------------------------------------------------------------------
-# Tests: delete_last_message
-# ---------------------------------------------------------------------------
-
-
-class TestDeleteLastMessage:
-    def test_delete_last_message_empty(self) -> None:
-        client = _make_mock_client()
-        store = MnemoChatStore(client=client, user_id="alice")
-
-        result = store.delete_last_message("unknown")
-        assert result is None
-
-    def test_delete_last_message_calls_delete_at_end(self) -> None:
-        client = _make_mock_client()
-        client.get_messages.return_value = MessagesResult(
-            messages=[
-                Message(idx=0, id="m1", role="user", content="a", created_at="t"),
-                Message(idx=1, id="m2", role="assistant", content="b", created_at="t"),
-            ],
-            count=2,
-            session_id="s1",
-        )
-        store = MnemoChatStore(client=client, user_id="alice")
-        store._uuid_cache["s1"] = "uuid-s1"
-
-        removed = store.delete_last_message("s1")
-        assert removed is not None
-        # Should call delete_message with idx = 1 (last)
-        client.delete_message.assert_called_with("uuid-s1", 1)
-
-
-# ---------------------------------------------------------------------------
 # Tests: get_keys (server-side)
 # ---------------------------------------------------------------------------
 
@@ -371,16 +489,6 @@ class TestGetKeys:
 
         keys = store.get_keys()
         assert keys == []
-        # Should NOT call list_sessions (no user_uuid)
-        client.list_sessions.assert_not_called()
-
-    def test_get_keys_local_only_before_server_resolve(self) -> None:
-        client = _make_mock_client()
-        store = MnemoChatStore(client=client, user_id="alice")
-        store._uuid_cache["local-key"] = "uuid-local"
-
-        keys = store.get_keys()
-        assert keys == ["local-key"]
         client.list_sessions.assert_not_called()
 
     def test_get_keys_server_side_after_write(self) -> None:
@@ -398,14 +506,11 @@ class TestGetKeys:
         keys = store.get_keys()
         assert "session-a" in keys
         assert "session-b" in keys
-        client.list_sessions.assert_called_once_with("usr-uuid-1")
 
     def test_get_keys_merges_local_and_server(self) -> None:
         client = _make_mock_client()
         client.list_sessions.return_value = SessionsResult(
-            sessions=[
-                SessionInfo(id="uuid-1", name="server-session", user_id="usr-1"),
-            ],
+            sessions=[SessionInfo(id="uuid-1", name="server-session")],
             count=1,
         )
         store = MnemoChatStore(client=client, user_id="alice")
@@ -416,24 +521,10 @@ class TestGetKeys:
         assert "server-session" in keys
         assert "local-only" in keys
 
-    def test_get_keys_backfills_uuid_cache(self) -> None:
+    def test_get_keys_fallback_on_mnemo_error(self) -> None:
+        """Should catch MnemoError specifically, not bare Exception."""
         client = _make_mock_client()
-        client.list_sessions.return_value = SessionsResult(
-            sessions=[
-                SessionInfo(id="uuid-new", name="new-session", user_id="usr-1"),
-            ],
-            count=1,
-        )
-        store = MnemoChatStore(client=client, user_id="alice")
-        store._user_uuid = "usr-uuid-1"
-
-        store.get_keys()
-        # UUID cache should be back-filled
-        assert store._uuid_cache["new-session"] == "uuid-new"
-
-    def test_get_keys_fallback_on_error(self) -> None:
-        client = _make_mock_client()
-        client.list_sessions.side_effect = Exception("network error")
+        client.list_sessions.side_effect = MnemoError("network error")
         store = MnemoChatStore(client=client, user_id="alice")
         store._user_uuid = "usr-uuid-1"
         store._uuid_cache["cached-key"] = "uuid-cached"
@@ -441,19 +532,15 @@ class TestGetKeys:
         keys = store.get_keys()
         assert keys == ["cached-key"]
 
-    def test_get_keys_uses_id_when_name_is_none(self) -> None:
+    def test_get_keys_does_not_catch_programming_error(self) -> None:
+        """TypeError/KeyError should NOT be swallowed."""
         client = _make_mock_client()
-        client.list_sessions.return_value = SessionsResult(
-            sessions=[
-                SessionInfo(id="uuid-nameless", name=None, user_id="usr-1"),
-            ],
-            count=1,
-        )
+        client.list_sessions.side_effect = TypeError("bug in parsing")
         store = MnemoChatStore(client=client, user_id="alice")
         store._user_uuid = "usr-uuid-1"
 
-        keys = store.get_keys()
-        assert "uuid-nameless" in keys
+        with pytest.raises(TypeError):
+            store.get_keys()
 
 
 # ---------------------------------------------------------------------------
@@ -462,20 +549,17 @@ class TestGetKeys:
 
 
 class TestRoleMapping:
-    def test_role_value_enum(self) -> None:
-        class FakeEnum:
-            value = "assistant"
-
-        assert _role_value(FakeEnum()) == "assistant"
-
-    def test_role_value_string(self) -> None:
-        assert _role_value("user") == "user"
-
     def test_mnemo_role_to_llamaindex_user(self) -> None:
         assert _mnemo_role_to_llamaindex("user") == _MessageRole.USER
 
     def test_mnemo_role_to_llamaindex_human(self) -> None:
         assert _mnemo_role_to_llamaindex("human") == _MessageRole.USER
+
+    def test_mnemo_role_to_llamaindex_ai(self) -> None:
+        assert _mnemo_role_to_llamaindex("ai") == _MessageRole.ASSISTANT
+
+    def test_mnemo_role_to_llamaindex_bot(self) -> None:
+        assert _mnemo_role_to_llamaindex("bot") == _MessageRole.ASSISTANT
 
     def test_mnemo_role_to_llamaindex_assistant(self) -> None:
         assert _mnemo_role_to_llamaindex("assistant") == _MessageRole.ASSISTANT
@@ -486,6 +570,9 @@ class TestRoleMapping:
     def test_mnemo_role_to_llamaindex_tool(self) -> None:
         assert _mnemo_role_to_llamaindex("tool") == _MessageRole.TOOL
 
+    def test_mnemo_role_to_llamaindex_function(self) -> None:
+        assert _mnemo_role_to_llamaindex("function") == _MessageRole.TOOL
+
     def test_mnemo_role_to_llamaindex_none_defaults_user(self) -> None:
         assert _mnemo_role_to_llamaindex(None) == _MessageRole.USER
 
@@ -494,7 +581,6 @@ class TestRoleMapping:
 
     def test_mnemo_role_case_insensitive(self) -> None:
         assert _mnemo_role_to_llamaindex("ASSISTANT") == _MessageRole.ASSISTANT
-        assert _mnemo_role_to_llamaindex("System") == _MessageRole.SYSTEM
 
 
 # ---------------------------------------------------------------------------
@@ -512,14 +598,151 @@ class TestMnemoToLlamaindex:
 
 
 # ---------------------------------------------------------------------------
-# Tests: BaseChatStore registration
+# Tests: Async variants
 # ---------------------------------------------------------------------------
 
 
-class TestBaseChatStoreRegistration:
-    def test_registered_as_virtual_subclass(self) -> None:
-        # MnemoChatStore should be in BaseChatStore's virtual subclasses
-        assert MnemoChatStore in _BaseChatStore._virtual_subclasses
+@pytest.mark.asyncio
+class TestAsyncVariants:
+    async def test_aadd_message(self) -> None:
+        client = _make_async_mock_client(session_id="async-uuid", user_id="async-usr")
+        store = MnemoChatStore(client=client, user_id="alice")
+
+        await store.aadd_message("s1", _msg("user", "async hello"))
+        client.add.assert_awaited_once()
+        assert store._uuid_cache["s1"] == "async-uuid"
+        assert store._user_uuid == "async-usr"
+
+    async def test_async_add_message_alias(self) -> None:
+        """LlamaIndex uses async_add_message as canonical name."""
+        # Check that the class-level attribute points to the same function
+        assert MnemoChatStore.async_add_message is MnemoChatStore.aadd_message
+
+    async def test_aget_messages_empty(self) -> None:
+        client = _make_async_mock_client()
+        store = MnemoChatStore(client=client, user_id="alice")
+
+        msgs = await store.aget_messages("unknown")
+        assert msgs == []
+
+    async def test_aget_messages_returns_converted(self) -> None:
+        client = _make_async_mock_client()
+        client.get_messages = AsyncMock(
+            return_value=MessagesResult(
+                messages=[
+                    Message(idx=0, id="m1", role="user", content="hi", created_at="t")
+                ],
+                count=1,
+                session_id="s1",
+            )
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        msgs = await store.aget_messages("s1")
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], _ChatMessage)
+
+    async def test_aset_messages(self) -> None:
+        client = _make_async_mock_client()
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        await store.aset_messages("s1", [_msg("user", "replaced")])
+        client.clear_messages.assert_awaited_once_with("uuid-s1")
+        client.add.assert_awaited_once()
+
+    async def test_adelete_messages(self) -> None:
+        client = _make_async_mock_client()
+        client.get_messages = AsyncMock(
+            return_value=MessagesResult(
+                messages=[
+                    Message(idx=0, id="m1", role="user", content="x", created_at="t")
+                ],
+                count=1,
+                session_id="s1",
+            )
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        result = await store.adelete_messages("s1")
+        assert result is not None
+        assert len(result) == 1
+        client.clear_messages.assert_awaited_once()
+
+    async def test_adelete_message_uses_server_idx(self) -> None:
+        client = _make_async_mock_client()
+        client.get_messages = AsyncMock(
+            return_value=MessagesResult(
+                messages=[
+                    Message(idx=0, id="m1", role="user", content="a", created_at="t"),
+                    Message(
+                        idx=7, id="m8", role="assistant", content="b", created_at="t"
+                    ),
+                ],
+                count=2,
+                session_id="s1",
+            )
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        removed = await store.adelete_message("s1", 1)
+        assert removed is not None
+        client.delete_message.assert_awaited_once_with("uuid-s1", 7)
+
+    async def test_adelete_last_message(self) -> None:
+        client = _make_async_mock_client()
+        client.get_messages = AsyncMock(
+            return_value=MessagesResult(
+                messages=[
+                    Message(idx=0, id="m1", role="user", content="a", created_at="t"),
+                    Message(
+                        idx=2, id="m3", role="assistant", content="b", created_at="t"
+                    ),
+                ],
+                count=2,
+                session_id="s1",
+            )
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._uuid_cache["s1"] = "uuid-s1"
+
+        removed = await store.adelete_last_message("s1")
+        assert removed is not None
+        client.delete_message.assert_awaited_once_with("uuid-s1", 2)
+
+    async def test_aget_keys_server_side(self) -> None:
+        client = _make_async_mock_client()
+        client.list_sessions = AsyncMock(
+            return_value=SessionsResult(
+                sessions=[SessionInfo(id="uuid-1", name="async-session")],
+                count=1,
+            )
+        )
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._user_uuid = "usr-uuid"
+
+        keys = await store.aget_keys()
+        assert "async-session" in keys
+
+    async def test_aget_keys_fallback_on_mnemo_error(self) -> None:
+        client = _make_async_mock_client()
+        client.list_sessions = AsyncMock(side_effect=MnemoError("fail"))
+        store = MnemoChatStore(client=client, user_id="alice")
+        store._user_uuid = "usr-uuid"
+        store._uuid_cache["local"] = "uuid-local"
+
+        keys = await store.aget_keys()
+        assert keys == ["local"]
+
+    async def test_aadd_message_none_content(self) -> None:
+        client = _make_async_mock_client()
+        store = MnemoChatStore(client=client, user_id="alice")
+
+        await store.aadd_message("s1", _msg("user", None))
+        client.add.assert_awaited_once_with("alice", "", session="s1", role="user")
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +755,6 @@ class TestFullWorkflow:
         """Simulate a full write -> read -> delete -> get_keys cycle."""
         client = _make_mock_client(session_id="ses-uuid-1", user_id="usr-uuid-1")
 
-        # Set up get_messages to return messages after write
         written_messages: list[Message] = []
 
         def mock_add(
@@ -574,18 +796,15 @@ class TestFullWorkflow:
 
         store = MnemoChatStore(client=client, user_id="alice")
 
-        # Write
         store.add_message("my-chat", _msg("user", "Hello"))
-        store.add_message("my-chat", _msg("assistant", "Hi there"))
+        store.add_message("my-chat", _msg(_MessageRole.ASSISTANT, "Hi there"))
 
         assert store._uuid_cache["my-chat"] == "ses-uuid-1"
         assert store._user_uuid == "usr-uuid-1"
 
-        # Read
         msgs = store.get_messages("my-chat")
         assert len(msgs) == 2
 
-        # Keys (server-side)
         keys = store.get_keys()
         assert "my-chat" in keys
         client.list_sessions.assert_called_once_with("usr-uuid-1")

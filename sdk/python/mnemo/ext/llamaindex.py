@@ -27,15 +27,20 @@ Notes:
     adapter caches the UUID returned after the first write for each ``key``
     and uses it for subsequent reads.
 
-    When llama-index-core is installed, ``MnemoChatStore`` dynamically
-    registers as a virtual subclass of ``BaseChatStore`` so that
-    ``isinstance(store, BaseChatStore)`` returns True.
+    ``MnemoChatStore`` is a plain class (not a Pydantic ``BaseChatStore``
+    subclass) because ``BaseChatStore`` uses Pydantic's ``ModelMetaclass``
+    which prevents ``isinstance()`` via ``ABC.register()``. LlamaIndex's
+    ``ChatMemoryBuffer`` accepts any object with the right methods (duck
+    typing), so direct subclassing is unnecessary.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
+
+from mnemo._errors import MnemoError
 
 if TYPE_CHECKING:
     from mnemo.client import Mnemo
@@ -85,16 +90,32 @@ def _mnemo_to_llamaindex(msg: "Message") -> "ChatMessage":
 def _role_value(role: object) -> str:
     """Extract role string from a LlamaIndex MessageRole enum or plain string."""
     if hasattr(role, "value"):
-        return str(role.value)
-    return str(role)
+        return str(role.value).lower()
+    return str(role).lower()
+
+
+def _safe_content(content: object) -> str:
+    """Safely extract string content, handling None and list types."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        # Multimodal content: extract text parts
+        parts = [p.get("text", "") if isinstance(p, dict) else str(p) for p in content]
+        return " ".join(p for p in parts if p)
+    return str(content)
 
 
 class MnemoChatStore:
     """Mnemo-backed chat store for LlamaIndex.
 
-    Implements ``llama_index.core.storage.chat_store.base.BaseChatStore``.
-    When llama-index-core is installed, this class registers as a virtual
-    subclass of ``BaseChatStore`` so ``isinstance()`` checks pass.
+    Implements the 7 abstract methods of
+    ``llama_index.core.storage.chat_store.base.BaseChatStore`` via duck
+    typing. LlamaIndex's ``ChatMemoryBuffer`` accepts any object with the
+    correct method signatures.
+
+    Note: ``BaseChatStore`` is a Pydantic ``BaseModel`` subclass, so
+    ``ABC.register()`` does NOT enable ``isinstance()`` checks. This is a
+    known Pydantic limitation. The adapter works via duck typing instead.
 
     Args:
         client: An initialised :class:`mnemo.Mnemo` sync client instance.
@@ -120,10 +141,30 @@ class MnemoChatStore:
         self._uuid_cache: dict[str, str] = {}
         # Resolved server-side user UUID (set on first successful write)
         self._user_uuid: str | None = None
+        # Lock for async dict mutation safety
+        self._async_lock = asyncio.Lock()
 
     def _get_uuid(self, key: str) -> str | None:
         """Return the cached server UUID for a session key, or None."""
         return self._uuid_cache.get(key)
+
+    def _ensure_uuid(self, key: str) -> str | None:
+        """Resolve the session UUID by writing a no-op if needed."""
+        uuid = self._get_uuid(key)
+        if uuid is not None:
+            return uuid
+        # Try to discover UUID from server-side session list
+        if self._user_uuid is not None:
+            try:
+                result = self._client.list_sessions(self._user_uuid)
+                for s in result.sessions:
+                    name = s.name or s.id
+                    if name not in self._uuid_cache:
+                        self._uuid_cache[name] = s.id
+                uuid = self._uuid_cache.get(key)
+            except Exception:
+                pass
+        return uuid
 
     def _write(self, key: str, content: str, role: str) -> None:
         """Write one message to Mnemo and cache the session UUID."""
@@ -147,27 +188,23 @@ class MnemoChatStore:
 
         Clears existing messages then adds the new ones in order.
         """
-        uuid = self._get_uuid(key)
+        uuid = self._ensure_uuid(key)
         if uuid:
             self._client.clear_messages(uuid)
         for msg in messages:
-            self._write(key, str(msg.content), _role_value(msg.role))
+            self._write(key, _safe_content(msg.content), _role_value(msg.role))
 
     def get_messages(self, key: str) -> list:
         """Return all messages for a session in chronological order."""
-        uuid = self._get_uuid(key)
+        uuid = self._ensure_uuid(key)
         if not uuid:
             return []
         result = self._client.get_messages(uuid)
         return [_mnemo_to_llamaindex(m) for m in result.messages]
 
-    def add_message(self, key: str, message, idx: int | None = None) -> None:
-        """Append a message to a session.
-
-        Note: ``idx`` is accepted for interface compliance but Mnemo always
-        appends; there is no insert-at-index in the current API.
-        """
-        self._write(key, str(message.content), _role_value(message.role))
+    def add_message(self, key: str, message) -> None:
+        """Append a message to a session."""
+        self._write(key, _safe_content(message.content), _role_value(message.role))
 
     def delete_messages(self, key: str) -> list | None:
         """Clear all messages for a session. Returns the cleared messages."""
@@ -181,22 +218,37 @@ class MnemoChatStore:
         """Delete a message at ordinal index ``idx`` (0-based).
 
         Returns the removed message, or None if index is out of bounds.
+        Uses the server-side message ``idx`` field for the delete call to
+        handle non-contiguous indices after prior deletions.
         """
-        existing = self.get_messages(key)
-        if idx < 0 or idx >= len(existing):
-            return None
-        removed = existing[idx]
         uuid = self._get_uuid(key)
-        if uuid:
-            self._client.delete_message(uuid, idx)
+        if not uuid:
+            return None
+        result = self._client.get_messages(uuid)
+        if idx < 0 or idx >= len(result.messages):
+            return None
+        server_msg = result.messages[idx]
+        removed = _mnemo_to_llamaindex(server_msg)
+        # Use the server's idx field, not the list position
+        self._client.delete_message(uuid, server_msg.idx)
         return removed
 
     def delete_last_message(self, key: str) -> "ChatMessage | None":
-        """Delete the most recent message for a session."""
-        existing = self.get_messages(key)
-        if not existing:
+        """Delete the most recent message for a session.
+
+        Fetches messages once and uses the last one's server-side idx to
+        avoid the double-fetch race in delete_message.
+        """
+        uuid = self._get_uuid(key)
+        if not uuid:
             return None
-        return self.delete_message(key, len(existing) - 1)
+        result = self._client.get_messages(uuid)
+        if not result.messages:
+            return None
+        last_msg = result.messages[-1]
+        removed = _mnemo_to_llamaindex(last_msg)
+        self._client.delete_message(uuid, last_msg.idx)
+        return removed
 
     def get_keys(self) -> list[str]:
         """Return all session keys (names) for this user.
@@ -206,29 +258,22 @@ class MnemoChatStore:
         the server-side user UUID has not yet been resolved (no writes).
         """
         if self._user_uuid is None:
-            # No writes yet; return in-memory cache only
             return list(self._uuid_cache.keys())
         try:
             result = self._client.list_sessions(self._user_uuid)
-            # Build merged key set: server sessions + any local keys not yet
-            # synced (edge case: names written in this instance but not yet
-            # reflected in the server list due to eventual consistency)
             server_keys: dict[str, str] = {}
             for s in result.sessions:
                 name = s.name or s.id
                 server_keys[name] = s.id
-                # Back-fill the uuid cache so reads work for sessions
-                # discovered server-side
                 if name not in self._uuid_cache:
                     self._uuid_cache[name] = s.id
-            # Merge: server keys first, then any local-only keys
             merged = list(server_keys.keys())
             for k in self._uuid_cache:
                 if k not in server_keys:
                     merged.append(k)
             return merged
-        except Exception:
-            logger.debug(
+        except MnemoError:
+            logger.warning(
                 "list_sessions failed, falling back to local cache", exc_info=True
             )
             return list(self._uuid_cache.keys())
@@ -244,50 +289,82 @@ class MnemoChatStore:
             session=key,
             role=role,
         )
-        if key not in self._uuid_cache:
-            self._uuid_cache[key] = result.session_id
-        if self._user_uuid is None and result.user_id:
-            self._user_uuid = result.user_id
+        async with self._async_lock:
+            if key not in self._uuid_cache:
+                self._uuid_cache[key] = result.session_id
+            if self._user_uuid is None and result.user_id:
+                self._user_uuid = result.user_id
+
+    async def _aensure_uuid(self, key: str) -> str | None:
+        """Async variant of _ensure_uuid."""
+        uuid = self._uuid_cache.get(key)
+        if uuid is not None:
+            return uuid
+        if self._user_uuid is not None:
+            try:
+                result = await self._client.list_sessions(self._user_uuid)
+                async with self._async_lock:
+                    for s in result.sessions:
+                        name = s.name or s.id
+                        if name not in self._uuid_cache:
+                            self._uuid_cache[name] = s.id
+                uuid = self._uuid_cache.get(key)
+            except Exception:
+                pass
+        return uuid
 
     async def aset_messages(self, key: str, messages: list) -> None:
-        uuid = self._get_uuid(key)
+        uuid = await self._aensure_uuid(key)
         if uuid:
             await self._client.clear_messages(uuid)
         for msg in messages:
-            await self._awrite(key, str(msg.content), _role_value(msg.role))
+            await self._awrite(key, _safe_content(msg.content), _role_value(msg.role))
 
     async def aget_messages(self, key: str) -> list:
-        uuid = self._get_uuid(key)
+        uuid = await self._aensure_uuid(key)
         if not uuid:
             return []
         result = await self._client.get_messages(uuid)
         return [_mnemo_to_llamaindex(m) for m in result.messages]
 
-    async def aadd_message(self, key: str, message, idx: int | None = None) -> None:
-        await self._awrite(key, str(message.content), _role_value(message.role))
+    async def aadd_message(self, key: str, message) -> None:
+        await self._awrite(
+            key, _safe_content(message.content), _role_value(message.role)
+        )
+
+    # LlamaIndex uses async_add_message as the canonical async name
+    async_add_message = aadd_message
 
     async def adelete_messages(self, key: str) -> list | None:
         existing = await self.aget_messages(key)
-        uuid = self._get_uuid(key)
+        uuid = self._uuid_cache.get(key)
         if uuid:
             await self._client.clear_messages(uuid)
         return existing if existing else None
 
     async def adelete_message(self, key: str, idx: int) -> "ChatMessage | None":
-        existing = await self.aget_messages(key)
-        if idx < 0 or idx >= len(existing):
+        uuid = self._uuid_cache.get(key)
+        if not uuid:
             return None
-        removed = existing[idx]
-        uuid = self._get_uuid(key)
-        if uuid:
-            await self._client.delete_message(uuid, idx)
+        result = await self._client.get_messages(uuid)
+        if idx < 0 or idx >= len(result.messages):
+            return None
+        server_msg = result.messages[idx]
+        removed = _mnemo_to_llamaindex(server_msg)
+        await self._client.delete_message(uuid, server_msg.idx)
         return removed
 
     async def adelete_last_message(self, key: str) -> "ChatMessage | None":
-        existing = await self.aget_messages(key)
-        if not existing:
+        uuid = self._uuid_cache.get(key)
+        if not uuid:
             return None
-        return await self.adelete_message(key, len(existing) - 1)
+        result = await self._client.get_messages(uuid)
+        if not result.messages:
+            return None
+        last_msg = result.messages[-1]
+        removed = _mnemo_to_llamaindex(last_msg)
+        await self._client.delete_message(uuid, last_msg.idx)
+        return removed
 
     async def aget_keys(self) -> list[str]:
         """Async server-side get_keys."""
@@ -295,36 +372,20 @@ class MnemoChatStore:
             return list(self._uuid_cache.keys())
         try:
             result = await self._client.list_sessions(self._user_uuid)
-            server_keys: dict[str, str] = {}
-            for s in result.sessions:
-                name = s.name or s.id
-                server_keys[name] = s.id
-                if name not in self._uuid_cache:
-                    self._uuid_cache[name] = s.id
-            merged = list(server_keys.keys())
-            for k in self._uuid_cache:
-                if k not in server_keys:
-                    merged.append(k)
-            return merged
-        except Exception:
-            logger.debug(
+            async with self._async_lock:
+                server_keys: dict[str, str] = {}
+                for s in result.sessions:
+                    name = s.name or s.id
+                    server_keys[name] = s.id
+                    if name not in self._uuid_cache:
+                        self._uuid_cache[name] = s.id
+                merged = list(server_keys.keys())
+                for k in self._uuid_cache:
+                    if k not in server_keys:
+                        merged.append(k)
+                return merged
+        except MnemoError:
+            logger.warning(
                 "list_sessions failed, falling back to local cache", exc_info=True
             )
             return list(self._uuid_cache.keys())
-
-
-# ------------------------------------------------------------------
-# Runtime BaseChatStore registration
-# ------------------------------------------------------------------
-# When llama-index-core is installed, register MnemoChatStore as a
-# virtual subclass of BaseChatStore so isinstance() checks pass.
-# This avoids a hard import dependency while satisfying framework code
-# that validates adapters via isinstance().
-
-try:
-    from llama_index.core.storage.chat_store.base import BaseChatStore
-
-    BaseChatStore.register(MnemoChatStore)
-except Exception:
-    # llama-index-core not installed or API changed — graceful degradation
-    pass

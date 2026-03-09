@@ -159,12 +159,12 @@ where
             match self.poll_and_process().await {
                 Ok(n) if n > 0 => tracing::debug!(processed = n, "Ingestion cycle"),
                 Err(e) => tracing::error!(error = %e, "Ingestion cycle failed"),
-                _ => {
-                    // No work found — check for idle users that need digests
-                    if self.config.sleep_enabled {
-                        self.sleep_time_consolidation().await;
-                    }
-                }
+                _ => {}
+            }
+            // Always check for idle users, even when episodes were processed.
+            // Other users may have gone idle while this cycle handled someone else's data.
+            if self.config.sleep_enabled {
+                self.sleep_time_consolidation().await;
             }
             sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
         }
@@ -172,27 +172,47 @@ where
 
     /// Record that a user was active (episode processed).
     async fn record_user_activity(&self, user_id: Uuid) {
-        let mut activity = self.user_activity.write().await;
-        activity.insert(user_id, Instant::now());
-        // Clear the digest-generated flag so a new digest can be triggered
-        // after the next idle window.
-        let mut generated = self.digest_generated.write().await;
-        generated.remove(&user_id);
+        {
+            let mut activity = self.user_activity.write().await;
+            activity.insert(user_id, Instant::now());
+        } // drop write lock before acquiring the next one
+        {
+            // Clear the digest-generated flag so a new digest can be triggered
+            // after the next idle window.
+            let mut generated = self.digest_generated.write().await;
+            generated.remove(&user_id);
+        }
     }
 
     /// Check all tracked users for idle windows and generate digests.
     async fn sleep_time_consolidation(&self) {
-        let idle_threshold = Duration::from_secs(self.config.sleep_idle_window_seconds);
-        let activity = self.user_activity.read().await;
-        let generated = self.digest_generated.read().await;
+        // Clamp minimum idle window to 30s to prevent runaway LLM calls
+        let idle_secs = self.config.sleep_idle_window_seconds.max(30);
+        let idle_threshold = Duration::from_secs(idle_secs);
+        // Evict entries older than 24h to prevent unbounded growth
+        let eviction_threshold = Duration::from_secs(86400);
 
-        let idle_users: Vec<Uuid> = activity
-            .iter()
-            .filter(|(uid, last)| last.elapsed() >= idle_threshold && !generated.contains(uid))
-            .map(|(uid, _)| *uid)
-            .collect();
-        drop(activity);
-        drop(generated);
+        let idle_users: Vec<Uuid>;
+        {
+            let activity = self.user_activity.read().await;
+            let generated = self.digest_generated.read().await;
+            idle_users = activity
+                .iter()
+                .filter(|(uid, last)| last.elapsed() >= idle_threshold && !generated.contains(uid))
+                .map(|(uid, _)| *uid)
+                .collect();
+        }
+
+        // Evict stale entries (users inactive for >24h)
+        {
+            let mut activity = self.user_activity.write().await;
+            activity.retain(|_, last| last.elapsed() < eviction_threshold);
+        }
+        {
+            let activity = self.user_activity.read().await;
+            let mut generated = self.digest_generated.write().await;
+            generated.retain(|uid| activity.contains_key(uid));
+        }
 
         for user_id in idle_users {
             tracing::info!(user_id = %user_id, "Sleep-time compute: generating digest for idle user");
@@ -235,9 +255,10 @@ where
         let edge_count = edges.len();
 
         if entity_count == 0 {
-            return Err(MnemoError::Validation(
-                "No entities for user — skipping digest".into(),
-            ));
+            return Err(MnemoError::NotFound {
+                resource_type: "entities".to_string(),
+                id: user_id.to_string(),
+            });
         }
 
         let entity_lines: Vec<String> = entities
