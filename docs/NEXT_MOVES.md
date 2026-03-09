@@ -7,12 +7,12 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
 
 ## Tier 0: Ship blockers (do before v0.4.0 tag)
 
-1. **Validate CI green** — `quality-gates` workflow failed on the last push.
-   Investigate and fix before tagging.
-2. **Verify GHCR image exists** — `package-ghcr` workflow was in-progress.
-   Confirm the image is published and pullable.
-3. **Tag v0.4.0 release** — Once CI is green, tag and create GitHub release
-   with changelog covering all 7 P0s.
+1. ~~**Validate CI green**~~ — **DONE.** All 4 workflows green (quality-gates,
+   benchmark-eval, package-ghcr, memory-falsification).
+2. ~~**Verify GHCR image exists**~~ — **DONE.** Published at
+   `ghcr.io/anjaustin/mnemo/mnemo-server:v0.4.0`.
+3. ~~**Tag v0.4.0 release**~~ — **DONE.** Tagged and released at
+   https://github.com/anjaustin/mnemo/releases/tag/v0.4.0
 
 ## Tier 1: Hardening (deferred MAJOR findings)
 
@@ -24,14 +24,23 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
    lock contention removed in `record_user_activity`, 24h eviction added for
    unbounded `user_activity` map, minimum 30s idle window enforced, error
    variant fixed for no-entities case.
-5. ~~**Persist digests to Redis**~~ — **DONE.** `DigestStore` trait in
-   `mnemo-core`, implemented by `RedisStateStore`. Write-through from both
+5. ~~**Persist digests to Redis**~~ — **DONE + FALSIFIED.** `DigestStore` trait
+   in `mnemo-core`, implemented by `RedisStateStore`. Write-through from both
    the ingest worker and `POST /api/v1/memory/:user/digest`. Digests loaded
    from Redis on startup to warm the in-memory cache. Key schema:
    `{prefix}digest:{user_id}` (JSON) + `{prefix}digests` (sorted set index).
+   Falsification audit found 16 issues (3 CRITICAL, 7 MAJOR, 6 MINOR).
+   **Fixed:** cache-Redis split-brain (cache only populated on Redis success),
+   atomic save/delete (`redis::pipe().atomic()`), GET read-through fallback
+   (cache miss → Redis → cache populate), `digest_generated` flag gated on
+   persistence success, POST handler error propagation, `PartialEq` derive,
+   integration test covers HTTP GET read-through path.
+   **Deferred:** `usize` for counts (matches codebase), no pagination on
+   `list_digests` (acceptable scale), last-writer-wins on concurrent POST.
 6. ~~**Integration tests for digest endpoints**~~ — **DONE.** 4 storage-level
    tests (`save_and_load`, `overwrite`, `list_all`, `delete`) + 3 API-level
-   tests (`GET 404`, `persisted_to_redis_and_served`, `POST without LLM`).
+   tests (`GET 404`, `persisted_to_redis_and_served` with read-through
+   verification, `POST without LLM`).
 
 ### P0-2: Knowledge graph API
 7. **Implement `GET /graph/:user/path`** — Shortest path endpoint from the
