@@ -27,27 +27,49 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
-        if length:
-            self.rfile.read(length)
+        raw_body = self.rfile.read(length) if length else b""
 
-        if self.path != "/v1/chat/completions":
+        if self.path == "/v1/chat/completions":
+            payload = {
+                "id": "chatcmpl-mnemo-smoke",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {"entities": [], "relationships": []}
+                            ),
+                        },
+                    }
+                ],
+            }
+        elif self.path == "/v1/embeddings":
+            # Parse request to determine how many inputs were sent
+            try:
+                req = json.loads(raw_body)
+                inputs = req.get("input", [])
+                if isinstance(inputs, str):
+                    inputs = [inputs]
+            except (json.JSONDecodeError, AttributeError):
+                inputs = [""]
+            # Return zero vectors of dimension 384
+            dim = 384
+            payload = {
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "index": i, "embedding": [0.0] * dim}
+                    for i in range(len(inputs))
+                ],
+                "model": "mock-embedding",
+                "usage": {"prompt_tokens": 0, "total_tokens": 0},
+            }
+        else:
             self.send_response(404)
             self.end_headers()
             return
 
-        payload = {
-            "id": "chatcmpl-mnemo-smoke",
-            "object": "chat.completion",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": json.dumps({"entities": [], "relationships": []}),
-                    },
-                }
-            ],
-        }
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

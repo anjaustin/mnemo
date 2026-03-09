@@ -290,9 +290,11 @@ jobs:
           MNEMO_REDIS_URL: redis://localhost:6379
           MNEMO_QDRANT_URL: http://localhost:6334
           MNEMO_QDRANT_PREFIX: ci_browser_smoke_
-          MNEMO_EMBEDDING_PROVIDER: local
-          MNEMO_EMBEDDING_MODEL: AllMiniLML6V2
+          MNEMO_EMBEDDING_PROVIDER: openai
+          MNEMO_EMBEDDING_MODEL: mock-embedding
           MNEMO_EMBEDDING_DIMENSIONS: 384
+          MNEMO_EMBEDDING_API_KEY: dummy
+          MNEMO_EMBEDDING_BASE_URL: http://127.0.0.1:18080/v1
           MNEMO_LLM_PROVIDER: openai
           MNEMO_LLM_MODEL: mock-extractor
           MNEMO_LLM_API_KEY: dummy
