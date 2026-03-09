@@ -1129,37 +1129,44 @@ impl RedisStateStore {
 
 // ─── DigestStore ───────────────────────────────────────────────────
 
-impl mnemo_core::traits::storage::DigestStore for RedisStateStore {
-    async fn save_digest(
-        &self,
-        digest: &mnemo_core::models::digest::MemoryDigest,
-    ) -> StorageResult<()> {
-        let key = self.key(&["digest", &digest.user_id.to_string()]);
-        self.set_json(&key, digest).await?;
+use mnemo_core::models::digest::MemoryDigest;
+use mnemo_core::traits::storage::DigestStore;
 
-        // Index in sorted set so list_digests can enumerate all users with digests
+impl DigestStore for RedisStateStore {
+    async fn save_digest(&self, digest: &MemoryDigest) -> StorageResult<()> {
+        let key = self.key(&["digest", &digest.user_id.to_string()]);
         let zset_key = self.key(&["digests"]);
+        let json = serde_json::to_string(digest)?;
+        let score = digest.generated_at.timestamp_millis() as f64;
+        let member = digest.user_id.to_string();
+
+        // Atomic: both JSON.SET and ZADD in a single pipeline (executed as one round-trip).
         let mut conn = self.conn.clone();
-        conn.zadd::<_, _, _, ()>(
-            &zset_key,
-            digest.user_id.to_string(),
-            digest.generated_at.timestamp_millis() as f64,
-        )
-        .await
-        .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        redis::pipe()
+            .atomic()
+            .cmd("JSON.SET")
+            .arg(&key)
+            .arg("$")
+            .arg(&json)
+            .ignore()
+            .cmd("ZADD")
+            .arg(&zset_key)
+            .arg(score)
+            .arg(&member)
+            .ignore()
+            .exec_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
         Ok(())
     }
 
-    async fn get_digest(
-        &self,
-        user_id: Uuid,
-    ) -> StorageResult<Option<mnemo_core::models::digest::MemoryDigest>> {
+    async fn get_digest(&self, user_id: Uuid) -> StorageResult<Option<MemoryDigest>> {
         let key = self.key(&["digest", &user_id.to_string()]);
         self.get_json(&key).await
     }
 
-    async fn list_digests(&self) -> StorageResult<Vec<mnemo_core::models::digest::MemoryDigest>> {
+    async fn list_digests(&self) -> StorageResult<Vec<MemoryDigest>> {
         let zset_key = self.key(&["digests"]);
         let mut conn = self.conn.clone();
         let user_ids: Vec<String> = conn
@@ -1179,11 +1186,19 @@ impl mnemo_core::traits::storage::DigestStore for RedisStateStore {
 
     async fn delete_digest(&self, user_id: Uuid) -> StorageResult<()> {
         let key = self.key(&["digest", &user_id.to_string()]);
-        self.del(&key).await?;
-
         let zset_key = self.key(&["digests"]);
+
+        // Atomic: DEL and ZREM in a single pipeline
         let mut conn = self.conn.clone();
-        conn.zrem::<_, _, ()>(&zset_key, user_id.to_string())
+        redis::pipe()
+            .atomic()
+            .del(&key)
+            .ignore()
+            .cmd("ZREM")
+            .arg(&zset_key)
+            .arg(user_id.to_string())
+            .ignore()
+            .exec_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 

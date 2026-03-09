@@ -206,19 +206,28 @@ where
             tracing::info!(user_id = %user_id, "Sleep-time compute: generating digest for idle user");
             match self.generate_digest(user_id).await {
                 Ok(digest) => {
-                    // Persist to Redis for durability
-                    if let Err(e) = self.state_store.save_digest(&digest).await {
-                        tracing::warn!(user_id = %user_id, error = %e, "Failed to persist digest to Redis");
+                    // Persist to Redis first — only populate the in-memory cache
+                    // and mark as generated if persistence succeeds, so that a
+                    // retry occurs on the next idle cycle if Redis is down.
+                    match self.state_store.save_digest(&digest).await {
+                        Ok(()) => {
+                            if let Some(ref cache) = self.digest_cache {
+                                let mut digests = cache.write().await;
+                                digests.insert(user_id, digest);
+                            }
+                            let mut gen = self.digest_generated.write().await;
+                            gen.insert(user_id);
+                            tracing::info!(user_id = %user_id, "Sleep-time digest generated and persisted");
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                user_id = %user_id, error = %e,
+                                "Sleep-time digest generated but Redis persistence failed; will retry next cycle"
+                            );
+                            // Do NOT mark as generated — allows retry on next idle check.
+                            // Do NOT populate in-memory cache — avoids cache/Redis split-brain.
+                        }
                     }
-                    // Write to shared in-memory cache for fast reads
-                    if let Some(ref cache) = self.digest_cache {
-                        let mut digests = cache.write().await;
-                        digests.insert(user_id, digest);
-                    }
-                    // Mark as generated so we don't re-run until next activity
-                    let mut gen = self.digest_generated.write().await;
-                    gen.insert(user_id);
-                    tracing::info!(user_id = %user_id, "Sleep-time digest generated and persisted");
                 }
                 Err(e) => {
                     tracing::warn!(user_id = %user_id, error = %e, "Sleep-time digest generation failed");

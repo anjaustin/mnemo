@@ -6706,7 +6706,8 @@ async fn test_digest_persisted_to_redis_and_served() {
     assert_eq!(status, StatusCode::CREATED);
     let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
 
-    // Manually save a digest via DigestStore (simulating what the ingest worker does)
+    // Manually save a digest to Redis via DigestStore (simulating what the ingest worker does).
+    // Note: the in-memory cache is NOT populated — this tests the read-through fallback.
     use mnemo_core::traits::storage::DigestStore;
     let digest = mnemo_core::models::digest::MemoryDigest {
         user_id,
@@ -6719,18 +6720,30 @@ async fn test_digest_persisted_to_redis_and_served() {
     };
     state_store.save_digest(&digest).await.unwrap();
 
-    // Also write to the in-memory cache (normally done by the ingest worker or POST handler)
-    // For this test we need to go through the HTTP path which reads from the in-memory cache.
-    // Since we can't access AppState directly here, let's verify the Redis persistence
-    // by loading directly from the store.
-    let loaded = state_store.get_digest(user_id).await.unwrap();
-    assert!(loaded.is_some(), "digest should be persisted in Redis");
-    let loaded = loaded.unwrap();
-    assert_eq!(loaded.summary, digest.summary);
-    assert_eq!(loaded.entity_count, 12);
-    assert_eq!(loaded.dominant_topics, vec!["distributed systems", "Rust"]);
+    // GET should find the digest via read-through from Redis (cache miss → Redis → cache populate)
+    let (status, body) = get_request(&app, &format!("/api/v1/memory/{user_id}/digest")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "GET digest should succeed via read-through"
+    );
+    assert_eq!(body["summary"].as_str().unwrap(), digest.summary);
+    assert_eq!(body["entity_count"].as_u64().unwrap(), 12);
+    assert_eq!(body["model"].as_str().unwrap(), "test-model");
+    let topics: Vec<&str> = body["dominant_topics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(topics, vec!["distributed systems", "Rust"]);
 
-    // Verify list_digests returns it
+    // Second GET should hit the now-populated in-memory cache (fast path)
+    let (status2, body2) = get_request(&app, &format!("/api/v1/memory/{user_id}/digest")).await;
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(body2["summary"].as_str().unwrap(), digest.summary);
+
+    // Verify list_digests returns it from Redis
     let all = state_store.list_digests().await.unwrap();
     assert!(all.iter().any(|d| d.user_id == user_id));
 }

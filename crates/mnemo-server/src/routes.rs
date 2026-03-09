@@ -8075,20 +8075,39 @@ async fn list_spans_by_user(
 
 /// `GET /api/v1/memory/:user/digest`
 ///
-/// Return the cached memory digest for a user. Returns 404 if not yet generated.
+/// Return the memory digest for a user. Reads from the in-memory cache first;
+/// on cache miss, falls through to Redis (read-through) and populates the cache.
+/// Returns 404 if no digest has been generated.
 async fn get_memory_digest(
     State(state): State<AppState>,
     Path(user): Path<String>,
 ) -> Result<Json<MemoryDigest>, AppError> {
     let user_rec = find_user_by_identifier(&state, &user).await?;
-    let digests = state.memory_digests.read().await;
-    match digests.get(&user_rec.id) {
-        Some(digest) => Ok(Json(digest.clone())),
-        None => Err(AppError(MnemoError::NotFound {
-            resource_type: "memory_digest".into(),
-            id: user.clone(),
-        })),
+
+    // Fast path: in-memory cache hit
+    {
+        let digests = state.memory_digests.read().await;
+        if let Some(digest) = digests.get(&user_rec.id) {
+            return Ok(Json(digest.clone()));
+        }
     }
+
+    // Slow path: read-through from Redis (handles cross-replica writes, restarts
+    // where warm-up partially failed, etc.)
+    {
+        use mnemo_core::traits::storage::DigestStore as _;
+        if let Ok(Some(digest)) = state.state_store.get_digest(user_rec.id).await {
+            // Populate the in-memory cache so subsequent reads are fast
+            let mut digests = state.memory_digests.write().await;
+            digests.insert(user_rec.id, digest.clone());
+            return Ok(Json(digest));
+        }
+    }
+
+    Err(AppError(MnemoError::NotFound {
+        resource_type: "memory_digest".into(),
+        id: user.clone(),
+    }))
 }
 
 /// `POST /api/v1/memory/:user/digest`
@@ -8219,15 +8238,14 @@ async fn refresh_memory_digest(
         model: model_name,
     };
 
-    // Persist to Redis for durability
+    // Persist to Redis for durability — fail the request if persistence fails,
+    // so the client knows the digest is not durable.
     {
         use mnemo_core::traits::storage::DigestStore as _;
-        if let Err(e) = state.state_store.save_digest(&digest).await {
-            tracing::warn!(user_id = %user_rec.id, error = %e, "Failed to persist digest to Redis");
-        }
+        state.state_store.save_digest(&digest).await?;
     }
 
-    // Cache the digest in memory for fast reads
+    // Cache the digest in memory for fast reads (only after Redis persistence succeeds)
     {
         let mut digests = state.memory_digests.write().await;
         digests.insert(user_rec.id, digest.clone());
