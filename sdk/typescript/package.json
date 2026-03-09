@@ -1,0 +1,67 @@
+{
+  "name": "mnemo-client",
+  "version": "0.4.0",
+  "description": "TypeScript/JavaScript client for the Mnemo memory API",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./langchain": {
+      "import": "./dist/ext/langchain.mjs",
+      "require": "./dist/ext/langchain.js",
+      "types": "./dist/ext/langchain.d.ts"
+    },
+    "./vercel-ai": {
+      "import": "./dist/ext/vercel-ai.mjs",
+      "require": "./dist/ext/vercel-ai.js",
+      "types": "./dist/ext/vercel-ai.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "memory",
+    "ai",
+    "llm",
+    "mnemo",
+    "knowledge-graph",
+    "langchain",
+    "vercel-ai"
+  ],
+  "author": "Mnemo",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.2.0",
+    "ai": ">=3.0.0"
+  },
+  "peerDependenciesOptional": {
+    "@langchain/core": true,
+    "ai": true
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": ["**/__tests__/**/*.test.ts"]
+  }
+}
