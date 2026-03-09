@@ -88,7 +88,7 @@ pub mod inner {
             .flat_map(|dir| ort_candidates_in_dir(&dir))
             .collect::<Vec<_>>();
 
-        matches.sort_by(|a, b| ort_candidate_rank(b).cmp(&ort_candidate_rank(a)));
+        matches.sort_by_key(|b| std::cmp::Reverse(ort_candidate_rank(b)));
         matches.into_iter().next()
     }
 

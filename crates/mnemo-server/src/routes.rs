@@ -1591,7 +1591,7 @@ async fn get_ops_incidents(
     }
 
     incidents.extend(open_circuit_incidents);
-    incidents.sort_by(|a, b| incident_sort_key(b).cmp(&incident_sort_key(a)));
+    incidents.sort_by_key(|b| std::cmp::Reverse(incident_sort_key(b)));
 
     Json(OpsIncidentsResponse {
         window_seconds,
@@ -1849,7 +1849,7 @@ async fn lookup_trace_by_request_id(
     // Resolve optional user filter to a UUID for post-index filtering.
     // We do this eagerly so the index path doesn't need to scan all users.
     let user_filter_uuid: Option<Uuid> = if let Some(ref filter) = user_filter {
-        match find_user_by_identifier(&state, filter).await {
+        match find_user_by_identifier(state, filter).await {
             Ok(u) => Some(u.id),
             Err(_) => {
                 // Unknown user — no episodes can match
@@ -7733,7 +7733,6 @@ async fn graph_list_entities(
     Path(user): Path<String>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    use mnemo_core::traits::storage::UserStore;
     let user_rec = find_user_by_identifier(&state, &user).await?;
     let clamped_limit = params.limit.clamp(1, 1000);
     let entities = state
@@ -7769,7 +7768,6 @@ async fn graph_get_entity(
     State(state): State<AppState>,
     Path((user, entity_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    use mnemo_core::traits::storage::UserStore;
     let user_rec = find_user_by_identifier(&state, &user).await?;
     let entity = state.state_store.get_entity(entity_id).await?;
     // Verify the entity belongs to the resolved user (prevent cross-user data leak)
@@ -7831,7 +7829,6 @@ async fn graph_list_edges(
     Path(user): Path<String>,
     Query(params): Query<GraphEdgesParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    use mnemo_core::traits::storage::UserStore;
     let user_rec = find_user_by_identifier(&state, &user).await?;
     let include_invalidated = !params.valid_only.unwrap_or(true);
     let filter = EdgeFilter {
@@ -7890,7 +7887,6 @@ async fn graph_neighbors(
     Path((user, entity_id)): Path<(String, Uuid)>,
     Query(params): Query<NeighborsParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    use mnemo_core::traits::storage::UserStore;
     let user_rec = find_user_by_identifier(&state, &user).await?;
     // Verify the seed entity belongs to the resolved user (prevent cross-user traversal)
     let seed_entity = state.state_store.get_entity(entity_id).await?;
@@ -7963,7 +7959,6 @@ async fn graph_community(
     Path(user): Path<String>,
     Query(params): Query<CommunityParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    use mnemo_core::traits::storage::UserStore;
     let user_rec = find_user_by_identifier(&state, &user).await?;
     let clamped_iterations = params.max_iterations.clamp(1, 100);
     let labels = state
