@@ -48,7 +48,7 @@ services:
         soft: 65536
         hard: 65536
     healthcheck:
-      test: ["CMD-SHELL", "pidof qdrant || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:6333/healthz || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -87,11 +87,14 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    # NOTE: The GHCR image uses distroless (no shell/curl). Health checking
+    # is done externally by the quickstart script or your orchestrator.
+    # If building from source with a Debian-based image, uncomment:
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
     restart: unless-stopped
 
 volumes:

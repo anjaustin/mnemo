@@ -857,6 +857,22 @@ class AsyncMnemo:
             request_id=rid,
         )
 
+    async def graph_entity(
+        self,
+        user: str,
+        entity_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Get a single entity with adjacency information."""
+        body, rid = await self._req(
+            "GET",
+            f"/api/v1/graph/{user}/entities/{entity_id}",
+            request_id=request_id,
+        )
+        body["request_id"] = rid
+        return body
+
     async def graph_edges(
         self,
         user: str,
@@ -994,7 +1010,7 @@ class AsyncMnemo:
                 body, rid = await self._req(
                     "GET", f"/api/v1/memory/{user}/digest", request_id=request_id
                 )
-            except Exception:
+            except MnemoNotFoundError:
                 body, rid = await self._req(
                     "POST", f"/api/v1/memory/{user}/digest", request_id=request_id
                 )

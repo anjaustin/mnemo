@@ -503,6 +503,16 @@ impl MnemoConfig {
             config.webhooks.persistence_prefix = v;
         }
 
+        // SOC 2 compliance overrides
+        if let Ok(v) = std::env::var("MNEMO_REQUIRE_TLS") {
+            config.server.require_tls = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_AUDIT_SIGNING_SECRET") {
+            if !v.is_empty() {
+                config.server.audit_signing_secret = Some(v);
+            }
+        }
+
         Ok(config)
     }
 

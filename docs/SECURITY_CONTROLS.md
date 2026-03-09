@@ -34,7 +34,7 @@ for SOC 2 Type II readiness assessments.
 |---------|---------------------|--------|
 | CC5.1 — Logical access | `MNEMO_AUTH_ENABLED` + `MNEMO_AUTH_API_KEYS` bearer token auth | Implemented |
 | CC5.2 — Technology infrastructure | Docker Compose deployment, health checks, resource limits | Implemented |
-| CC5.3 — Security awareness | API key auth, TLS enforcement (`MNEMO_REQUIRE_TLS`) | Implemented |
+| CC5.3 — Security awareness | API key auth, TLS enforcement for webhooks (`MNEMO_REQUIRE_TLS`) | Implemented |
 
 ## CC6 — Logical and Physical Access Controls
 
@@ -43,7 +43,7 @@ for SOC 2 Type II readiness assessments.
 | CC6.1 — Logical access security | API key bearer auth on all endpoints | Implemented |
 | CC6.2 — Provisioning/deprovisioning | Comma-separated `MNEMO_AUTH_API_KEYS` env var | Implemented |
 | CC6.3 — Role-based access | Per-user policy records with domain allowlists | Implemented |
-| CC6.6 — Encryption in transit | `MNEMO_REQUIRE_TLS=true` rejects non-https targets | Implemented |
+| CC6.6 — Encryption in transit | `MNEMO_REQUIRE_TLS=true` rejects non-https webhook targets at registration | Implemented |
 | CC6.7 — Encryption at rest | Redis persistence (RDB), Qdrant storage — operator responsibility | Delegated |
 
 ## CC7 — System Operations

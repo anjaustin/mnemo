@@ -48,15 +48,11 @@ export class MnemoChatMessageHistory extends BaseListChatMessageHistory {
 
   async getMessages(): Promise<BaseMessage[]> {
     if (!this.sessionId) return [];
-    // Use the Mnemo memory API to retrieve context as messages
-    const ctx = await this.client.context(this.user, '', {
-      sessionId: this.sessionId,
-      limit: 200,
-    });
-    // Convert episodes back to messages
-    return (ctx.episodes || []).map((ep) => {
-      const content = String((ep as Record<string, unknown>).content ?? '');
-      const role = String((ep as Record<string, unknown>).role ?? 'user');
+    // Use the session messages endpoint for chronological message retrieval
+    const result = await this.client.getMessages(this.sessionId, { limit: 200 });
+    return (result.messages || []).map((msg) => {
+      const content = String(msg.content ?? '');
+      const role = String(msg.role ?? 'user');
       if (role === 'assistant') return new AIMessage(content);
       if (role === 'system') return new SystemMessage(content);
       return new HumanMessage(content);
@@ -81,6 +77,7 @@ export class MnemoChatMessageHistory extends BaseListChatMessageHistory {
   }
 
   async clear(): Promise<void> {
-    // Mnemo doesn't have a session-clear endpoint; this is a no-op.
+    if (!this.sessionId) return;
+    await this.client.clearMessages(this.sessionId);
   }
 }

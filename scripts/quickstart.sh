@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Mnemo quickstart — pulls the pre-built image and starts the full stack.
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/anomalyco/mnemo/main/scripts/quickstart.sh | bash
-# or:
+#
+# Run from a cloned repo:
 #   MNEMO_LLM_API_KEY=sk-... bash scripts/quickstart.sh
+#
+# Or via curl (auto-clones into a temp directory):
+#   curl -fsSL https://raw.githubusercontent.com/anomalyco/mnemo/main/scripts/quickstart.sh | MNEMO_LLM_API_KEY=sk-... bash
 set -euo pipefail
 
 MNEMO_PORT="${MNEMO_PORT:-8080}"
@@ -13,7 +15,7 @@ MNEMO_LLM_MODEL="${MNEMO_LLM_MODEL:-claude-haiku-4-20250514}"
 echo "==> Mnemo quickstart"
 
 # Check dependencies
-for cmd in docker curl; do
+for cmd in docker curl git; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "ERROR: '$cmd' not found. Install it and retry."
     exit 1
@@ -33,14 +35,26 @@ if [[ -z "${MNEMO_LLM_API_KEY:-}" ]]; then
   echo ""
 fi
 
-# Determine compose file location
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-COMPOSE_FILE="${REPO_ROOT}/docker-compose.yml"
+# Determine compose file location.
+# When piped via curl|bash, BASH_SOURCE[0] is empty so we clone the repo.
+COMPOSE_FILE=""
+TEMP_DIR=""
 
-if [[ ! -f "$COMPOSE_FILE" ]]; then
-  echo "ERROR: docker-compose.yml not found at $COMPOSE_FILE"
-  exit 1
+if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "/dev/stdin" && -f "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+  COMPOSE_FILE="${REPO_ROOT}/docker-compose.yml"
+fi
+
+if [[ -z "$COMPOSE_FILE" || ! -f "$COMPOSE_FILE" ]]; then
+  echo "==> Cloning Mnemo repo (docker-compose.yml needed)..."
+  TEMP_DIR="$(mktemp -d)"
+  git clone --depth 1 --quiet https://github.com/anomalyco/mnemo.git "$TEMP_DIR/mnemo"
+  COMPOSE_FILE="$TEMP_DIR/mnemo/docker-compose.yml"
+  if [[ ! -f "$COMPOSE_FILE" ]]; then
+    echo "ERROR: docker-compose.yml not found after clone."
+    exit 1
+  fi
 fi
 
 echo "==> Pulling latest Mnemo images..."
@@ -66,7 +80,7 @@ for i in $(seq 1 30); do
   fi
   if [[ $i -eq 30 ]]; then
     echo "ERROR: Mnemo did not become healthy in 30s."
-    echo "       Check logs: docker compose logs mnemo"
+    echo "       Check logs: docker compose -f $COMPOSE_FILE logs mnemo"
     exit 1
   fi
   sleep 1
@@ -80,17 +94,17 @@ echo "Quick test:"
 echo "  curl http://localhost:${MNEMO_PORT}/health"
 echo ""
 echo "Remember a fact:"
-cat <<'EXAMPLE'
-  curl -X POST http://localhost:${MNEMO_PORT}/api/v1/memory \
-    -H 'Content-Type: application/json' \
+cat <<EXAMPLE
+  curl -X POST http://localhost:${MNEMO_PORT}/api/v1/memory \\
+    -H 'Content-Type: application/json' \\
     -d '{"user":"alice","text":"I love hiking in Colorado","role":"user"}'
 EXAMPLE
 echo ""
 echo "Retrieve context:"
-cat <<'EXAMPLE'
-  curl -X POST http://localhost:${MNEMO_PORT}/api/v1/memory/alice/context \
-    -H 'Content-Type: application/json' \
+cat <<EXAMPLE
+  curl -X POST http://localhost:${MNEMO_PORT}/api/v1/memory/alice/context \\
+    -H 'Content-Type: application/json' \\
     -d '{"query":"What are my hobbies?"}'
 EXAMPLE
 echo ""
-echo "Stop: docker compose down"
+echo "Stop: docker compose -f $COMPOSE_FILE down"

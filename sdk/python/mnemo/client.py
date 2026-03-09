@@ -855,7 +855,7 @@ class Mnemo:
                 body, rid = self._req(
                     "GET", f"/api/v1/memory/{user}/digest", request_id=request_id
                 )
-            except Exception:
+            except MnemoNotFoundError:
                 body, rid = self._req(
                     "POST", f"/api/v1/memory/{user}/digest", request_id=request_id
                 )

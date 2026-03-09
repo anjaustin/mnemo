@@ -53,11 +53,13 @@
   },
   "peerDependencies": {
     "@langchain/core": ">=0.2.0",
-    "ai": ">=3.0.0"
+    "ai": ">=3.0.0",
+    "zod": ">=3.0.0"
   },
-  "peerDependenciesOptional": {
-    "@langchain/core": true,
-    "ai": true
+  "peerDependenciesMeta": {
+    "@langchain/core": { "optional": true },
+    "ai": { "optional": true },
+    "zod": { "optional": true }
   },
   "jest": {
     "preset": "ts-jest",

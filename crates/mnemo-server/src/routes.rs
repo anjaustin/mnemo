@@ -3778,10 +3778,36 @@ async fn extract_memory(
 
     let provider_label = format!("{}/{}", llm.provider_name(), llm.model_name());
 
+    let extract_started = std::time::Instant::now();
     let extraction = llm
         .extract(req.text.trim(), &hints)
         .await
         .map_err(AppError)?;
+    let extract_latency = extract_started.elapsed().as_millis() as u64;
+
+    // Record LLM span for extraction call
+    let extract_user_id = if let Some(ref uid) = req.user {
+        find_user_by_identifier(&state, uid.trim()).await.ok().map(|u| u.id)
+    } else {
+        None
+    };
+    let extract_span = crate::state::LlmSpan {
+        id: Uuid::now_v7(),
+        request_id: None,
+        user_id: extract_user_id,
+        provider: llm.provider_name().to_string(),
+        model: llm.model_name().to_string(),
+        operation: "extract".to_string(),
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+        latency_ms: extract_latency,
+        success: true,
+        error: None,
+        started_at: chrono::Utc::now() - chrono::Duration::milliseconds(extract_latency as i64),
+        finished_at: chrono::Utc::now(),
+    };
+    record_llm_span(&state, extract_span).await;
 
     let entity_count = extraction.entities.len();
     let relationship_count = extraction.relationships.len();
@@ -5363,6 +5389,12 @@ async fn register_memory_webhook(
     if !is_http_url(req.target_url.trim()) {
         return Err(AppError(MnemoError::Validation(
             "target_url must start with http:// or https://".into(),
+        )));
+    }
+    // SOC 2 TLS enforcement: reject non-https targets when require_tls is enabled
+    if state.require_tls && !req.target_url.trim().starts_with("https://") {
+        return Err(AppError(MnemoError::Validation(
+            "require_tls is enabled; target_url must use https://".into(),
         )));
     }
 
@@ -7710,9 +7742,10 @@ async fn graph_list_entities(
 ) -> Result<Json<serde_json::Value>, AppError> {
     use mnemo_core::traits::storage::UserStore;
     let user_rec = find_user_by_identifier(&state, &user).await?;
+    let clamped_limit = params.limit.clamp(1, 1000);
     let entities = state
         .state_store
-        .list_entities(user_rec.id, params.limit, params.after)
+        .list_entities(user_rec.id, clamped_limit, params.after)
         .await?;
     let data: Vec<serde_json::Value> = entities
         .iter()
@@ -7744,8 +7777,15 @@ async fn graph_get_entity(
     Path((user, entity_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     use mnemo_core::traits::storage::UserStore;
-    let _user_rec = find_user_by_identifier(&state, &user).await?;
+    let user_rec = find_user_by_identifier(&state, &user).await?;
     let entity = state.state_store.get_entity(entity_id).await?;
+    // Verify the entity belongs to the resolved user (prevent cross-user data leak)
+    if entity.user_id != user_rec.id {
+        return Err(AppError(MnemoError::NotFound {
+            resource_type: "entity".into(),
+            id: entity_id.to_string(),
+        }));
+    }
     let outgoing = state
         .state_store
         .get_outgoing_edges(entity_id)
@@ -7804,7 +7844,7 @@ async fn graph_list_edges(
     let filter = EdgeFilter {
         label: params.label.clone(),
         include_invalidated,
-        limit: params.limit,
+        limit: params.limit.clamp(1, 1000),
         ..Default::default()
     };
     let edges = state
@@ -7859,10 +7899,18 @@ async fn graph_neighbors(
     Query(params): Query<NeighborsParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     use mnemo_core::traits::storage::UserStore;
-    let _user_rec = find_user_by_identifier(&state, &user).await?;
+    let user_rec = find_user_by_identifier(&state, &user).await?;
+    // Verify the seed entity belongs to the resolved user (prevent cross-user traversal)
+    let seed_entity = state.state_store.get_entity(entity_id).await?;
+    if seed_entity.user_id != user_rec.id {
+        return Err(AppError(MnemoError::NotFound {
+            resource_type: "entity".into(),
+            id: entity_id.to_string(),
+        }));
+    }
     let subgraph = state
         .graph
-        .traverse_bfs(entity_id, params.depth, params.max_nodes, params.valid_only)
+        .traverse_bfs(entity_id, params.depth.min(10), params.max_nodes.min(500), params.valid_only)
         .await?;
     let nodes: Vec<serde_json::Value> = subgraph
         .nodes
@@ -7916,9 +7964,10 @@ async fn graph_community(
 ) -> Result<Json<serde_json::Value>, AppError> {
     use mnemo_core::traits::storage::UserStore;
     let user_rec = find_user_by_identifier(&state, &user).await?;
+    let clamped_iterations = params.max_iterations.clamp(1, 100);
     let labels = state
         .graph
-        .detect_communities(user_rec.id, params.max_iterations)
+        .detect_communities(user_rec.id, clamped_iterations)
         .await?;
 
     // Group entity ids by community id
@@ -7950,6 +7999,18 @@ async fn graph_community(
 // ─── LLM Span Tracing API ──────────────────────────────────────────────────
 
 use crate::state::{LlmSpan, MemoryDigest};
+
+/// Maximum number of LLM spans retained in the in-memory ring buffer.
+const MAX_LLM_SPANS: usize = 500;
+
+/// Record an LLM span into the ring buffer, evicting the oldest if full.
+async fn record_llm_span(state: &AppState, span: LlmSpan) {
+    let mut spans = state.llm_spans.write().await;
+    if spans.len() >= MAX_LLM_SPANS {
+        spans.pop_front();
+    }
+    spans.push_back(span);
+}
 
 /// `GET /api/v1/spans/request/:request_id`
 ///
@@ -7993,6 +8054,7 @@ async fn list_spans_by_user(
     let spans = state.llm_spans.read().await;
     let matched: Vec<&LlmSpan> = spans
         .iter()
+        .rev()
         .filter(|s| s.user_id == Some(user_id))
         .take(params.limit)
         .collect();
@@ -8001,6 +8063,7 @@ async fn list_spans_by_user(
         "spans": matched,
         "count": matched.len(),
         "total_tokens": matched.iter().map(|s| s.total_tokens).sum::<u32>(),
+        "total_latency_ms": matched.iter().map(|s| s.latency_ms).sum::<u64>(),
     }))
 }
 
@@ -8107,7 +8170,26 @@ async fn refresh_memory_digest(
         provider: "digest".into(),
         message: e.to_string(),
     }))?;
-    let _latency_ms = started.elapsed().as_millis() as u64;
+    let latency_ms = started.elapsed().as_millis() as u64;
+
+    // Record the LLM span for observability
+    let span = LlmSpan {
+        id: Uuid::now_v7(),
+        request_id: None,
+        user_id: Some(user_rec.id),
+        provider: llm.provider_name().to_string(),
+        model: model_name.clone(),
+        operation: "digest".to_string(),
+        prompt_tokens: 0, // token counts not available from summarize()
+        completion_tokens: 0,
+        total_tokens: 0,
+        latency_ms,
+        success: true,
+        error: None,
+        started_at: chrono::Utc::now() - chrono::Duration::milliseconds(latency_ms as i64),
+        finished_at: chrono::Utc::now(),
+    };
+    record_llm_span(&state, span).await;
 
     // Parse topics from response
     let (summary_text, dominant_topics) = if let Some(topics_idx) = raw.find("TOPICS:") {

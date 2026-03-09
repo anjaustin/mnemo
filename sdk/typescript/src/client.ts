@@ -196,7 +196,7 @@ export class MnemoClient {
         user,
         text,
         role: options.role ?? 'user',
-        session_id: options.sessionId,
+        session: options.sessionId,
         metadata: options.metadata,
       },
       requestId: options.requestId,
@@ -216,13 +216,12 @@ export class MnemoClient {
       path: `/api/v1/memory/${encodeURIComponent(user)}/context`,
       body: {
         query,
-        limit: options.limit,
-        session_id: options.sessionId,
-        min_score: options.minScore,
-        include_episodes: options.includeEpisodes,
+        max_tokens: options.limit,
+        session: options.sessionId,
+        min_relevance: options.minScore,
         mode: options.mode,
         as_of: options.asOf,
-        memory_contract: options.contract,
+        contract: options.contract,
         retrieval_policy: options.policy,
       },
       requestId: options.requestId,
@@ -407,6 +406,43 @@ export class MnemoClient {
       requestId,
     });
     return body;
+  }
+
+  // ─── Session Messages ─────────────────────────────────────────────
+
+  /** Get messages for a session (chronological order). */
+  async getMessages(
+    sessionId: string,
+    options: { limit?: number; requestId?: string } = {},
+  ): Promise<{ messages: Array<{ role: string; content: string; [key: string]: unknown }>; count: number }> {
+    const limit = options.limit ?? 100;
+    const [body] = await this.request<{
+      messages: Array<{ role: string; content: string; [key: string]: unknown }>;
+      count: number;
+    }>({
+      method: 'GET',
+      path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`,
+      requestId: options.requestId,
+    });
+    return body;
+  }
+
+  /** Delete all messages for a session. */
+  async clearMessages(sessionId: string, requestId?: string): Promise<void> {
+    await this.request<unknown>({
+      method: 'DELETE',
+      path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+      requestId,
+    });
+  }
+
+  /** Delete a specific message by index. */
+  async deleteMessage(sessionId: string, index: number, requestId?: string): Promise<void> {
+    await this.request<unknown>({
+      method: 'DELETE',
+      path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/${index}`,
+      requestId,
+    });
   }
 
   // ─── Import ──────────────────────────────────────────────────────
