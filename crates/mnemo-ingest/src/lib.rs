@@ -20,8 +20,8 @@ use mnemo_core::error::MnemoError;
 use mnemo_core::models::edge::{Edge, EdgeFilter};
 use mnemo_core::models::entity::{Entity, ExtractedEntity};
 use mnemo_core::models::episode::Episode;
-use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
 use mnemo_core::models::session::UpdateSessionRequest;
+use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
 use mnemo_core::traits::storage::{
     EdgeStore, EntityStore, EpisodeStore, SessionStore, StorageResult, VectorStore,
 };
@@ -237,19 +237,13 @@ where
 
     /// Generate a memory digest for a user (same logic as the HTTP handler).
     async fn generate_digest(&self, user_id: Uuid) -> Result<MemoryDigest, MnemoError> {
-        let entities = self
-            .state_store
-            .list_entities(user_id, 200, None)
-            .await?;
+        let entities = self.state_store.list_entities(user_id, 200, None).await?;
         let filter = EdgeFilter {
             include_invalidated: false,
             limit: 300,
             ..Default::default()
         };
-        let edges = self
-            .state_store
-            .query_edges(user_id, filter)
-            .await?;
+        let edges = self.state_store.query_edges(user_id, filter).await?;
 
         let entity_count = entities.len();
         let edge_count = edges.len();

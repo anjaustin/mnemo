@@ -10,13 +10,13 @@
 //! - `EmbedderKind` — enum wrapper for unified concrete type across backends.
 
 pub mod anthropic;
-pub mod openai_compat;
+pub mod embedder;
 #[cfg(feature = "local-embed")]
 pub mod local_embed;
-pub mod embedder;
+pub mod openai_compat;
 
 pub use anthropic::AnthropicProvider;
-pub use openai_compat::{OpenAiCompatibleEmbedder, OpenAiCompatibleProvider};
+pub use embedder::EmbedderKind;
 #[cfg(feature = "local-embed")]
 pub use local_embed::{FastEmbedder, DEFAULT_LOCAL_DIMENSIONS, DEFAULT_LOCAL_MODEL};
-pub use embedder::EmbedderKind;
+pub use openai_compat::{OpenAiCompatibleEmbedder, OpenAiCompatibleProvider};

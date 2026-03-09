@@ -4,7 +4,6 @@
 /// single concrete type to monomorphize against.
 ///
 /// Add a new variant here when adding a new embedding backend.
-
 use mnemo_core::traits::llm::{EmbeddingProvider, LlmResult};
 
 use crate::OpenAiCompatibleEmbedder;

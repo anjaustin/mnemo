@@ -488,8 +488,7 @@ async fn test_progressive_session_summarization_triggers_at_threshold() {
             CreateEpisodeRequest {
                 id: None,
                 episode_type: EpisodeType::Message,
-                content: "Kendra switched to Nike running shoes for her marathon training."
-                    .into(),
+                content: "Kendra switched to Nike running shoes for her marathon training.".into(),
                 role: Some(MessageRole::User),
                 name: Some("Kendra".into()),
                 metadata: serde_json::json!({}),

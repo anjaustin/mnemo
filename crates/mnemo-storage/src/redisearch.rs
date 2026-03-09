@@ -197,21 +197,17 @@ impl RedisStateStore {
 /// Filtering these out dramatically improves FT precision for natural-language
 /// queries like "Where does Alice work?" → "Alice work".
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "shall", "can", "need", "dare",
-    "ought", "used", "it", "its", "this", "that", "these", "those",
-    "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
-    "she", "her", "they", "them", "their", "what", "which", "who", "whom",
-    "where", "when", "why", "how", "all", "each", "every", "both",
-    "few", "more", "most", "other", "some", "such", "no", "not", "only",
-    "same", "so", "than", "too", "very", "just", "any", "about", "up",
-    "out", "if", "because", "as", "while", "although", "since", "though",
-    "into", "through", "during", "before", "after", "above", "below",
-    "between", "then", "once", "here", "there", "s", "t", "don", "didn",
-    "doesn", "isn", "wasn", "aren", "weren", "won", "hasn", "hadn",
-    "does", "did", "do",
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+    "from", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+    "did", "will", "would", "could", "should", "may", "might", "shall", "can", "need", "dare",
+    "ought", "used", "it", "its", "this", "that", "these", "those", "i", "me", "my", "we", "our",
+    "you", "your", "he", "him", "his", "she", "her", "they", "them", "their", "what", "which",
+    "who", "whom", "where", "when", "why", "how", "all", "each", "every", "both", "few", "more",
+    "most", "other", "some", "such", "no", "not", "only", "same", "so", "than", "too", "very",
+    "just", "any", "about", "up", "out", "if", "because", "as", "while", "although", "since",
+    "though", "into", "through", "during", "before", "after", "above", "below", "between", "then",
+    "once", "here", "there", "s", "t", "don", "didn", "doesn", "isn", "wasn", "aren", "weren",
+    "won", "hasn", "hadn", "does", "did", "do",
 ];
 
 /// Strip stop words from a natural-language query and return meaningful keywords.

@@ -173,10 +173,7 @@ where
         // ── Fusion for edges ───────────────────────────────────
         let edge_ids = merge_hits(
             reranker,
-            vec![
-                ranked_hits(&semantic_edge_hits),
-                ranked_hits(&ft_edge_hits),
-            ],
+            vec![ranked_hits(&semantic_edge_hits), ranked_hits(&ft_edge_hits)],
         );
 
         for (edge_id, rrf_score) in edge_ids.iter().take(15) {
@@ -388,7 +385,10 @@ fn mmr_merge(sources: Vec<Vec<ScoredHit>>) -> Vec<(Uuid, f64)> {
     }
 
     // Normalise relevance scores to [0, 1] relative to the max.
-    let max_rel = relevance.values().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let max_rel = relevance
+        .values()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max);
     let norm_relevance: HashMap<Uuid, f64> = if max_rel > 0.0 {
         relevance
             .iter()
@@ -618,7 +618,16 @@ mod tests {
     fn test_rrf_merge_single_source() {
         let id1 = Uuid::now_v7();
         let id2 = Uuid::now_v7();
-        let source = vec![ScoredHit { id: id1, score: 0.0 }, ScoredHit { id: id2, score: 0.0 }];
+        let source = vec![
+            ScoredHit {
+                id: id1,
+                score: 0.0,
+            },
+            ScoredHit {
+                id: id2,
+                score: 0.0,
+            },
+        ];
         let result = rrf_merge(vec![source]);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].0, id1); // Higher ranked item first
@@ -630,8 +639,26 @@ mod tests {
         let only_semantic = Uuid::now_v7();
         let only_ft = Uuid::now_v7();
 
-        let semantic = vec![ScoredHit { id: shared_id, score: 0.0 }, ScoredHit { id: only_semantic, score: 0.0 }];
-        let ft = vec![ScoredHit { id: shared_id, score: 0.0 }, ScoredHit { id: only_ft, score: 0.0 }];
+        let semantic = vec![
+            ScoredHit {
+                id: shared_id,
+                score: 0.0,
+            },
+            ScoredHit {
+                id: only_semantic,
+                score: 0.0,
+            },
+        ];
+        let ft = vec![
+            ScoredHit {
+                id: shared_id,
+                score: 0.0,
+            },
+            ScoredHit {
+                id: only_ft,
+                score: 0.0,
+            },
+        ];
 
         let result = rrf_merge(vec![semantic, ft]);
         // shared_id should be ranked #1 because it appears in both sources
@@ -733,9 +760,18 @@ mod tests {
         let c = Uuid::now_v7();
 
         // a appears in all 3 sources, b in 2, c in 1
-        let s1 = vec![ScoredHit { id: a, score: 0.0 }, ScoredHit { id: b, score: 0.0 }];
-        let s2 = vec![ScoredHit { id: a, score: 0.0 }, ScoredHit { id: c, score: 0.0 }];
-        let s3 = vec![ScoredHit { id: a, score: 0.0 }, ScoredHit { id: b, score: 0.0 }];
+        let s1 = vec![
+            ScoredHit { id: a, score: 0.0 },
+            ScoredHit { id: b, score: 0.0 },
+        ];
+        let s2 = vec![
+            ScoredHit { id: a, score: 0.0 },
+            ScoredHit { id: c, score: 0.0 },
+        ];
+        let s3 = vec![
+            ScoredHit { id: a, score: 0.0 },
+            ScoredHit { id: b, score: 0.0 },
+        ];
 
         let result = rrf_merge(vec![s1, s2, s3]);
         assert_eq!(result[0].0, a, "a (in all 3 sources) should be #1");
@@ -752,7 +788,16 @@ mod tests {
         let second = Uuid::now_v7();
 
         // Both appear in 1 source each, but 'first' is rank 0 and 'second' is rank 1
-        let s1 = vec![ScoredHit { id: first, score: 0.0 }, ScoredHit { id: second, score: 0.0 }];
+        let s1 = vec![
+            ScoredHit {
+                id: first,
+                score: 0.0,
+            },
+            ScoredHit {
+                id: second,
+                score: 0.0,
+            },
+        ];
 
         let result = rrf_merge(vec![s1]);
         assert_eq!(result[0].0, first);
@@ -770,8 +815,20 @@ mod tests {
     fn ret08_rrf_preserves_all_unique_items() {
         // Ensure no items are lost during merge
         let ids: Vec<Uuid> = (0..10).map(|_| Uuid::now_v7()).collect();
-        let s1: Vec<ScoredHit> = ids[0..5].iter().map(|id| ScoredHit { id: *id, score: 0.0 }).collect();
-        let s2: Vec<ScoredHit> = ids[5..10].iter().map(|id| ScoredHit { id: *id, score: 0.0 }).collect();
+        let s1: Vec<ScoredHit> = ids[0..5]
+            .iter()
+            .map(|id| ScoredHit {
+                id: *id,
+                score: 0.0,
+            })
+            .collect();
+        let s2: Vec<ScoredHit> = ids[5..10]
+            .iter()
+            .map(|id| ScoredHit {
+                id: *id,
+                score: 0.0,
+            })
+            .collect();
 
         let result = rrf_merge(vec![s1, s2]);
         assert_eq!(result.len(), 10, "All 10 unique items should be preserved");
@@ -789,12 +846,24 @@ mod tests {
         let b = Uuid::now_v7();
 
         let r1 = rrf_merge(vec![
-            vec![ScoredHit { id: a, score: 0.0 }, ScoredHit { id: b, score: 0.0 }],
-            vec![ScoredHit { id: b, score: 0.0 }, ScoredHit { id: a, score: 0.0 }],
+            vec![
+                ScoredHit { id: a, score: 0.0 },
+                ScoredHit { id: b, score: 0.0 },
+            ],
+            vec![
+                ScoredHit { id: b, score: 0.0 },
+                ScoredHit { id: a, score: 0.0 },
+            ],
         ]);
         let r2 = rrf_merge(vec![
-            vec![ScoredHit { id: a, score: 0.0 }, ScoredHit { id: b, score: 0.0 }],
-            vec![ScoredHit { id: b, score: 0.0 }, ScoredHit { id: a, score: 0.0 }],
+            vec![
+                ScoredHit { id: a, score: 0.0 },
+                ScoredHit { id: b, score: 0.0 },
+            ],
+            vec![
+                ScoredHit { id: b, score: 0.0 },
+                ScoredHit { id: a, score: 0.0 },
+            ],
         ]);
 
         // Same inputs should produce identical scores (order may vary when scores are equal)
@@ -823,8 +892,14 @@ mod tests {
         // a is rank 0 in s1, rank 1 in s2
         // b is rank 1 in s1, rank 0 in s2
         // Both appear in both sources with mirror positions → equal RRF scores
-        let s1 = vec![ScoredHit { id: a, score: 0.0 }, ScoredHit { id: b, score: 0.0 }];
-        let s2 = vec![ScoredHit { id: b, score: 0.0 }, ScoredHit { id: a, score: 0.0 }];
+        let s1 = vec![
+            ScoredHit { id: a, score: 0.0 },
+            ScoredHit { id: b, score: 0.0 },
+        ];
+        let s2 = vec![
+            ScoredHit { id: b, score: 0.0 },
+            ScoredHit { id: a, score: 0.0 },
+        ];
 
         let result = rrf_merge(vec![s1, s2]);
         assert_eq!(result.len(), 2);
@@ -852,7 +927,10 @@ mod tests {
         let source = vec![hit(high, 0.9), hit(low, 0.3)];
         let result = mmr_merge(vec![source]);
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].0, high, "highest relevance item should be selected first");
+        assert_eq!(
+            result[0].0, high,
+            "highest relevance item should be selected first"
+        );
     }
 
     #[test]
@@ -883,12 +961,17 @@ mod tests {
         // We verify this indirectly: the MMR score of b should be lower than
         // it would be under pure-relevance ranking because of the diversity penalty.
         // Direct check: b's output score < b's normalised input relevance * lambda
-        let b_mmr_score = result.iter().find(|(id, _)| *id == b).map(|(_, s)| *s).unwrap();
+        let b_mmr_score = result
+            .iter()
+            .find(|(id, _)| *id == b)
+            .map(|(_, s)| *s)
+            .unwrap();
         let b_pure_rel = 0.999 / 1.0 * MMR_LAMBDA; // rel_norm * lambda, no penalty
         assert!(
             b_mmr_score < b_pure_rel,
             "MMR score of near-clone b ({:.4}) should be below pure-relevance score ({:.4})",
-            b_mmr_score, b_pure_rel
+            b_mmr_score,
+            b_pure_rel
         );
     }
 
@@ -942,7 +1025,11 @@ mod tests {
         // but b's MMR score should be *lower* relative to its raw relevance than
         // RRF's b score (which has no diversity penalty).
         // Verify: MMR score for b < its normalised relevance (penalty is applied)
-        let b_mmr = mmr_result.iter().find(|(id, _)| *id == b).map(|(_, s)| *s).unwrap();
+        let b_mmr = mmr_result
+            .iter()
+            .find(|(id, _)| *id == b)
+            .map(|(_, s)| *s)
+            .unwrap();
         let b_rel_norm = 0.92_f64 / 0.95_f64; // b's raw score normalised to [0,1]
         assert!(
             b_mmr < b_rel_norm * MMR_LAMBDA,

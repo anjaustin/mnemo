@@ -1173,10 +1173,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/agents/:agent_id/context", post(get_agent_context))
         // Graph knowledge API
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
-        .route(
-            "/api/v1/graph/:user/entities",
-            get(graph_list_entities),
-        )
+        .route("/api/v1/graph/:user/entities", get(graph_list_entities))
         .route(
             "/api/v1/graph/:user/entities/:entity_id",
             get(graph_get_entity),
@@ -1186,19 +1183,13 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/graph/:user/neighbors/:entity_id",
             get(graph_neighbors),
         )
-        .route(
-            "/api/v1/graph/:user/community",
-            get(graph_community),
-        )
+        .route("/api/v1/graph/:user/community", get(graph_community))
         // LLM span tracing
         .route(
             "/api/v1/spans/request/:request_id",
             get(list_spans_by_request),
         )
-        .route(
-            "/api/v1/spans/user/:user_id",
-            get(list_spans_by_user),
-        )
+        .route("/api/v1/spans/user/:user_id", get(list_spans_by_user))
         // Sleep-time compute — memory digest
         .route(
             "/api/v1/memory/:user/digest",
@@ -1809,9 +1800,8 @@ async fn audit_export(
         Ok((
             [(
                 axum::http::header::HeaderName::from_static("x-mnemo-audit-signature"),
-                axum::http::header::HeaderValue::from_str(&sig).unwrap_or_else(|_| {
-                    axum::http::header::HeaderValue::from_static("invalid")
-                }),
+                axum::http::header::HeaderValue::from_str(&sig)
+                    .unwrap_or_else(|_| axum::http::header::HeaderValue::from_static("invalid")),
             )],
             Json(response_body),
         )
@@ -3787,7 +3777,10 @@ async fn extract_memory(
 
     // Record LLM span for extraction call
     let extract_user_id = if let Some(ref uid) = req.user {
-        find_user_by_identifier(&state, uid.trim()).await.ok().map(|u| u.id)
+        find_user_by_identifier(&state, uid.trim())
+            .await
+            .ok()
+            .map(|u| u.id)
     } else {
         None
     };
@@ -7847,24 +7840,23 @@ async fn graph_list_edges(
         limit: params.limit.clamp(1, 1000),
         ..Default::default()
     };
-    let edges = state
-        .state_store
-        .query_edges(user_rec.id, filter)
-        .await?;
+    let edges = state.state_store.query_edges(user_rec.id, filter).await?;
     let data: Vec<serde_json::Value> = edges
         .iter()
-        .map(|e| serde_json::json!({
-            "id": e.id,
-            "source_entity_id": e.source_entity_id,
-            "target_entity_id": e.target_entity_id,
-            "label": e.label,
-            "fact": e.fact,
-            "confidence": e.confidence,
-            "valid_at": e.valid_at,
-            "invalid_at": e.invalid_at,
-            "valid": e.is_valid(),
-            "created_at": e.created_at,
-        }))
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "source_entity_id": e.source_entity_id,
+                "target_entity_id": e.target_entity_id,
+                "label": e.label,
+                "fact": e.fact,
+                "confidence": e.confidence,
+                "valid_at": e.valid_at,
+                "invalid_at": e.invalid_at,
+                "valid": e.is_valid(),
+                "created_at": e.created_at,
+            })
+        })
         .collect();
     Ok(Json(serde_json::json!({
         "data": data,
@@ -7910,30 +7902,39 @@ async fn graph_neighbors(
     }
     let subgraph = state
         .graph
-        .traverse_bfs(entity_id, params.depth.min(10), params.max_nodes.min(500), params.valid_only)
+        .traverse_bfs(
+            entity_id,
+            params.depth.min(10),
+            params.max_nodes.min(500),
+            params.valid_only,
+        )
         .await?;
     let nodes: Vec<serde_json::Value> = subgraph
         .nodes
         .iter()
-        .map(|n| serde_json::json!({
-            "id": n.entity.id,
-            "name": n.entity.name,
-            "entity_type": n.entity.entity_type.as_str(),
-            "summary": n.entity.summary,
-            "depth": n.depth,
-        }))
+        .map(|n| {
+            serde_json::json!({
+                "id": n.entity.id,
+                "name": n.entity.name,
+                "entity_type": n.entity.entity_type.as_str(),
+                "summary": n.entity.summary,
+                "depth": n.depth,
+            })
+        })
         .collect();
     let edges: Vec<serde_json::Value> = subgraph
         .edges
         .iter()
-        .map(|e| serde_json::json!({
-            "id": e.id,
-            "source_entity_id": e.source_entity_id,
-            "target_entity_id": e.target_entity_id,
-            "label": e.label,
-            "fact": e.fact,
-            "valid": e.is_valid(),
-        }))
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "source_entity_id": e.source_entity_id,
+                "target_entity_id": e.target_entity_id,
+                "label": e.label,
+                "fact": e.fact,
+                "valid": e.is_valid(),
+            })
+        })
         .collect();
     Ok(Json(serde_json::json!({
         "seed_entity_id": entity_id,
@@ -7981,11 +7982,13 @@ async fn graph_community(
     }
     let community_list: Vec<serde_json::Value> = communities
         .iter()
-        .map(|(cid, members)| serde_json::json!({
-            "community_id": cid,
-            "member_count": members.len(),
-            "entity_ids": members,
-        }))
+        .map(|(cid, members)| {
+            serde_json::json!({
+                "community_id": cid,
+                "member_count": members.len(),
+                "entity_ids": members,
+            })
+        })
         .collect();
 
     Ok(Json(serde_json::json!({
@@ -8113,10 +8116,7 @@ async fn refresh_memory_digest(
         limit: 300,
         ..Default::default()
     };
-    let edges = state
-        .state_store
-        .query_edges(user_rec.id, filter)
-        .await?;
+    let edges = state.state_store.query_edges(user_rec.id, filter).await?;
 
     let entity_count = entities.len();
     let edge_count = edges.len();
@@ -8166,10 +8166,12 @@ async fn refresh_memory_digest(
         crate::state::LlmHandle::Anthropic(ref llm) => llm.summarize(&prompt, 512).await,
         crate::state::LlmHandle::OpenAiCompat(ref llm) => llm.summarize(&prompt, 512).await,
     }
-    .map_err(|e: mnemo_core::error::MnemoError| AppError(MnemoError::LlmProvider {
-        provider: "digest".into(),
-        message: e.to_string(),
-    }))?;
+    .map_err(|e: mnemo_core::error::MnemoError| {
+        AppError(MnemoError::LlmProvider {
+            provider: "digest".into(),
+            message: e.to_string(),
+        })
+    })?;
     let latency_ms = started.elapsed().as_millis() as u64;
 
     // Record the LLM span for observability
