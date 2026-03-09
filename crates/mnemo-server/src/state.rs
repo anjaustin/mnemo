@@ -275,4 +275,8 @@ pub struct AppState {
     pub llm_spans: Arc<RwLock<std::collections::VecDeque<LlmSpan>>>,
     /// Latest memory digest per user.
     pub memory_digests: Arc<RwLock<HashMap<Uuid, MemoryDigest>>>,
+    /// If true, reject non-https webhook targets (SOC 2 compliance).
+    pub require_tls: bool,
+    /// HMAC secret for signing audit export responses (SOC 2 compliance).
+    pub audit_signing_secret: Option<String>,
 }

@@ -1708,7 +1708,7 @@ struct AuditExportResponse {
 async fn audit_export(
     State(state): State<AppState>,
     Query(query): Query<AuditExportQuery>,
-) -> Result<Json<AuditExportResponse>, AppError> {
+) -> Result<Response, AppError> {
     if query.to <= query.from {
         return Err(AppError(MnemoError::Validation(
             "'to' must be after 'from'".into(),
@@ -1793,13 +1793,32 @@ async fn audit_export(
     records.truncate(max_records);
 
     let total = records.len();
-    Ok(Json(AuditExportResponse {
+    let response_body = AuditExportResponse {
         ok: true,
         from: query.from,
         to: query.to,
         total,
         records,
-    }))
+    };
+
+    // HMAC-sign the audit export for SOC 2 tamper evidence
+    if let Some(ref secret) = state.audit_signing_secret {
+        let serialized = serde_json::to_string(&response_body).unwrap_or_default();
+        let timestamp = chrono::Utc::now().timestamp().to_string();
+        let sig = build_webhook_signature(secret, &timestamp, &serialized);
+        Ok((
+            [(
+                axum::http::header::HeaderName::from_static("x-mnemo-audit-signature"),
+                axum::http::header::HeaderValue::from_str(&sig).unwrap_or_else(|_| {
+                    axum::http::header::HeaderValue::from_static("invalid")
+                }),
+            )],
+            Json(response_body),
+        )
+            .into_response())
+    } else {
+        Ok(Json(response_body).into_response())
+    }
 }
 
 async fn get_trace_by_request_id(

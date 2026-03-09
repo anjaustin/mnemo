@@ -243,6 +243,8 @@ async fn main() -> anyhow::Result<()> {
         metrics: Arc::new(ServerMetrics::default()),
         llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
         memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        require_tls: config.server.require_tls,
+        audit_signing_secret: config.server.audit_signing_secret.clone(),
     };
 
     if let Err(err) = restore_webhook_state(&app_state).await {

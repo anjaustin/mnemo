@@ -33,6 +33,15 @@ pub struct ServerConfig {
     pub port: u16,
     #[serde(default)]
     pub workers: usize,
+    /// If true, the server rejects non-TLS connections and non-https webhook targets.
+    /// Set via `MNEMO_REQUIRE_TLS=true`. Default: false.
+    #[serde(default)]
+    pub require_tls: bool,
+    /// HMAC secret for signing audit export responses. If set, audit exports include
+    /// a `x-mnemo-audit-signature` header. Required for SOC 2 compliance posture.
+    /// Set via `MNEMO_AUDIT_SIGNING_SECRET`.
+    #[serde(default)]
+    pub audit_signing_secret: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -41,6 +50,8 @@ impl Default for ServerConfig {
             host: default_host(),
             port: default_port(),
             workers: 0,
+            require_tls: false,
+            audit_signing_secret: None,
         }
     }
 }

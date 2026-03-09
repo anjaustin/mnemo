@@ -150,6 +150,8 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         metrics: Arc::new(ServerMetrics::default()),
         llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
         memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        require_tls: false,
+        audit_signing_secret: None,
     };
 
     let app = build_router(state.clone()).layer(from_fn_with_state(
@@ -4943,6 +4945,8 @@ async fn test_webhook_persistence_survives_restart() {
         metrics: Arc::new(ServerMetrics::default()),
         llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
         memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        require_tls: false,
+        audit_signing_secret: None,
     };
 
     let app1 = build_router(state1.clone()).layer(from_fn_with_state(
@@ -5033,6 +5037,8 @@ async fn test_webhook_persistence_survives_restart() {
         metrics: Arc::new(ServerMetrics::default()),
         llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
         memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        require_tls: false,
+        audit_signing_secret: None,
     };
 
     // Verify state2 starts empty
