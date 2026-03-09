@@ -208,11 +208,11 @@ def run_browser(seed: Seeded) -> None:
                 f"{BASE}/_/webhooks?filter=dead-letter", wait_until="domcontentloaded"
             )
             page.wait_for_selector("#page-webhooks")
+            # The failing webhook to port 9 gets a dead-letter event from the
+            # head_advanced delivery triggered by "register failing webhook",
+            # so the dead-letter filter should show the webhook row.
             expect(page.locator("#webhooks-grid")).to_contain_text(
-                "No matching webhooks"
-            )
-            expect(page.locator("#webhooks-grid")).to_contain_text(
-                "No webhooks currently match the dead letter incident filter"
+                "Filtered to dead letter incidents"
             )
 
             print("browser: open unfiltered webhook detail")
