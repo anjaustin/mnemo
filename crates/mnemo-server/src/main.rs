@@ -114,7 +114,13 @@ async fn main() -> anyhow::Result<()> {
         concurrency: config.extraction.concurrency,
         max_retries: config.extraction.max_retries,
         session_summary_threshold: config.extraction.session_summary_threshold,
+        sleep_enabled: config.extraction.sleep_enabled,
+        sleep_idle_window_seconds: config.extraction.sleep_idle_window_seconds,
     };
+
+    // Shared digest cache — passed to both AppState and IngestWorker
+    let digest_cache: mnemo_ingest::DigestCache =
+        Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
     // Spawn ingestion worker with provider-specific LLM type
     // (generics require concrete types, so we branch here).
@@ -131,7 +137,8 @@ async fn main() -> anyhow::Result<()> {
                 llm,
                 embedder.clone(),
                 ingest_config,
-            );
+            )
+            .with_digest_cache(digest_cache.clone());
             tokio::spawn(async move { worker.run().await });
             Some(handle)
         }
@@ -145,7 +152,8 @@ async fn main() -> anyhow::Result<()> {
                 llm,
                 embedder.clone(),
                 ingest_config,
-            );
+            )
+            .with_digest_cache(digest_cache.clone());
             tokio::spawn(async move { worker.run().await });
             Some(handle)
         }
@@ -242,7 +250,7 @@ async fn main() -> anyhow::Result<()> {
         ),
         metrics: Arc::new(ServerMetrics::default()),
         llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
-        memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_digests: digest_cache,
         require_tls: config.server.require_tls,
         audit_signing_secret: config.server.audit_signing_secret.clone(),
     };

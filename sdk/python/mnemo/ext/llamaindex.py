@@ -26,15 +26,22 @@ Notes:
     from *session UUIDs* (used when reading via ``get_messages()``). This
     adapter caches the UUID returned after the first write for each ``key``
     and uses it for subsequent reads.
+
+    When llama-index-core is installed, ``MnemoChatStore`` dynamically
+    registers as a virtual subclass of ``BaseChatStore`` so that
+    ``isinstance(store, BaseChatStore)`` returns True.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mnemo.client import Mnemo
     from mnemo._models import Message
+
+logger = logging.getLogger(__name__)
 
 
 def _require_llamaindex() -> None:
@@ -86,8 +93,8 @@ class MnemoChatStore:
     """Mnemo-backed chat store for LlamaIndex.
 
     Implements ``llama_index.core.storage.chat_store.base.BaseChatStore``.
-    This class lazy-imports LlamaIndex so the rest of the Mnemo SDK stays
-    zero-dependency.
+    When llama-index-core is installed, this class registers as a virtual
+    subclass of ``BaseChatStore`` so ``isinstance()`` checks pass.
 
     Args:
         client: An initialised :class:`mnemo.Mnemo` sync client instance.
@@ -109,8 +116,10 @@ class MnemoChatStore:
         _require_llamaindex()
         self._client = client
         self.user_id = user_id
-        # Maps session name (key) → server UUID (for reads)
+        # Maps session name (key) -> server UUID (for reads)
         self._uuid_cache: dict[str, str] = {}
+        # Resolved server-side user UUID (set on first successful write)
+        self._user_uuid: str | None = None
 
     def _get_uuid(self, key: str) -> str | None:
         """Return the cached server UUID for a session key, or None."""
@@ -126,6 +135,8 @@ class MnemoChatStore:
         )
         if key not in self._uuid_cache:
             self._uuid_cache[key] = result.session_id
+        if self._user_uuid is None and result.user_id:
+            self._user_uuid = result.user_id
 
     # ------------------------------------------------------------------
     # BaseChatStore interface (all 7 abstract methods)
@@ -188,13 +199,39 @@ class MnemoChatStore:
         return self.delete_message(key, len(existing) - 1)
 
     def get_keys(self) -> list[str]:
-        """Return all known session keys (names) for this store instance.
+        """Return all session keys (names) for this user.
 
-        Returns the keys that have been written to in this store instance.
-        Note: keys are only tracked in-memory; they are not persisted to the
-        server across restarts.
+        Queries the server for all sessions belonging to the user, merging
+        with any locally-cached keys. Falls back to the in-memory cache if
+        the server-side user UUID has not yet been resolved (no writes).
         """
-        return list(self._uuid_cache.keys())
+        if self._user_uuid is None:
+            # No writes yet; return in-memory cache only
+            return list(self._uuid_cache.keys())
+        try:
+            result = self._client.list_sessions(self._user_uuid)
+            # Build merged key set: server sessions + any local keys not yet
+            # synced (edge case: names written in this instance but not yet
+            # reflected in the server list due to eventual consistency)
+            server_keys: dict[str, str] = {}
+            for s in result.sessions:
+                name = s.name or s.id
+                server_keys[name] = s.id
+                # Back-fill the uuid cache so reads work for sessions
+                # discovered server-side
+                if name not in self._uuid_cache:
+                    self._uuid_cache[name] = s.id
+            # Merge: server keys first, then any local-only keys
+            merged = list(server_keys.keys())
+            for k in self._uuid_cache:
+                if k not in server_keys:
+                    merged.append(k)
+            return merged
+        except Exception:
+            logger.debug(
+                "list_sessions failed, falling back to local cache", exc_info=True
+            )
+            return list(self._uuid_cache.keys())
 
     # ------------------------------------------------------------------
     # Async variants (for use with AsyncMnemo)
@@ -209,6 +246,8 @@ class MnemoChatStore:
         )
         if key not in self._uuid_cache:
             self._uuid_cache[key] = result.session_id
+        if self._user_uuid is None and result.user_id:
+            self._user_uuid = result.user_id
 
     async def aset_messages(self, key: str, messages: list) -> None:
         uuid = self._get_uuid(key)
@@ -251,4 +290,41 @@ class MnemoChatStore:
         return await self.adelete_message(key, len(existing) - 1)
 
     async def aget_keys(self) -> list[str]:
-        return list(self._uuid_cache.keys())
+        """Async server-side get_keys."""
+        if self._user_uuid is None:
+            return list(self._uuid_cache.keys())
+        try:
+            result = await self._client.list_sessions(self._user_uuid)
+            server_keys: dict[str, str] = {}
+            for s in result.sessions:
+                name = s.name or s.id
+                server_keys[name] = s.id
+                if name not in self._uuid_cache:
+                    self._uuid_cache[name] = s.id
+            merged = list(server_keys.keys())
+            for k in self._uuid_cache:
+                if k not in server_keys:
+                    merged.append(k)
+            return merged
+        except Exception:
+            logger.debug(
+                "list_sessions failed, falling back to local cache", exc_info=True
+            )
+            return list(self._uuid_cache.keys())
+
+
+# ------------------------------------------------------------------
+# Runtime BaseChatStore registration
+# ------------------------------------------------------------------
+# When llama-index-core is installed, register MnemoChatStore as a
+# virtual subclass of BaseChatStore so isinstance() checks pass.
+# This avoids a hard import dependency while satisfying framework code
+# that validates adapters via isinstance().
+
+try:
+    from llama_index.core.storage.chat_store.base import BaseChatStore
+
+    BaseChatStore.register(MnemoChatStore)
+except Exception:
+    # llama-index-core not installed or API changed — graceful degradation
+    pass

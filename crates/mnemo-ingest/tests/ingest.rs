@@ -298,6 +298,8 @@ async fn test_ingest_full_pipeline() {
             concurrency: 1,
             max_retries: 3,
             session_summary_threshold: 0, // disable in tests
+            sleep_enabled: false,
+            ..Default::default()
         },
     );
 
@@ -353,6 +355,8 @@ async fn test_ingest_entity_dedup_across_episodes() {
             concurrency: 1,
             max_retries: 3,
             session_summary_threshold: 0, // disable in tests
+            sleep_enabled: false,
+            ..Default::default()
         },
     );
 
@@ -441,6 +445,8 @@ async fn test_ingest_retry_on_failure() {
             concurrency: 1,
             max_retries: 3,
             session_summary_threshold: 0, // disable in tests
+            sleep_enabled: false,
+            ..Default::default()
         },
     );
 
@@ -507,6 +513,8 @@ async fn test_progressive_session_summarization_triggers_at_threshold() {
             max_retries: 3,
             // threshold=1 means summarize after every single episode
             session_summary_threshold: 1,
+            sleep_enabled: false,
+            ..Default::default()
         },
     );
 
@@ -568,6 +576,8 @@ async fn test_progressive_summarization_disabled_when_threshold_zero() {
             concurrency: 1,
             max_retries: 3,
             session_summary_threshold: 0, // disabled
+            sleep_enabled: false,
+            sleep_idle_window_seconds: 300,
         },
     );
 

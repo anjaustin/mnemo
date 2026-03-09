@@ -167,6 +167,23 @@ pub struct ExtractionSection {
     /// generates (or re-generates) a progressive summary. Set to 0 to disable.
     #[serde(default = "default_session_summary_threshold")]
     pub session_summary_threshold: u32,
+    /// Enable background sleep-time compute (idle-triggered digest generation).
+    /// When enabled, the ingest worker generates memory digests after a user
+    /// has been idle for `sleep_idle_window_seconds`. Default: true.
+    /// Set via `MNEMO_SLEEP_ENABLED`.
+    #[serde(default = "default_sleep_enabled")]
+    pub sleep_enabled: bool,
+    /// Seconds of user inactivity before triggering background digest generation.
+    /// Default: 300 (5 minutes). Set via `MNEMO_SLEEP_IDLE_WINDOW_SECONDS`.
+    #[serde(default = "default_sleep_idle_window")]
+    pub sleep_idle_window_seconds: u64,
+}
+
+fn default_sleep_enabled() -> bool {
+    true
+}
+fn default_sleep_idle_window() -> u64 {
+    300
 }
 
 impl Default for ExtractionSection {
@@ -177,6 +194,8 @@ impl Default for ExtractionSection {
             max_retries: default_max_retries(),
             poll_interval_ms: default_poll_interval(),
             session_summary_threshold: default_session_summary_threshold(),
+            sleep_enabled: true,
+            sleep_idle_window_seconds: 300,
         }
     }
 }
@@ -501,6 +520,16 @@ impl MnemoConfig {
         }
         if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_PERSISTENCE_PREFIX") {
             config.webhooks.persistence_prefix = v;
+        }
+
+        // Sleep-time compute overrides
+        if let Ok(v) = std::env::var("MNEMO_SLEEP_ENABLED") {
+            config.extraction.sleep_enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_SLEEP_IDLE_WINDOW_SECONDS") {
+            if let Ok(n) = v.parse() {
+                config.extraction.sleep_idle_window_seconds = n;
+            }
         }
 
         // SOC 2 compliance overrides

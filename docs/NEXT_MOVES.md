@@ -17,9 +17,10 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
 ## Tier 1: Hardening (deferred MAJOR findings)
 
 ### P0-1: Sleep-time compute
-4. **Idle-triggered consolidation scheduler** — The current digest is
-   on-demand (POST). Build the actual background scheduler that triggers
-   digest generation after N seconds of ingest inactivity per user.
+4. ~~**Idle-triggered consolidation scheduler**~~ — **DONE.** Background
+   scheduler in `IngestWorker` triggers digest generation after configurable
+   idle window (`MNEMO_SLEEP_IDLE_WINDOW_SECONDS`, default 300s) per user.
+   Supports local LLM providers (Ollama, Liquid AI) for zero cloud cost.
 5. **Persist digests to Redis** — Currently in-memory only; lost on restart.
 6. **Integration tests for digest endpoints** — GET (404 + success) and POST.
 
@@ -49,6 +50,13 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
 ### P0-5: Python SDK
 17. **Type `graph_entity()` return** — Currently returns raw `dict`; should
     return a typed model.
+
+### P0-5b: LlamaIndex adapter
+    ~~**Harden LlamaIndex adapter**~~ — **DONE.** `MnemoChatStore` now
+    registers as `BaseChatStore` virtual subclass (isinstance passes),
+    `get_keys()` queries server-side session list via new
+    `client.list_sessions()` with graceful fallback, `_user_uuid` resolved
+    on first write. 36 unit tests in `test_llamaindex_adapter.py` all pass.
 
 ### P0-6: TypeScript SDK
 18. **Feature parity with Python SDK** — Missing: time travel, conflict radar,

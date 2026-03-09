@@ -232,18 +232,9 @@ pub struct LlmSpan {
     pub finished_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// A memory digest summarizing a user's long-term knowledge state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryDigest {
-    pub user_id: Uuid,
-    pub summary: String,
-    pub entity_count: usize,
-    pub edge_count: usize,
-    pub dominant_topics: Vec<String>,
-    pub generated_at: chrono::DateTime<chrono::Utc>,
-    /// Which model generated this digest.
-    pub model: String,
-}
+/// Re-export MemoryDigest from mnemo-ingest so both the server routes and
+/// the ingest worker share the same concrete type.
+pub use mnemo_ingest::MemoryDigest;
 
 /// Shared application state passed to all Axum route handlers.
 #[derive(Clone)]
@@ -273,8 +264,9 @@ pub struct AppState {
     /// LLM call spans — keyed by request_id then by span id.
     /// Bounded ring-buffer per request (last 500 requests retained).
     pub llm_spans: Arc<RwLock<std::collections::VecDeque<LlmSpan>>>,
-    /// Latest memory digest per user.
-    pub memory_digests: Arc<RwLock<HashMap<Uuid, MemoryDigest>>>,
+    /// Latest memory digest per user. Shared with the ingest worker for
+    /// background sleep-time compute.
+    pub memory_digests: mnemo_ingest::DigestCache,
     /// If true, reject non-https webhook targets (SOC 2 compliance).
     pub require_tls: bool,
     /// HMAC secret for signing audit export responses (SOC 2 compliance).

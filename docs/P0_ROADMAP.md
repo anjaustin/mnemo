@@ -331,6 +331,7 @@ After all six are shipped, the feature table changes:
 | One-line / quick install | `❌` | `✅` |
 | Python SDK | `❌` | `✅` |
 | JS/TS SDK | `❌` | `✅` |
+| LlamaIndex adapter | `❌` | `✅` (BaseChatStore, server-side keys, 36 tests) |
 | Retrieval benchmarks published | `❌` | `⚠️` (partial, from graph/span data) |
 
 Completing this roadmap closes the five most critical `❌` gaps and flips three `⚠️` entries to `✅`. The remaining moat gaps after that are HIPAA certification and benchmark publications — both achievable in a follow-on sprint.

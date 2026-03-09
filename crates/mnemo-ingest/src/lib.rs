@@ -9,13 +9,15 @@
 //! - Contradiction detection and edge invalidation
 //! - Exponential backoff retry on transient failures
 
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tokio::time::sleep;
 use uuid::Uuid;
 
 use mnemo_core::error::MnemoError;
-use mnemo_core::models::edge::Edge;
+use mnemo_core::models::edge::{Edge, EdgeFilter};
 use mnemo_core::models::entity::{Entity, ExtractedEntity};
 use mnemo_core::models::episode::Episode;
 use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
@@ -46,6 +48,11 @@ pub struct IngestConfig {
     /// Number of episodes after which to trigger progressive session summarization.
     /// Set to 0 to disable. Default: 10.
     pub session_summary_threshold: u32,
+    /// Enable background sleep-time compute. When true, the worker generates
+    /// memory digests for users after they have been idle.
+    pub sleep_enabled: bool,
+    /// Seconds of user inactivity before triggering background digest generation.
+    pub sleep_idle_window_seconds: u64,
 }
 
 impl Default for IngestConfig {
@@ -56,14 +63,36 @@ impl Default for IngestConfig {
             concurrency: 4,
             max_retries: 3,
             session_summary_threshold: 10,
+            sleep_enabled: true,
+            sleep_idle_window_seconds: 300,
         }
     }
 }
+
+/// A memory digest summarizing a user's long-term knowledge state.
+/// Duplicated from server state.rs so the ingest crate can produce digests
+/// without depending on mnemo-server.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MemoryDigest {
+    pub user_id: Uuid,
+    pub summary: String,
+    pub entity_count: usize,
+    pub edge_count: usize,
+    pub dominant_topics: Vec<String>,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// Which model generated this digest.
+    pub model: String,
+}
+
+/// Shared digest cache type. The server creates this and passes it to the worker.
+pub type DigestCache = Arc<RwLock<HashMap<Uuid, MemoryDigest>>>;
 
 /// The ingestion pipeline worker.
 ///
 /// Runs as a background task, continuously polling for pending episodes
 /// and processing them through the extraction → graph construction pipeline.
+/// When sleep-time compute is enabled, it also detects user idle windows
+/// and generates memory digests in the background.
 pub struct IngestWorker<S, V, L, E>
 where
     S: EpisodeStore + EntityStore + EdgeStore + SessionStore,
@@ -76,6 +105,13 @@ where
     llm: Arc<L>,
     embedder: Arc<E>,
     config: IngestConfig,
+    /// Shared digest cache (same Arc as AppState.memory_digests).
+    digest_cache: Option<DigestCache>,
+    /// Per-user last-activity tracking for idle detection.
+    user_activity: RwLock<HashMap<Uuid, Instant>>,
+    /// Users whose digest has already been generated this idle window.
+    /// Cleared when the user becomes active again.
+    digest_generated: RwLock<std::collections::HashSet<Uuid>>,
 }
 
 impl<S, V, L, E> IngestWorker<S, V, L, E>
@@ -98,23 +134,168 @@ where
             llm,
             embedder,
             config,
+            digest_cache: None,
+            user_activity: RwLock::new(HashMap::new()),
+            digest_generated: RwLock::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// Attach the shared digest cache so the worker can write digests that
+    /// are immediately visible via `GET /api/v1/memory/:user/digest`.
+    pub fn with_digest_cache(mut self, cache: DigestCache) -> Self {
+        self.digest_cache = Some(cache);
+        self
     }
 
     /// Run the ingestion loop. Call this in a tokio::spawn.
     pub async fn run(&self) {
         tracing::info!(
-            "Ingestion worker started (max_retries={})",
-            self.config.max_retries
+            "Ingestion worker started (max_retries={}, sleep_enabled={}, idle_window={}s)",
+            self.config.max_retries,
+            self.config.sleep_enabled,
+            self.config.sleep_idle_window_seconds,
         );
         loop {
             match self.poll_and_process().await {
                 Ok(n) if n > 0 => tracing::debug!(processed = n, "Ingestion cycle"),
                 Err(e) => tracing::error!(error = %e, "Ingestion cycle failed"),
-                _ => {}
+                _ => {
+                    // No work found — check for idle users that need digests
+                    if self.config.sleep_enabled {
+                        self.sleep_time_consolidation().await;
+                    }
+                }
             }
             sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
         }
+    }
+
+    /// Record that a user was active (episode processed).
+    async fn record_user_activity(&self, user_id: Uuid) {
+        let mut activity = self.user_activity.write().await;
+        activity.insert(user_id, Instant::now());
+        // Clear the digest-generated flag so a new digest can be triggered
+        // after the next idle window.
+        let mut generated = self.digest_generated.write().await;
+        generated.remove(&user_id);
+    }
+
+    /// Check all tracked users for idle windows and generate digests.
+    async fn sleep_time_consolidation(&self) {
+        let idle_threshold = Duration::from_secs(self.config.sleep_idle_window_seconds);
+        let activity = self.user_activity.read().await;
+        let generated = self.digest_generated.read().await;
+
+        let idle_users: Vec<Uuid> = activity
+            .iter()
+            .filter(|(uid, last)| last.elapsed() >= idle_threshold && !generated.contains(uid))
+            .map(|(uid, _)| *uid)
+            .collect();
+        drop(activity);
+        drop(generated);
+
+        for user_id in idle_users {
+            tracing::info!(user_id = %user_id, "Sleep-time compute: generating digest for idle user");
+            match self.generate_digest(user_id).await {
+                Ok(digest) => {
+                    // Write to shared cache
+                    if let Some(ref cache) = self.digest_cache {
+                        let mut digests = cache.write().await;
+                        digests.insert(user_id, digest);
+                    }
+                    // Mark as generated so we don't re-run until next activity
+                    let mut gen = self.digest_generated.write().await;
+                    gen.insert(user_id);
+                    tracing::info!(user_id = %user_id, "Sleep-time digest generated");
+                }
+                Err(e) => {
+                    tracing::warn!(user_id = %user_id, error = %e, "Sleep-time digest generation failed");
+                }
+            }
+        }
+    }
+
+    /// Generate a memory digest for a user (same logic as the HTTP handler).
+    async fn generate_digest(&self, user_id: Uuid) -> Result<MemoryDigest, MnemoError> {
+        let entities = self
+            .state_store
+            .list_entities(user_id, 200, None)
+            .await?;
+        let filter = EdgeFilter {
+            include_invalidated: false,
+            limit: 300,
+            ..Default::default()
+        };
+        let edges = self
+            .state_store
+            .query_edges(user_id, filter)
+            .await?;
+
+        let entity_count = entities.len();
+        let edge_count = edges.len();
+
+        if entity_count == 0 {
+            return Err(MnemoError::Validation(
+                "No entities for user — skipping digest".into(),
+            ));
+        }
+
+        let entity_lines: Vec<String> = entities
+            .iter()
+            .take(80)
+            .map(|e| {
+                if let Some(ref s) = e.summary {
+                    format!("- {} ({}): {}", e.name, e.entity_type.as_str(), s)
+                } else {
+                    format!("- {} ({})", e.name, e.entity_type.as_str())
+                }
+            })
+            .collect();
+        let edge_lines: Vec<String> = edges
+            .iter()
+            .take(60)
+            .map(|e| format!("- {}", e.fact))
+            .collect();
+
+        let prompt = format!(
+            "You are analyzing a user's long-term memory knowledge graph.\n\
+            Entities ({} total, showing up to 80):\n{}\n\n\
+            Key relationships ({} total, showing up to 60):\n{}\n\n\
+            Write a concise 2-4 sentence prose summary of what this person knows, \
+            their main areas of interest, and any dominant themes. \
+            Then on a new line write: TOPICS: topic1, topic2, topic3 (list 3-6 key topics).",
+            entity_count,
+            entity_lines.join("\n"),
+            edge_count,
+            edge_lines.join("\n"),
+        );
+
+        let model_name = self.llm.model_name().to_string();
+        let raw = self.llm.summarize(&prompt, 512).await?;
+
+        let (summary_text, dominant_topics) = if let Some(idx) = raw.find("TOPICS:") {
+            let summary = raw[..idx].trim().to_string();
+            let topics_raw = raw[idx + 7..].trim();
+            let topics: Vec<String> = topics_raw
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .take(6)
+                .collect();
+            (summary, topics)
+        } else {
+            (raw.trim().to_string(), Vec::new())
+        };
+
+        Ok(MemoryDigest {
+            user_id,
+            summary: summary_text,
+            entity_count,
+            edge_count,
+            dominant_topics,
+            generated_at: chrono::Utc::now(),
+            model: model_name,
+        })
     }
 
     /// Poll for pending episodes and process them.
@@ -177,6 +358,8 @@ where
     /// Process a single episode through the full pipeline.
     async fn process_episode(&self, episode: &Episode) -> StorageResult<()> {
         tracing::debug!(episode_id = %episode.id, request_id = ?episode_request_id(episode), "Processing episode");
+        // Track user activity for sleep-time idle detection
+        self.record_user_activity(episode.user_id).await;
         // 1. Get existing entities for dedup hints
         let existing = self
             .state_store

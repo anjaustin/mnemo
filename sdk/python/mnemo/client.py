@@ -51,6 +51,8 @@ from mnemo._models import (
     RememberResult,
     ReplayResult,
     RetryResult,
+    SessionInfo,
+    SessionsResult,
     SpansResult,
     TimeTravelSummaryResult,
     TimeTravelTraceResult,
@@ -938,6 +940,40 @@ class Mnemo:
             request_id=request_id,
         )
         return DeleteResult(deleted=bool(body.get("deleted")), request_id=rid)
+
+    def list_sessions(
+        self,
+        user_id: str,
+        *,
+        limit: int = 100,
+        request_id: str | None = None,
+    ) -> SessionsResult:
+        """List all sessions for a user (by UUID).
+
+        Required by :class:`mnemo.ext.llamaindex.MnemoChatStore` for
+        server-side ``get_keys()``.
+        """
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/users/{user_id}/sessions?limit={limit}",
+            request_id=request_id,
+        )
+        sessions = [
+            SessionInfo(
+                id=str(s.get("id", "")),
+                name=s.get("name"),
+                user_id=str(s.get("user_id", "")),
+                created_at=str(s.get("created_at", "")),
+                updated_at=str(s.get("updated_at", "")),
+                episode_count=int(s.get("episode_count", 0)),
+            )
+            for s in body.get("data", [])
+        ]
+        return SessionsResult(
+            sessions=sessions,
+            count=int(body.get("count", len(sessions))),
+            request_id=rid,
+        )
 
 
 # ─── Parsing helpers ───────────────────────────────────────────────

@@ -244,6 +244,30 @@ class ImportJobResult:
     request_id: str | None = None
 
 
+# ─── Sessions ──────────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class SessionInfo:
+    """Summary of a server-side session."""
+
+    id: str
+    name: str | None = None
+    user_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    episode_count: int = 0
+
+
+@dataclass(slots=True)
+class SessionsResult:
+    """Result of listing sessions for a user."""
+
+    sessions: list[SessionInfo]
+    count: int
+    request_id: str | None = None
+
+
 # ─── Session messages ──────────────────────────────────────────────
 
 

@@ -34,6 +34,8 @@ from ._models import (
     RememberResult,
     ReplayResult,
     RetryResult,
+    SessionInfo,
+    SessionsResult,
     SpansResult,
     TimeTravelSummaryResult,
     TimeTravelTraceResult,
@@ -79,6 +81,8 @@ __all__ = [
     "ImportJobResult",
     "Message",
     "MessagesResult",
+    "SessionInfo",
+    "SessionsResult",
     "HealthResult",
     "DeleteResult",
     # Knowledge graph
