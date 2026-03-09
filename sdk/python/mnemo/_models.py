@@ -281,3 +281,112 @@ class HealthResult:
 class DeleteResult:
     deleted: bool
     request_id: str | None = None
+
+
+# ─── Knowledge Graph ───────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class GraphEntity:
+    id: str
+    name: str
+    entity_type: str
+    summary: str | None = None
+    mention_count: int = 0
+    community_id: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass(slots=True)
+class GraphEdge:
+    id: str
+    source_entity_id: str
+    target_entity_id: str
+    label: str
+    fact: str
+    confidence: float = 1.0
+    valid: bool = True
+    valid_at: str = ""
+    invalid_at: str | None = None
+    created_at: str = ""
+
+
+@dataclass(slots=True)
+class GraphEntitiesResult:
+    data: list[GraphEntity]
+    count: int
+    user_id: str
+    request_id: str | None = None
+
+
+@dataclass(slots=True)
+class GraphEdgesResult:
+    data: list[GraphEdge]
+    count: int
+    user_id: str
+    request_id: str | None = None
+
+
+@dataclass(slots=True)
+class GraphNeighborsResult:
+    seed_entity_id: str
+    depth: int
+    nodes: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
+    entities_visited: int
+    request_id: str | None = None
+
+
+@dataclass(slots=True)
+class GraphCommunityResult:
+    user_id: str
+    total_entities: int
+    community_count: int
+    communities: list[dict[str, Any]]
+    request_id: str | None = None
+
+
+# ─── LLM Spans ─────────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class LlmSpan:
+    id: str
+    provider: str
+    model: str
+    operation: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    latency_ms: int
+    success: bool
+    started_at: str
+    finished_at: str
+    request_id: str | None = None
+    user_id: str | None = None
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class SpansResult:
+    spans: list[LlmSpan]
+    count: int
+    total_tokens: int
+    request_id: str | None = None
+    total_latency_ms: int | None = None
+
+
+# ─── Memory Digest ─────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class MemoryDigestResult:
+    user_id: str
+    summary: str
+    entity_count: int
+    edge_count: int
+    dominant_topics: list[str]
+    generated_at: str
+    model: str
+    request_id: str | None = None

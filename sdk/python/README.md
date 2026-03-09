@@ -1,11 +1,18 @@
 # mnemo-client
 
-Production-grade Python SDK for the [Mnemo](https://github.com/anjaustin/mnemo) memory API.
+Production-grade Python SDK for the [Mnemo](https://github.com/anomalyco/mnemo) memory API.
 
-Covers all memory, governance, webhook, operator, import, and session-message endpoints.
-Zero runtime dependencies for the sync client. Drop-in LangChain and LlamaIndex adapters included.
+Covers all memory, knowledge graph, LLM span tracing, memory digest, governance, webhooks, operator,
+import, and session-message endpoints. Zero runtime dependencies for the sync client.
+Drop-in LangChain and LlamaIndex adapters included.
 
 ## Install
+
+```bash
+pip install mnemo-client
+```
+
+Or from source:
 
 ```bash
 # Core sync client (zero dependencies)
@@ -39,6 +46,54 @@ print(result.session_id)  # server-assigned UUID
 ctx = client.context("alice", "What does Alice enjoy outdoors?")
 print(ctx.text)           # assembled context string
 print(ctx.token_count)    # token count of the context
+```
+
+## Knowledge Graph API
+
+```python
+# List entities in the user's knowledge graph
+entities = client.graph_entities("alice", limit=50)
+for e in entities.data:
+    print(e.name, e.entity_type, e.mention_count)
+
+# Get entity with its adjacency (outgoing/incoming edges)
+entity = client.graph_entity("alice", entity_id="<uuid>")
+
+# List edges
+edges = client.graph_edges("alice", valid_only=True, limit=100)
+for e in edges.data:
+    print(e.fact)
+
+# 1-hop neighborhood of an entity
+neighbors = client.graph_neighbors("alice", "<entity_uuid>", depth=2)
+print(f"{neighbors.entities_visited} entities visited")
+
+# Community detection
+communities = client.graph_community("alice")
+print(f"{communities.community_count} communities detected")
+```
+
+## Memory Digest (sleep-time compute)
+
+```python
+# Get or generate a memory digest (prose summary + topic extraction)
+digest = client.memory_digest("alice")
+print(digest.summary)
+print("Topics:", digest.dominant_topics)
+print(f"{digest.entity_count} entities, {digest.edge_count} edges, model: {digest.model}")
+
+# Force regeneration
+digest = client.memory_digest("alice", refresh=True)
+```
+
+## LLM Span Tracing
+
+```python
+# Look up all LLM calls made during a specific request
+spans = client.spans_by_request("019cc15a-5470-7711-8d51-a3af1ace5522")
+print(f"{spans.count} spans, {spans.total_tokens} tokens total")
+for s in spans.spans:
+    print(s.operation, s.model, s.total_tokens, s.latency_ms, "ms")
 ```
 
 ## Production client options

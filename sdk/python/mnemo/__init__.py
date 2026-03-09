@@ -16,8 +16,16 @@ from ._models import (
     ConflictRadarResult,
     ContextResult,
     DeleteResult,
+    GraphCommunityResult,
+    GraphEdge,
+    GraphEdgesResult,
+    GraphEntitiesResult,
+    GraphEntity,
+    GraphNeighborsResult,
     HealthResult,
     ImportJobResult,
+    LlmSpan,
+    MemoryDigestResult,
     Message,
     MessagesResult,
     OpsSummaryResult,
@@ -26,6 +34,7 @@ from ._models import (
     RememberResult,
     ReplayResult,
     RetryResult,
+    SpansResult,
     TimeTravelSummaryResult,
     TimeTravelTraceResult,
     TraceLookupResult,
@@ -34,7 +43,10 @@ from ._models import (
     WebhookStats,
 )
 
+__version__ = "0.4.0"
+
 __all__ = [
+    "__version__",
     # Clients
     "Mnemo",
     "AsyncMnemo",
@@ -69,4 +81,16 @@ __all__ = [
     "MessagesResult",
     "HealthResult",
     "DeleteResult",
+    # Knowledge graph
+    "GraphEntity",
+    "GraphEdge",
+    "GraphEntitiesResult",
+    "GraphEdgesResult",
+    "GraphNeighborsResult",
+    "GraphCommunityResult",
+    # LLM spans
+    "LlmSpan",
+    "SpansResult",
+    # Memory digest
+    "MemoryDigestResult",
 ]

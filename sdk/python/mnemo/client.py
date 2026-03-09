@@ -33,8 +33,16 @@ from mnemo._models import (
     ConflictRadarResult,
     ContextResult,
     DeleteResult,
+    GraphCommunityResult,
+    GraphEdge,
+    GraphEdgesResult,
+    GraphEntitiesResult,
+    GraphEntity,
+    GraphNeighborsResult,
     HealthResult,
     ImportJobResult,
+    LlmSpan,
+    MemoryDigestResult,
     Message,
     MessagesResult,
     OpsSummaryResult,
@@ -43,6 +51,7 @@ from mnemo._models import (
     RememberResult,
     ReplayResult,
     RetryResult,
+    SpansResult,
     TimeTravelSummaryResult,
     TimeTravelTraceResult,
     TraceLookupResult,
@@ -658,6 +667,209 @@ class Mnemo:
         )
         return _parse_import_job(body, rid)
 
+    # ── Knowledge Graph API ─────────────────────────────────────────
+
+    def graph_entities(
+        self,
+        user: str,
+        *,
+        limit: int = 100,
+        request_id: str | None = None,
+    ) -> GraphEntitiesResult:
+        """List all entities in the knowledge graph for a user."""
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/graph/{user}/entities?limit={limit}",
+            request_id=request_id,
+        )
+        entities = [
+            GraphEntity(
+                id=str(e.get("id", "")),
+                name=str(e.get("name", "")),
+                entity_type=str(e.get("entity_type", "unknown")),
+                summary=e.get("summary"),
+                mention_count=int(e.get("mention_count", 0)),
+                community_id=e.get("community_id"),
+                created_at=str(e.get("created_at", "")),
+                updated_at=str(e.get("updated_at", "")),
+            )
+            for e in body.get("data", [])
+        ]
+        return GraphEntitiesResult(
+            data=entities,
+            count=int(body.get("count", len(entities))),
+            user_id=str(body.get("user_id", "")),
+            request_id=rid,
+        )
+
+    def graph_entity(
+        self,
+        user: str,
+        entity_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Get a single entity with its adjacency information."""
+        body, _rid = self._req(
+            "GET",
+            f"/api/v1/graph/{user}/entities/{entity_id}",
+            request_id=request_id,
+        )
+        return body
+
+    def graph_edges(
+        self,
+        user: str,
+        *,
+        limit: int = 100,
+        label: str | None = None,
+        valid_only: bool = True,
+        request_id: str | None = None,
+    ) -> GraphEdgesResult:
+        """List edges in the knowledge graph for a user."""
+        path = f"/api/v1/graph/{user}/edges?limit={limit}&valid_only={str(valid_only).lower()}"
+        if label:
+            path += f"&label={label}"
+        body, rid = self._req("GET", path, request_id=request_id)
+        edges = [
+            GraphEdge(
+                id=str(e.get("id", "")),
+                source_entity_id=str(e.get("source_entity_id", "")),
+                target_entity_id=str(e.get("target_entity_id", "")),
+                label=str(e.get("label", "")),
+                fact=str(e.get("fact", "")),
+                confidence=float(e.get("confidence", 1.0)),
+                valid=bool(e.get("valid", True)),
+                valid_at=str(e.get("valid_at", "")),
+                invalid_at=e.get("invalid_at"),
+                created_at=str(e.get("created_at", "")),
+            )
+            for e in body.get("data", [])
+        ]
+        return GraphEdgesResult(
+            data=edges,
+            count=int(body.get("count", len(edges))),
+            user_id=str(body.get("user_id", "")),
+            request_id=rid,
+        )
+
+    def graph_neighbors(
+        self,
+        user: str,
+        entity_id: str,
+        *,
+        depth: int = 1,
+        max_nodes: int = 50,
+        valid_only: bool = True,
+        request_id: str | None = None,
+    ) -> GraphNeighborsResult:
+        """Return the neighborhood (BFS subgraph) around an entity."""
+        path = (
+            f"/api/v1/graph/{user}/neighbors/{entity_id}"
+            f"?depth={depth}&max_nodes={max_nodes}&valid_only={str(valid_only).lower()}"
+        )
+        body, rid = self._req("GET", path, request_id=request_id)
+        return GraphNeighborsResult(
+            seed_entity_id=str(body.get("seed_entity_id", entity_id)),
+            depth=int(body.get("depth", depth)),
+            nodes=list(body.get("nodes", [])),
+            edges=list(body.get("edges", [])),
+            entities_visited=int(body.get("entities_visited", 0)),
+            request_id=rid,
+        )
+
+    def graph_community(
+        self,
+        user: str,
+        *,
+        max_iterations: int = 20,
+        request_id: str | None = None,
+    ) -> GraphCommunityResult:
+        """Detect communities in the user's knowledge graph."""
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/graph/{user}/community?max_iterations={max_iterations}",
+            request_id=request_id,
+        )
+        return GraphCommunityResult(
+            user_id=str(body.get("user_id", "")),
+            total_entities=int(body.get("total_entities", 0)),
+            community_count=int(body.get("community_count", 0)),
+            communities=list(body.get("communities", [])),
+            request_id=rid,
+        )
+
+    # ── LLM Span Tracing ────────────────────────────────────────────
+
+    def spans_by_request(
+        self,
+        request_id_to_lookup: str,
+        *,
+        request_id: str | None = None,
+    ) -> SpansResult:
+        """Return all LLM call spans for a given request ID."""
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/spans/request/{request_id_to_lookup}",
+            request_id=request_id,
+        )
+        return _parse_spans_result(body, rid)
+
+    def spans_by_user(
+        self,
+        user_id: str,
+        *,
+        limit: int = 100,
+        request_id: str | None = None,
+    ) -> SpansResult:
+        """Return recent LLM spans for a user (by UUID)."""
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/spans/user/{user_id}?limit={limit}",
+            request_id=request_id,
+        )
+        return _parse_spans_result(body, rid)
+
+    # ── Memory Digest (sleep-time compute) ──────────────────────────
+
+    def memory_digest(
+        self,
+        user: str,
+        *,
+        refresh: bool = False,
+        request_id: str | None = None,
+    ) -> MemoryDigestResult:
+        """Get the cached memory digest for a user.
+
+        Args:
+            user: Username or UUID.
+            refresh: If True, generate a fresh digest via the LLM (POST).
+                     If False, return cached digest or generate if not cached (GET then POST).
+        """
+        if refresh:
+            body, rid = self._req(
+                "POST", f"/api/v1/memory/{user}/digest", request_id=request_id
+            )
+        else:
+            try:
+                body, rid = self._req(
+                    "GET", f"/api/v1/memory/{user}/digest", request_id=request_id
+                )
+            except Exception:
+                body, rid = self._req(
+                    "POST", f"/api/v1/memory/{user}/digest", request_id=request_id
+                )
+        return MemoryDigestResult(
+            user_id=str(body.get("user_id", "")),
+            summary=str(body.get("summary", "")),
+            entity_count=int(body.get("entity_count", 0)),
+            edge_count=int(body.get("edge_count", 0)),
+            dominant_topics=list(body.get("dominant_topics", [])),
+            generated_at=str(body.get("generated_at", "")),
+            model=str(body.get("model", "")),
+            request_id=rid,
+        )
+
     # ── Session messages (framework adapter primitives) ─────────────
 
     def get_messages(
@@ -802,6 +1014,35 @@ def _parse_webhook_event(e: dict[str, Any], rid: str | None) -> WebhookEvent:
         attempts=int(e.get("attempts", 0)),
         delivered=bool(e.get("delivered", False)),
         dead_letter=bool(e.get("dead_letter", False)),
+        request_id=rid,
+    )
+
+
+def _parse_spans_result(body: dict[str, Any], rid: str | None) -> SpansResult:
+    spans = [
+        LlmSpan(
+            id=str(s.get("id", "")),
+            provider=str(s.get("provider", "")),
+            model=str(s.get("model", "")),
+            operation=str(s.get("operation", "")),
+            prompt_tokens=int(s.get("prompt_tokens", 0)),
+            completion_tokens=int(s.get("completion_tokens", 0)),
+            total_tokens=int(s.get("total_tokens", 0)),
+            latency_ms=int(s.get("latency_ms", 0)),
+            success=bool(s.get("success", True)),
+            started_at=str(s.get("started_at", "")),
+            finished_at=str(s.get("finished_at", "")),
+            request_id=s.get("request_id"),
+            user_id=s.get("user_id"),
+            error=s.get("error"),
+        )
+        for s in body.get("spans", [])
+    ]
+    return SpansResult(
+        spans=spans,
+        count=int(body.get("count", len(spans))),
+        total_tokens=int(body.get("total_tokens", 0)),
+        total_latency_ms=body.get("total_latency_ms"),
         request_id=rid,
     )
 
