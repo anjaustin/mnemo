@@ -30,6 +30,7 @@ class Seeded:
     user: str
     user_id: str
     session_id: str
+    episode_request_id: str
     governance_user_path: str
     webhook_id: str
     policy_request_id: str
@@ -63,6 +64,7 @@ def seed() -> Seeded:
     suffix = str(int(time.time()))
     user = f"browser-smoke-{suffix}"
     replay_request_id = f"browser-replay-{suffix}"
+    episode_request_id = f"browser-episode-{suffix}"
     policy_request_id = f"browser-policy-{suffix}"
     violation_request_id = f"browser-violation-{suffix}"
     register_request_id = f"browser-register-{suffix}"
@@ -82,6 +84,18 @@ def seed() -> Seeded:
         f"user create failed: {response.status_code} {response.text}",
     )
     user_id = response.json()["id"]
+
+    print("seed: create trace session")
+    response = api(
+        "POST",
+        "/api/v1/sessions",
+        {"user_id": user_id, "name": "browser-trace-session"},
+    )
+    require(
+        response.status_code == 201,
+        f"session create failed: {response.status_code} {response.text}",
+    )
+    session_id = response.json()["id"]
 
     print("seed: register failing webhook")
     response = api(
@@ -141,10 +155,28 @@ def seed() -> Seeded:
         response.ok, f"replay request failed: {response.status_code} {response.text}"
     )
 
+    print("seed: append traceable episode")
+    response = api(
+        "POST",
+        f"/api/v1/sessions/{session_id}/episodes",
+        {
+            "type": "message",
+            "role": "user",
+            "content": "browser smoke traceable episode",
+            "created_at": "2026-03-08T12:00:00Z",
+        },
+        request_id=episode_request_id,
+    )
+    require(
+        response.status_code == 201,
+        f"episode append failed: {response.status_code} {response.text}",
+    )
+
     return Seeded(
         user=user,
         user_id=user_id,
-        session_id="00000000-0000-0000-0000-00000000feed",
+        session_id=session_id,
+        episode_request_id=episode_request_id,
         governance_user_path=f"/_/governance/{user_id}",
         webhook_id=webhook_id,
         policy_request_id=policy_request_id,
@@ -257,37 +289,14 @@ def run_browser(seed: Seeded) -> None:
                 "trace evidence export should preserve webhook focus",
             )
 
-            print("browser: render synthetic episode graph node")
-            page.evaluate(
-                """
-                seed => {
-                  history.pushState({}, '', `/_/traces/${seed.replay_request_id}`);
-                  renderTraceResults({
-                    request_id: seed.replay_request_id,
-                    matched_episodes: [{
-                      user_id: seed.user_id,
-                      session_id: seed.session_id,
-                      episode_id: 'synthetic-episode-id',
-                      created_at: '2026-03-08T12:00:00Z',
-                      preview: 'synthetic episode preview'
-                    }],
-                    matched_webhook_events: [],
-                    matched_webhook_audit: [],
-                    matched_governance_audit: [],
-                    summary: {
-                      episode_matches: 1,
-                      webhook_event_matches: 0,
-                      webhook_audit_matches: 0,
-                      governance_audit_matches: 0
-                    }
-                  });
-                }
-                """,
-                {
-                    "replay_request_id": seed.replay_request_id,
-                    "user_id": seed.user_id,
-                    "session_id": seed.session_id,
-                },
+            print("browser: open real episode-backed trace")
+            page.goto(
+                f"{BASE}/_/traces/{seed.episode_request_id}",
+                wait_until="domcontentloaded",
+            )
+            expect(page.locator("#trace-results")).to_contain_text("Trace:")
+            expect(page.locator("#trace-results")).to_contain_text(
+                "browser smoke traceable episode"
             )
 
             print("browser: click episode graph node drilldown")
@@ -296,8 +305,7 @@ def run_browser(seed: Seeded) -> None:
                 "el => el.dispatchEvent(new MouseEvent('click', { bubbles: true }))",
             )
             page.wait_for_url(
-                lambda url: "/_/rca?" in url
-                and "episode_id=synthetic-episode-id" in url
+                lambda url: "/_/rca?" in url and f"session={seed.session_id}" in url
             )
             expect(page.locator("#rca-focus-banner")).to_contain_text(
                 "Episode RCA Focus"
@@ -311,7 +319,8 @@ def run_browser(seed: Seeded) -> None:
                 "episode drilldown should prefill RCA session",
             )
             require(
-                page.locator("#rca-query").input_value() == "synthetic episode preview",
+                page.locator("#rca-query").input_value()
+                == "browser smoke traceable episode",
                 "episode drilldown should prefill RCA query",
             )
 

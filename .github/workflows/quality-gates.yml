@@ -192,6 +192,7 @@ jobs:
 
   dashboard-browser-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     services:
       redis:
@@ -215,6 +216,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -249,10 +251,34 @@ jobs:
           python3 -m pip install requests playwright
           python3 -m playwright install --with-deps chromium
 
+      - name: Validate browser smoke script
+        run: python3 -m py_compile tests/dashboard_browser_smoke.py tests/mock_openai_chat_server.py
+
       - name: Launch mock OpenAI server
         run: |
           python3 tests/mock_openai_chat_server.py > /tmp/mnemo-mock-openai.log 2>&1 &
           echo $! > /tmp/mnemo-mock-openai.pid
+
+      - name: Wait for mock OpenAI server health
+        run: |
+          python3 - <<'PY'
+          import time
+          import urllib.request
+
+          deadline = time.time() + 30
+          url = "http://127.0.0.1:18080/health"
+          while True:
+              try:
+                  with urllib.request.urlopen(url, timeout=2) as resp:
+                      if resp.status == 200:
+                          print("mock openai server healthy")
+                          break
+              except Exception:
+                  pass
+              if time.time() > deadline:
+                  raise SystemExit("Timed out waiting for mock OpenAI server health")
+              time.sleep(1)
+          PY
 
       - name: Launch Mnemo server for dashboard browser smoke
         env:
