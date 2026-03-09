@@ -254,6 +254,9 @@ jobs:
       - name: Validate browser smoke script
         run: python3 -m py_compile tests/dashboard_browser_smoke.py tests/mock_openai_chat_server.py
 
+      - name: Build Mnemo server binary
+        run: cargo build -p mnemo-server
+
       - name: Launch mock OpenAI server
         run: |
           python3 tests/mock_openai_chat_server.py > /tmp/mnemo-mock-openai.log 2>&1 &

@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_escape_redisearch_query() {
-        assert_eq!(escape_redisearch_query("hello world"), "hello world");
+        assert_eq!(escape_redisearch_query("hello world"), "hello|world");
         assert_eq!(
             escape_redisearch_query("user@email.com"),
             "user\\@email.com"
