@@ -302,3 +302,135 @@ async fn test_episode_requeue() {
     // This just tests the sorted set requeue behavior.
     assert!(pending.is_empty() || pending.iter().any(|e| e.id == episode.id));
 }
+
+// ─── Digest Storage ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_digest_save_and_load() {
+    let store = get_store().await;
+    let user_id = Uuid::now_v7();
+
+    // No digest initially
+    let result = store.get_digest(user_id).await.unwrap();
+    assert!(result.is_none(), "no digest should exist initially");
+
+    // Save a digest
+    let digest = mnemo_core::models::digest::MemoryDigest {
+        user_id,
+        summary: "User is interested in machine learning and Rust programming.".into(),
+        entity_count: 42,
+        edge_count: 15,
+        dominant_topics: vec!["ML".into(), "Rust".into(), "Systems".into()],
+        generated_at: chrono::Utc::now(),
+        model: "test-model".into(),
+    };
+    store.save_digest(&digest).await.unwrap();
+
+    // Load it back
+    let loaded = store.get_digest(user_id).await.unwrap().unwrap();
+    assert_eq!(loaded.user_id, user_id);
+    assert_eq!(loaded.summary, digest.summary);
+    assert_eq!(loaded.entity_count, 42);
+    assert_eq!(loaded.edge_count, 15);
+    assert_eq!(loaded.dominant_topics, vec!["ML", "Rust", "Systems"]);
+    assert_eq!(loaded.model, "test-model");
+}
+
+#[tokio::test]
+async fn test_digest_overwrite() {
+    let store = get_store().await;
+    let user_id = Uuid::now_v7();
+
+    let digest1 = mnemo_core::models::digest::MemoryDigest {
+        user_id,
+        summary: "First summary.".into(),
+        entity_count: 10,
+        edge_count: 5,
+        dominant_topics: vec!["alpha".into()],
+        generated_at: chrono::Utc::now(),
+        model: "model-v1".into(),
+    };
+    store.save_digest(&digest1).await.unwrap();
+
+    let digest2 = mnemo_core::models::digest::MemoryDigest {
+        user_id,
+        summary: "Updated summary after more activity.".into(),
+        entity_count: 25,
+        edge_count: 12,
+        dominant_topics: vec!["beta".into(), "gamma".into()],
+        generated_at: chrono::Utc::now(),
+        model: "model-v2".into(),
+    };
+    store.save_digest(&digest2).await.unwrap();
+
+    // Should get the latest digest
+    let loaded = store.get_digest(user_id).await.unwrap().unwrap();
+    assert_eq!(loaded.summary, "Updated summary after more activity.");
+    assert_eq!(loaded.entity_count, 25);
+    assert_eq!(loaded.model, "model-v2");
+}
+
+#[tokio::test]
+async fn test_digest_list_all() {
+    let store = get_store().await;
+    let user_a = Uuid::now_v7();
+    let user_b = Uuid::now_v7();
+
+    // Start empty
+    let all = store.list_digests().await.unwrap();
+    assert!(all.is_empty(), "no digests should exist initially");
+
+    // Save two digests for different users
+    let digest_a = mnemo_core::models::digest::MemoryDigest {
+        user_id: user_a,
+        summary: "User A summary.".into(),
+        entity_count: 5,
+        edge_count: 2,
+        dominant_topics: vec!["topic-a".into()],
+        generated_at: chrono::Utc::now(),
+        model: "test".into(),
+    };
+    let digest_b = mnemo_core::models::digest::MemoryDigest {
+        user_id: user_b,
+        summary: "User B summary.".into(),
+        entity_count: 8,
+        edge_count: 3,
+        dominant_topics: vec!["topic-b".into()],
+        generated_at: chrono::Utc::now(),
+        model: "test".into(),
+    };
+    store.save_digest(&digest_a).await.unwrap();
+    store.save_digest(&digest_b).await.unwrap();
+
+    let all = store.list_digests().await.unwrap();
+    assert_eq!(all.len(), 2);
+    let ids: Vec<Uuid> = all.iter().map(|d| d.user_id).collect();
+    assert!(ids.contains(&user_a));
+    assert!(ids.contains(&user_b));
+}
+
+#[tokio::test]
+async fn test_digest_delete() {
+    let store = get_store().await;
+    let user_id = Uuid::now_v7();
+
+    let digest = mnemo_core::models::digest::MemoryDigest {
+        user_id,
+        summary: "To be deleted.".into(),
+        entity_count: 1,
+        edge_count: 0,
+        dominant_topics: vec![],
+        generated_at: chrono::Utc::now(),
+        model: "test".into(),
+    };
+    store.save_digest(&digest).await.unwrap();
+    assert!(store.get_digest(user_id).await.unwrap().is_some());
+
+    // Delete
+    store.delete_digest(user_id).await.unwrap();
+    assert!(store.get_digest(user_id).await.unwrap().is_none());
+
+    // list_digests should not include the deleted digest
+    let all = store.list_digests().await.unwrap();
+    assert!(!all.iter().any(|d| d.user_id == user_id));
+}

@@ -8219,7 +8219,15 @@ async fn refresh_memory_digest(
         model: model_name,
     };
 
-    // Cache the digest
+    // Persist to Redis for durability
+    {
+        use mnemo_core::traits::storage::DigestStore as _;
+        if let Err(e) = state.state_store.save_digest(&digest).await {
+            tracing::warn!(user_id = %user_rec.id, error = %e, "Failed to persist digest to Redis");
+        }
+    }
+
+    // Cache the digest in memory for fast reads
     {
         let mut digests = state.memory_digests.write().await;
         digests.insert(user_rec.id, digest.clone());

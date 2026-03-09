@@ -7,6 +7,7 @@ use crate::models::{
         CreatePromotionProposalRequest, ExperienceEvent, PromotionProposal,
         UpdateAgentIdentityRequest,
     },
+    digest::MemoryDigest,
     edge::{Edge, EdgeFilter},
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams},
@@ -311,18 +312,36 @@ pub trait RawVectorStore: Send + Sync {
     async fn count_vectors(&self, namespace: &str) -> StorageResult<u64>;
 }
 
+// ─── Digest Storage ────────────────────────────────────────────────
+
+/// Storage for memory digests (sleep-time compute summaries).
+#[allow(async_fn_in_trait)]
+pub trait DigestStore: Send + Sync {
+    /// Persist a memory digest for a user (overwrites any previous digest).
+    async fn save_digest(&self, digest: &MemoryDigest) -> StorageResult<()>;
+
+    /// Load a single user's memory digest. Returns `None` if no digest exists.
+    async fn get_digest(&self, user_id: Uuid) -> StorageResult<Option<MemoryDigest>>;
+
+    /// Load all stored digests (used on startup to warm the in-memory cache).
+    async fn list_digests(&self) -> StorageResult<Vec<MemoryDigest>>;
+
+    /// Delete a user's memory digest.
+    async fn delete_digest(&self, user_id: Uuid) -> StorageResult<()>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
 /// Users, sessions, episodes, entities, edges — anything that's JSON/structured data.
 pub trait StateStore:
-    UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + AgentStore
+    UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + AgentStore + DigestStore
 {
 }
 
 /// Blanket implementation for StateStore.
 impl<T> StateStore for T where
-    T: UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + AgentStore
+    T: UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + AgentStore + DigestStore
 {
 }
 

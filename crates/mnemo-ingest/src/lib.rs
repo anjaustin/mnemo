@@ -23,7 +23,7 @@ use mnemo_core::models::episode::Episode;
 use mnemo_core::models::session::UpdateSessionRequest;
 use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
 use mnemo_core::traits::storage::{
-    EdgeStore, EntityStore, EpisodeStore, SessionStore, StorageResult, VectorStore,
+    DigestStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, StorageResult, VectorStore,
 };
 
 fn episode_request_id(episode: &Episode) -> Option<&str> {
@@ -69,20 +69,8 @@ impl Default for IngestConfig {
     }
 }
 
-/// A memory digest summarizing a user's long-term knowledge state.
-/// Duplicated from server state.rs so the ingest crate can produce digests
-/// without depending on mnemo-server.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MemoryDigest {
-    pub user_id: Uuid,
-    pub summary: String,
-    pub entity_count: usize,
-    pub edge_count: usize,
-    pub dominant_topics: Vec<String>,
-    pub generated_at: chrono::DateTime<chrono::Utc>,
-    /// Which model generated this digest.
-    pub model: String,
-}
+/// Re-export from mnemo-core so downstream crates can use `mnemo_ingest::MemoryDigest`.
+pub use mnemo_core::models::digest::MemoryDigest;
 
 /// Shared digest cache type. The server creates this and passes it to the worker.
 pub type DigestCache = Arc<RwLock<HashMap<Uuid, MemoryDigest>>>;
@@ -95,7 +83,7 @@ pub type DigestCache = Arc<RwLock<HashMap<Uuid, MemoryDigest>>>;
 /// and generates memory digests in the background.
 pub struct IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore + SessionStore,
+    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore,
     V: VectorStore,
     L: LlmProvider,
     E: EmbeddingProvider,
@@ -116,7 +104,7 @@ where
 
 impl<S, V, L, E> IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + Send + Sync + 'static,
+    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore + Send + Sync + 'static,
     V: VectorStore + Send + Sync + 'static,
     L: LlmProvider + Send + Sync + 'static,
     E: EmbeddingProvider + Send + Sync + 'static,
@@ -218,7 +206,11 @@ where
             tracing::info!(user_id = %user_id, "Sleep-time compute: generating digest for idle user");
             match self.generate_digest(user_id).await {
                 Ok(digest) => {
-                    // Write to shared cache
+                    // Persist to Redis for durability
+                    if let Err(e) = self.state_store.save_digest(&digest).await {
+                        tracing::warn!(user_id = %user_id, error = %e, "Failed to persist digest to Redis");
+                    }
+                    // Write to shared in-memory cache for fast reads
                     if let Some(ref cache) = self.digest_cache {
                         let mut digests = cache.write().await;
                         digests.insert(user_id, digest);
@@ -226,7 +218,7 @@ where
                     // Mark as generated so we don't re-run until next activity
                     let mut gen = self.digest_generated.write().await;
                     gen.insert(user_id);
-                    tracing::info!(user_id = %user_id, "Sleep-time digest generated");
+                    tracing::info!(user_id = %user_id, "Sleep-time digest generated and persisted");
                 }
                 Err(e) => {
                     tracing::warn!(user_id = %user_id, error = %e, "Sleep-time digest generation failed");

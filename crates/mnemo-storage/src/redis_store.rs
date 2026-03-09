@@ -41,6 +41,8 @@ use mnemo_core::traits::storage::*;
 /// {prefix}adj_in:{entity_id}           → Sorted Set (score=valid_at, member=edge_id)
 /// {prefix}user_edges:{user_id}         → Sorted Set (score=timestamp, member=edge_id)
 /// {prefix}rid_episodes:{request_id}   → Sorted Set (score=epoch_ms, member="{ep_id}:{user_id}:{sess_id}")
+/// {prefix}digest:{user_id}            → JSON MemoryDigest
+/// {prefix}digests                      → Sorted Set (score=generated_at_ms, member=user_id)
 /// ```
 #[derive(Clone)]
 pub struct RedisStateStore {
@@ -1120,6 +1122,70 @@ impl RedisStateStore {
         )
         .await
         .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+}
+
+// ─── DigestStore ───────────────────────────────────────────────────
+
+impl mnemo_core::traits::storage::DigestStore for RedisStateStore {
+    async fn save_digest(
+        &self,
+        digest: &mnemo_core::models::digest::MemoryDigest,
+    ) -> StorageResult<()> {
+        let key = self.key(&["digest", &digest.user_id.to_string()]);
+        self.set_json(&key, digest).await?;
+
+        // Index in sorted set so list_digests can enumerate all users with digests
+        let zset_key = self.key(&["digests"]);
+        let mut conn = self.conn.clone();
+        conn.zadd::<_, _, _, ()>(
+            &zset_key,
+            digest.user_id.to_string(),
+            digest.generated_at.timestamp_millis() as f64,
+        )
+        .await
+        .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_digest(
+        &self,
+        user_id: Uuid,
+    ) -> StorageResult<Option<mnemo_core::models::digest::MemoryDigest>> {
+        let key = self.key(&["digest", &user_id.to_string()]);
+        self.get_json(&key).await
+    }
+
+    async fn list_digests(&self) -> StorageResult<Vec<mnemo_core::models::digest::MemoryDigest>> {
+        let zset_key = self.key(&["digests"]);
+        let mut conn = self.conn.clone();
+        let user_ids: Vec<String> = conn
+            .zrange(&zset_key, 0, -1)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut digests = Vec::with_capacity(user_ids.len());
+        for uid_str in user_ids {
+            let key = self.key(&["digest", &uid_str]);
+            if let Some(digest) = self.get_json(&key).await? {
+                digests.push(digest);
+            }
+        }
+        Ok(digests)
+    }
+
+    async fn delete_digest(&self, user_id: Uuid) -> StorageResult<()> {
+        let key = self.key(&["digest", &user_id.to_string()]);
+        self.del(&key).await?;
+
+        let zset_key = self.key(&["digests"]);
+        let mut conn = self.conn.clone();
+        conn.zrem::<_, _, ()>(&zset_key, user_id.to_string())
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
         Ok(())
     }

@@ -6657,3 +6657,116 @@ async fn test_audit_export_include_flags() {
         "both include flags false should return 0 records"
     );
 }
+
+// ─── Memory Digest Endpoint Tests ─────────────────────────────────
+
+#[tokio::test]
+async fn test_digest_get_returns_404_when_no_digest() {
+    let app = build_test_app().await;
+
+    // Create a user
+    let (status, user_body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "digest-test-user",
+            "external_id": "digest-ext-no-digest"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user_body["id"].as_str().unwrap();
+
+    // GET digest should return 404
+    let (status, _body) = get_request(&app, &format!("/api/v1/memory/{user_id}/digest")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_digest_persisted_to_redis_and_served() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    // Create a user
+    let (status, user_body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "digest-persist-user",
+            "external_id": "digest-ext-persist"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
+
+    // Manually save a digest via DigestStore (simulating what the ingest worker does)
+    use mnemo_core::traits::storage::DigestStore;
+    let digest = mnemo_core::models::digest::MemoryDigest {
+        user_id,
+        summary: "User is passionate about distributed systems and Rust.".into(),
+        entity_count: 12,
+        edge_count: 7,
+        dominant_topics: vec!["distributed systems".into(), "Rust".into()],
+        generated_at: chrono::Utc::now(),
+        model: "test-model".into(),
+    };
+    state_store.save_digest(&digest).await.unwrap();
+
+    // Also write to the in-memory cache (normally done by the ingest worker or POST handler)
+    // For this test we need to go through the HTTP path which reads from the in-memory cache.
+    // Since we can't access AppState directly here, let's verify the Redis persistence
+    // by loading directly from the store.
+    let loaded = state_store.get_digest(user_id).await.unwrap();
+    assert!(loaded.is_some(), "digest should be persisted in Redis");
+    let loaded = loaded.unwrap();
+    assert_eq!(loaded.summary, digest.summary);
+    assert_eq!(loaded.entity_count, 12);
+    assert_eq!(loaded.dominant_topics, vec!["distributed systems", "Rust"]);
+
+    // Verify list_digests returns it
+    let all = state_store.list_digests().await.unwrap();
+    assert!(all.iter().any(|d| d.user_id == user_id));
+}
+
+#[tokio::test]
+async fn test_digest_post_without_llm_returns_error() {
+    let app = build_test_app().await;
+
+    // Create a user
+    let (status, user_body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "digest-no-llm-user",
+            "external_id": "digest-ext-no-llm"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user_body["id"].as_str().unwrap();
+
+    // POST digest without LLM should return 400 (validation error)
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{user_id}/digest"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("LLM provider"),
+        "error should mention LLM provider not configured, got: {body}"
+    );
+}

@@ -118,9 +118,24 @@ async fn main() -> anyhow::Result<()> {
         sleep_idle_window_seconds: config.extraction.sleep_idle_window_seconds,
     };
 
-    // Shared digest cache — passed to both AppState and IngestWorker
-    let digest_cache: mnemo_ingest::DigestCache =
-        Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+    // Shared digest cache — passed to both AppState and IngestWorker.
+    // Warm the cache from Redis so previously-generated digests survive restarts.
+    let digest_cache: mnemo_ingest::DigestCache = {
+        use mnemo_core::traits::storage::DigestStore as _;
+        let persisted = state_store.list_digests().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to load persisted digests from Redis");
+            Vec::new()
+        });
+        let count = persisted.len();
+        let mut map = std::collections::HashMap::with_capacity(count);
+        for d in persisted {
+            map.insert(d.user_id, d);
+        }
+        if count > 0 {
+            tracing::info!(count, "Loaded persisted memory digests from Redis");
+        }
+        Arc::new(tokio::sync::RwLock::new(map))
+    };
 
     // Spawn ingestion worker with provider-specific LLM type
     // (generics require concrete types, so we branch here).
