@@ -214,14 +214,18 @@ async fn get_or_create_user_policy(
     user_id: Uuid,
     user_identifier: String,
 ) -> UserPolicyRecord {
-    let policy = {
+    let (policy, created) = {
         let mut policies = state.user_policies.write().await;
-        policies
+        let is_new = !policies.contains_key(&user_id);
+        let p = policies
             .entry(user_id)
             .or_insert_with(|| default_user_policy(user_id, user_identifier))
-            .clone()
+            .clone();
+        (p, is_new)
     };
-    persist_webhook_state(state).await;
+    if created {
+        persist_webhook_state(state).await;
+    }
     policy
 }
 
@@ -662,32 +666,34 @@ async fn emit_memory_webhook_event(
 
     let now = chrono::Utc::now();
     let mut queued_deliveries: Vec<(Uuid, Uuid)> = Vec::new();
-    let mut event_map = state.memory_webhook_events.write().await;
-    for webhook in subscribed_hooks {
-        let row = MemoryWebhookEventRecord {
-            id: Uuid::now_v7(),
-            webhook_id: webhook.id,
-            event_type,
-            user_id,
-            payload: payload.clone(),
-            created_at: now,
-            attempts: 0,
-            delivered: false,
-            dead_letter: false,
-            request_id: request_id.clone(),
-            delivered_at: None,
-            last_error: None,
-        };
-        let event_id = row.id;
-        let rows = event_map.entry(webhook.id).or_default();
-        rows.push(row);
-        let max_events = state.webhook_delivery.max_events_per_webhook.max(1);
-        if rows.len() > max_events {
-            let overflow = rows.len() - max_events;
-            rows.drain(0..overflow);
+    {
+        let mut event_map = state.memory_webhook_events.write().await;
+        for webhook in &subscribed_hooks {
+            let row = MemoryWebhookEventRecord {
+                id: Uuid::now_v7(),
+                webhook_id: webhook.id,
+                event_type,
+                user_id,
+                payload: payload.clone(),
+                created_at: now,
+                attempts: 0,
+                delivered: false,
+                dead_letter: false,
+                request_id: request_id.clone(),
+                delivered_at: None,
+                last_error: None,
+            };
+            let event_id = row.id;
+            let rows = event_map.entry(webhook.id).or_default();
+            rows.push(row);
+            let max_events = state.webhook_delivery.max_events_per_webhook.max(1);
+            if rows.len() > max_events {
+                let overflow = rows.len() - max_events;
+                rows.drain(0..overflow);
+            }
+            queued_deliveries.push((webhook.id, event_id));
         }
-        queued_deliveries.push((webhook.id, event_id));
-    }
+    } // write lock dropped here, before persist_webhook_state acquires read lock
 
     persist_webhook_state(state).await;
 
