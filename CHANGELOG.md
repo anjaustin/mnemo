@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Proactive `fact_added` / `fact_superseded` webhook events** (`mnemo-ingest`, `mnemo-core`, `mnemo-server`): fact mutation events now fire proactively from the ingestion pipeline via a `tokio::mpsc` channel, rather than only reactively when a client calls `changes_since`. All four webhook event types (`head_advanced`, `conflict_detected`, `fact_added`, `fact_superseded`) are now emitted as mutations occur.
+
+### Fixed
+
+- **Documentation audit** — 8 undocumented API endpoints added to `docs/API.md` (operator incidents, evidence export bundles, LLM span tracing, memory digest). 5 missing environment variables added to README configuration table (`MNEMO_CONFIG`, `MNEMO_SLEEP_ENABLED`, `MNEMO_SLEEP_IDLE_WINDOW_SECONDS`, `MNEMO_REQUIRE_TLS`, `MNEMO_AUDIT_SIGNING_SECRET`). `.env.example` expanded from 7 to 35+ variables. Dead config removed from `default.toml` (`grpc_port`, `jwt_secret`). SDK README corrections (Python `ChangesSinceResult` field names, TypeScript `graphShortestPath` added). `CONTRIBUTING.md` updated to reflect shipped features.
+
 ## [0.3.7] — 2026-03-06
 
 ### Added

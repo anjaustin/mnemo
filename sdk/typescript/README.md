@@ -102,6 +102,10 @@ const neighbors = await mnemo.graphNeighbors('alice', '<entity-uuid>', { depth: 
 // Community detection
 const communities = await mnemo.graphCommunity('alice');
 console.log(`${communities.community_count} communities`);
+
+// Shortest path between two entities
+const path = await mnemo.graphShortestPath('alice', '<entity-a>', '<entity-b>', { maxDepth: 5 });
+console.log(`Path length: ${path.path.length}, hops: ${path.hop_count}`);
 ```
 
 ## Memory Digest (sleep-time compute)

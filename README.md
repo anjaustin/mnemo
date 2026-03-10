@@ -602,8 +602,8 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | Env Var | Description | Default |
 |---------|-------------|---------|
 | `MNEMO_LLM_API_KEY` | API key for entity extraction | (none) |
-| `MNEMO_LLM_PROVIDER` | `anthropic`, `openai`, `ollama`, `liquid` | `anthropic` |
-| `MNEMO_LLM_MODEL` | Model for extraction | `claude-sonnet-4-20250514` |
+| `MNEMO_LLM_PROVIDER` | `anthropic`, `openai`, `ollama`, `liquid` | `anthropic` \* |
+| `MNEMO_LLM_MODEL` | Model for extraction | `claude-sonnet-4-20250514` \* |
 | `MNEMO_EMBEDDING_PROVIDER` | `openai`-compatible remote embeddings or `local` fastembed | `openai` |
 | `MNEMO_EMBEDDING_API_KEY` | Embedding API key | (none) |
 | `MNEMO_AUTH_ENABLED` | Require API key auth (`true`/`false`) | `false` |
@@ -632,6 +632,11 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_EMBEDDING_MODEL` | Model for embedding generation | `text-embedding-3-small` |
 | `MNEMO_EMBEDDING_BASE_URL` | Base URL for embedding provider | Provider default |
 | `MNEMO_EMBEDDING_DIMENSIONS` | Embedding vector dimensions | `1536` |
+| `MNEMO_CONFIG` | Path to custom TOML config file (overrides `config/default.toml`) | (none) |
+| `MNEMO_SLEEP_ENABLED` | Enable background sleep-time compute (digest generation, re-ranking) | `true` |
+| `MNEMO_SLEEP_IDLE_WINDOW_SECONDS` | Seconds of user inactivity before triggering background tasks | `300` |
+| `MNEMO_REQUIRE_TLS` | Reject non-HTTPS webhook targets | `false` |
+| `MNEMO_AUDIT_SIGNING_SECRET` | HMAC secret for signing audit export responses (SOC 2 compliance) | (none) |
 
 For cloud targets that do not have a managed embedding API available, Mnemo also supports a self-hosted embedding path:
 
@@ -639,6 +644,8 @@ For cloud targets that do not have a managed embedding API available, Mnemo also
 - `MNEMO_EMBEDDING_MODEL=AllMiniLML6V2`
 - `MNEMO_EMBEDDING_DIMENSIONS=384`
 - `MNEMO_QDRANT_PREFIX=<provider-specific-prefix>` to avoid collection-dimension clashes during migrations or side-by-side rollouts
+
+\* Defaults shown are from `config/default.toml`. Without a config file, the compiled-in defaults are `openai` / `gpt-4o-mini`. In practice, you should always set these env vars explicitly or load the provided `default.toml` via `MNEMO_CONFIG`.
 
 Webhook outbound delivery defaults are configured in `config/default.toml` and can be overridden with env vars:
 

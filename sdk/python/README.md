@@ -165,7 +165,8 @@ ctx = client.context_head("alice", "What is Alice working on?")
 
 # Changes since a timestamp
 changes = client.changes_since("alice", from_dt="2024-11-01T00:00:00Z", to_dt="2024-12-01T00:00:00Z")
-# changes: ChangesSinceResult(facts_added, facts_superseded, entities_updated, from_dt, to_dt)
+# changes: ChangesSinceResult(added_facts, superseded_facts, confidence_deltas,
+#           head_changes, added_episodes, summary, from_dt, to_dt, request_id)
 
 # Conflict radar
 conflicts = client.conflict_radar("alice")

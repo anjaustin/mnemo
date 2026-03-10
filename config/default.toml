@@ -6,7 +6,6 @@
 [server]
 host = "0.0.0.0"
 port = 8080
-grpc_port = 50051
 # Number of worker threads. 0 = number of CPU cores.
 workers = 0
 
@@ -14,8 +13,6 @@ workers = 0
 enabled = false
 # API keys for authentication. Set via MNEMO_AUTH_API_KEYS env var in production.
 api_keys = []
-# Optional JWT secret for token-based auth.
-jwt_secret = ""
 
 [redis]
 url = "redis://localhost:6379"

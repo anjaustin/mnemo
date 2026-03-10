@@ -154,17 +154,18 @@ test: add integration tests for Redis entity dedup
 
 These are the highest-impact areas for contributions right now:
 
-- **Progressive summarization**: Auto-summarize long sessions to stay within token budgets
 - **Benchmarks**: DMR and LongMemEval benchmark implementations
-- **TypeScript SDK**: Client library mirroring the Python SDK surface
 - **Helm chart**: Kubernetes deployment (architecture is stateless — ready to scale)
 - **Documentation**: Tutorials, worked examples, domain-specific integration guides
+- **OpenTelemetry integration**: Wire up the `observability.otel_*` config to actual tracing export
 
 Already shipped and no longer needed:
 - ~~RediSearch full-text search integration~~ — shipped in v0.2
 - ~~Python SDK~~ — shipped in v0.3, full async + sync coverage
 - ~~LangChain and LlamaIndex adapters~~ — shipped in v0.3
-- ~~Integration tests with real Redis and Qdrant~~ — 91 tests in `tests/memory_api.rs`
+- ~~Integration tests with real Redis and Qdrant~~ — 118 tests in `tests/memory_api.rs`
+- ~~TypeScript SDK~~ — shipped in v0.3, with Vercel AI adapter
+- ~~Progressive summarization~~ — shipped, configurable via `MNEMO_SESSION_SUMMARY_THRESHOLD`
 
 ---
 

@@ -1764,6 +1764,339 @@ Check whether a namespace exists.
 
 ---
 
+## Operator Incidents
+
+### `GET /api/v1/ops/incidents`
+
+Returns active incident cards for the operator dashboard. Each incident represents an actionable operational issue (dead-letter backlog, circuit-open webhooks, server errors, policy violations).
+
+Query params:
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `window_seconds` | integer | `300` | Lookback window for time-bounded checks. Clamped to `[1, 86400]`. |
+
+```json
+// Response 200
+{
+  "window_seconds": 300,
+  "total_active": 2,
+  "incidents": [
+    {
+      "id": "dead-letter-backlog",
+      "kind": "dead_letter_spike",
+      "severity": "high",
+      "title": "Dead-letter backlog: 12 event(s)",
+      "summary": "Webhook delivery has 12 dead-letter event(s) awaiting operator action.",
+      "action_label": "Review dead-letter queue",
+      "action_href": "/_/webhooks?filter=dead-letter",
+      "resource_id": null,
+      "resource_label": null,
+      "request_id": null,
+      "opened_at": null
+    }
+  ]
+}
+```
+
+Incident kinds:
+
+| `kind` | `severity` | Trigger |
+|--------|-----------|---------|
+| `dead_letter_spike` | `high` (>=10) or `medium` | Dead-letter backlog > 0 |
+| `pending_backlog` | `medium` | Pending webhook events >= 25 |
+| `server_errors` | `high` | HTTP 5xx responses > 0 (process lifetime) |
+| `policy_violation` | `medium` | Governance violations within the window |
+| `circuit_open` | `high` | Webhook circuit breaker is open |
+
+Incidents are sorted by severity (high first), then recency.
+
+---
+
+## Evidence Export Bundles
+
+Evidence export endpoints return self-contained JSON bundles suitable for SOC 2 auditors, SIEM ingestion, or incident post-mortems. Each bundle wraps the payload in a standard `EvidenceBundleEnvelope` with `kind`, `exported_at`, and `source_path` metadata.
+
+### `GET /api/v1/evidence/webhooks/:id/export`
+
+Export an evidence bundle for a webhook subscription, including subscription config, delivery stats, dead-letter queue, and audit trail.
+
+Path params:
+- `id` — UUID of the webhook subscription
+
+Query params:
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `focus` | string | (none) | Free-text annotation embedded in the bundle (e.g. "investigating delivery failures") |
+| `source_path` | string | `/_/webhooks/{id}` | Override the envelope `source_path` field |
+
+```json
+// Response 200
+{
+  "kind": "webhook_evidence_bundle",
+  "exported_at": "2026-03-10T12:00:00Z",
+  "source_path": "/_/webhooks/019...",
+  "payload": {
+    "webhook": { /* MemoryWebhookSubscription object */ },
+    "stats": {
+      "webhook_id": "...",
+      "total_events": 100,
+      "delivered_events": 90,
+      "pending_events": 5,
+      "dead_letter_events": 5,
+      "failed_events": 8,
+      "recent_failures": 2,
+      "circuit_open": false,
+      "circuit_open_until": null,
+      "rate_limit_per_minute": 60
+    },
+    "dead_letters": {
+      "webhook_id": "...",
+      "count": 5,
+      "events": [ /* up to 50 MemoryWebhookEventRecord objects */ ]
+    },
+    "audit": {
+      "webhook_id": "...",
+      "count": 30,
+      "audit": [ /* up to 50 MemoryWebhookAuditRecord objects, newest-first */ ]
+    },
+    "focus": "investigating delivery failures"
+  }
+}
+```
+
+| Status | Condition |
+|--------|-----------|
+| 200 | Success |
+| 404 | Webhook UUID not found |
+
+### `GET /api/v1/evidence/governance/:user/export`
+
+Export an evidence bundle for a user's governance posture, including their active policy, recent violations, and full audit trail.
+
+Path params:
+- `user` — User UUID or `external_id`
+
+Query params:
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `focus` | string | (none) | Free-text annotation |
+| `source_path` | string | `/_/governance/{user_uuid}` | Override envelope `source_path` |
+| `violations_from` | RFC3339 datetime | `now - 24h` | Start of violations window |
+| `violations_to` | RFC3339 datetime | `now` | End of violations window |
+| `limit` | integer | `50` | Max audit/violation rows. Clamped to `[1, 200]`. |
+
+```json
+// Response 200
+{
+  "kind": "governance_evidence_bundle",
+  "exported_at": "2026-03-10T12:00:00Z",
+  "source_path": "/_/governance/019...",
+  "payload": {
+    "user": "alice",
+    "policy": { /* GovernancePolicy object */ },
+    "violations": [ /* GovernanceAuditRecord objects within window */ ],
+    "audit": [ /* All GovernanceAuditRecord objects for user, newest-first */ ],
+    "violations_window": {
+      "from": "2026-03-09T12:00:00Z",
+      "to": "2026-03-10T12:00:00Z"
+    },
+    "focus": null
+  }
+}
+```
+
+| Status | Condition |
+|--------|-----------|
+| 200 | Success |
+| 400 | `violations_to` must be after `violations_from` |
+| 404 | User not found |
+
+### `GET /api/v1/evidence/traces/:request_id/export`
+
+Export an evidence bundle for a cross-pipeline request trace, including matched episodes, webhook events, and audit records.
+
+Path params:
+- `request_id` — The `x-mnemo-request-id` value to trace
+
+Query params:
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `from` | RFC3339 datetime | `now - 30d` | Start of time window |
+| `to` | RFC3339 datetime | `now` | End of time window |
+| `limit` | integer | `100` | Max matches per category. Clamped to `[1, 500]`. |
+| `include_episodes` | bool | `true` | Include matched episodes |
+| `include_webhook_events` | bool | `true` | Include matched webhook events |
+| `include_webhook_audit` | bool | `true` | Include matched webhook audit records |
+| `include_governance_audit` | bool | `true` | Include matched governance audit records |
+| `user` | string | (none) | Optional user UUID/external_id filter |
+| `focus` | string | (none) | Free-text annotation |
+| `source_path` | string | `/_/traces/{request_id}` | Override envelope `source_path` |
+
+```json
+// Response 200
+{
+  "kind": "trace_evidence_bundle",
+  "exported_at": "2026-03-10T12:00:00Z",
+  "source_path": "/_/traces/req-abc-123",
+  "payload": {
+    "request_id": "req-abc-123",
+    "focus": null,
+    "trace": {
+      "request_id": "req-abc-123",
+      "matched_episodes": [ /* EpisodeMatch objects */ ],
+      "matched_webhook_events": [ /* MemoryWebhookEventRecord objects */ ],
+      "matched_webhook_audit": [ /* MemoryWebhookAuditRecord objects */ ],
+      "matched_governance_audit": [ /* GovernanceAuditRecord objects */ ],
+      "summary": {
+        "episode_matches": 2,
+        "webhook_event_matches": 1,
+        "webhook_audit_matches": 0,
+        "governance_audit_matches": 0,
+        "filters": { "from": "...", "to": "...", "limit": 100 }
+      }
+    }
+  }
+}
+```
+
+| Status | Condition |
+|--------|-----------|
+| 200 | Success |
+| 400 | `to` must be after `from`, or `request_id` is blank |
+
+---
+
+## LLM Span Tracing
+
+LLM span endpoints expose per-request and per-user LLM call telemetry (provider, model, token counts, latency). Spans are persisted to Redis and also held in a 500-span in-memory ring buffer as fallback.
+
+### `GET /api/v1/spans/request/:request_id`
+
+List all LLM spans associated with a request correlation ID.
+
+Path params:
+- `request_id` — The `x-mnemo-request-id` value
+
+```json
+// Response 200
+{
+  "request_id": "req-abc-123",
+  "spans": [
+    {
+      "id": "...",
+      "request_id": "req-abc-123",
+      "user_id": "...",
+      "provider": "anthropic",
+      "model": "claude-haiku-4-20250514",
+      "operation": "extract",
+      "prompt_tokens": 1200,
+      "completion_tokens": 300,
+      "total_tokens": 1500,
+      "latency_ms": 850,
+      "success": true,
+      "error": null,
+      "started_at": "2026-03-10T11:59:59Z",
+      "finished_at": "2026-03-10T12:00:00Z"
+    }
+  ],
+  "count": 1,
+  "total_tokens": 1500,
+  "total_latency_ms": 850
+}
+```
+
+Always returns 200. If no spans match, `spans` is an empty array.
+
+### `GET /api/v1/spans/user/:user_id`
+
+List recent LLM spans for a user, most-recent first.
+
+Path params:
+- `user_id` — UUID of the user
+
+Query params:
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | integer | `100` | Max spans to return. Clamped to `[1, 1000]`. |
+
+```json
+// Response 200
+{
+  "user_id": "019...",
+  "spans": [ /* LlmSpan objects, most-recent first */ ],
+  "count": 15,
+  "total_tokens": 45000,
+  "total_latency_ms": 12300
+}
+```
+
+Always returns 200. If no spans match, `spans` is an empty array.
+
+---
+
+## Memory Digest
+
+Memory digests are LLM-generated summaries of a user's knowledge graph — a compact overview of entities, relationships, and dominant topics. Digests are generated during sleep-time idle windows or on-demand via the refresh endpoint.
+
+### `GET /api/v1/memory/:user/digest`
+
+Retrieve the cached memory digest for a user.
+
+Path params:
+- `user` — User UUID or `external_id`
+
+```json
+// Response 200
+{
+  "user_id": "019...",
+  "summary": "This person is a Rust developer interested in AI agents, knowledge graphs, and ...",
+  "entity_count": 42,
+  "edge_count": 87,
+  "dominant_topics": ["rust", "knowledge_graphs", "ai_agents"],
+  "generated_at": "2026-03-10T08:00:00Z",
+  "model": "claude-haiku-4-20250514"
+}
+```
+
+| Status | Condition |
+|--------|-----------|
+| 200 | Success |
+| 404 | User not found, or no digest has been generated yet |
+
+### `POST /api/v1/memory/:user/digest`
+
+Force-regenerate the memory digest using the configured LLM. No request body required.
+
+Path params:
+- `user` — User UUID or `external_id`
+
+```json
+// Response 200
+{
+  "user_id": "019...",
+  "summary": "This person is a Rust developer interested in AI agents...",
+  "entity_count": 42,
+  "edge_count": 87,
+  "dominant_topics": ["rust", "knowledge_graphs", "ai_agents"],
+  "generated_at": "2026-03-10T12:00:00Z",
+  "model": "claude-haiku-4-20250514"
+}
+```
+
+| Status | Condition |
+|--------|-----------|
+| 200 | Success |
+| 400 | LLM provider not configured, or no entities exist for user |
+| 404 | User not found |
+| 502 | LLM provider error |
+
+---
+
 ## Errors
 
 All errors follow a consistent format:
