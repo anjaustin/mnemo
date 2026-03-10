@@ -166,6 +166,10 @@ pub struct ServerMetrics {
     pub webhook_replay_requests_total: AtomicU64,
     pub policy_update_total: AtomicU64,
     pub policy_violation_total: AtomicU64,
+    pub agent_identity_reads_total: AtomicU64,
+    pub agent_identity_updates_total: AtomicU64,
+    pub agent_experience_events_total: AtomicU64,
+    pub agent_promotion_proposals_total: AtomicU64,
 }
 
 /// Type-erased LLM handle that is `Clone + Send + Sync`.

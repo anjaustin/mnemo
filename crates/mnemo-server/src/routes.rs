@@ -1273,6 +1273,22 @@ async fn metrics(
         .load(Ordering::Relaxed);
     let policy_update_total = state.metrics.policy_update_total.load(Ordering::Relaxed);
     let policy_violation_total = state.metrics.policy_violation_total.load(Ordering::Relaxed);
+    let agent_identity_reads_total = state
+        .metrics
+        .agent_identity_reads_total
+        .load(Ordering::Relaxed);
+    let agent_identity_updates_total = state
+        .metrics
+        .agent_identity_updates_total
+        .load(Ordering::Relaxed);
+    let agent_experience_events_total = state
+        .metrics
+        .agent_experience_events_total
+        .load(Ordering::Relaxed);
+    let agent_promotion_proposals_total = state
+        .metrics
+        .agent_promotion_proposals_total
+        .load(Ordering::Relaxed);
 
     let (webhook_events_total, webhook_events_pending, webhook_events_dead_letter) = {
         let events_map = state.memory_webhook_events.read().await;
@@ -1349,8 +1365,25 @@ mnemo_webhook_events_dead_letter {}\n",
 mnemo_policy_update_total {}\n\
 # HELP mnemo_policy_violation_total Policy violations blocked by server\n\
 # TYPE mnemo_policy_violation_total counter\n\
-mnemo_policy_violation_total {}\n",
-        policy_update_total, policy_violation_total
+mnemo_policy_violation_total {}\n\
+# HELP mnemo_agent_identity_reads_total Agent identity read operations\n\
+# TYPE mnemo_agent_identity_reads_total counter\n\
+mnemo_agent_identity_reads_total {}\n\
+# HELP mnemo_agent_identity_updates_total Agent identity update operations\n\
+# TYPE mnemo_agent_identity_updates_total counter\n\
+mnemo_agent_identity_updates_total {}\n\
+# HELP mnemo_agent_experience_events_total Agent experience events created\n\
+# TYPE mnemo_agent_experience_events_total counter\n\
+mnemo_agent_experience_events_total {}\n\
+# HELP mnemo_agent_promotion_proposals_total Agent promotion proposals created\n\
+# TYPE mnemo_agent_promotion_proposals_total counter\n\
+mnemo_agent_promotion_proposals_total {}\n",
+        policy_update_total,
+        policy_violation_total,
+        agent_identity_reads_total,
+        agent_identity_updates_total,
+        agent_experience_events_total,
+        agent_promotion_proposals_total,
     ));
 
     (
@@ -1385,6 +1418,22 @@ async fn get_ops_summary(
         .load(Ordering::Relaxed);
     let policy_update_total = state.metrics.policy_update_total.load(Ordering::Relaxed);
     let policy_violation_total = state.metrics.policy_violation_total.load(Ordering::Relaxed);
+    let agent_identity_reads_total = state
+        .metrics
+        .agent_identity_reads_total
+        .load(Ordering::Relaxed);
+    let agent_identity_updates_total = state
+        .metrics
+        .agent_identity_updates_total
+        .load(Ordering::Relaxed);
+    let agent_experience_events_total = state
+        .metrics
+        .agent_experience_events_total
+        .load(Ordering::Relaxed);
+    let agent_promotion_proposals_total = state
+        .metrics
+        .agent_promotion_proposals_total
+        .load(Ordering::Relaxed);
 
     let active_webhooks = {
         let hooks = state.memory_webhooks.read().await;
@@ -1433,6 +1482,10 @@ async fn get_ops_summary(
         webhook_dead_letter_total,
         policy_update_total,
         policy_violation_total,
+        agent_identity_reads_total,
+        agent_identity_updates_total,
+        agent_experience_events_total,
+        agent_promotion_proposals_total,
         active_webhooks,
         dead_letter_backlog,
         pending_webhook_events,
@@ -2968,6 +3021,10 @@ struct OpsSummaryResponse {
     webhook_dead_letter_total: u64,
     policy_update_total: u64,
     policy_violation_total: u64,
+    agent_identity_reads_total: u64,
+    agent_identity_updates_total: u64,
+    agent_experience_events_total: u64,
+    agent_promotion_proposals_total: u64,
     active_webhooks: usize,
     dead_letter_backlog: usize,
     pending_webhook_events: usize,
@@ -6114,6 +6171,10 @@ async fn get_agent_identity(
 ) -> Result<Json<AgentIdentityProfile>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
     let identity = state.state_store.get_agent_identity(&agent_id).await?;
+    state
+        .metrics
+        .agent_identity_reads_total
+        .fetch_add(1, Ordering::Relaxed);
     Ok(Json(identity))
 }
 
@@ -6128,6 +6189,10 @@ async fn update_agent_identity(
         .state_store
         .update_agent_identity(&agent_id, req)
         .await?;
+    state
+        .metrics
+        .agent_identity_updates_total
+        .fetch_add(1, Ordering::Relaxed);
     Ok(Json(identity))
 }
 
@@ -6198,6 +6263,10 @@ async fn add_agent_experience(
         .state_store
         .add_experience_event(&agent_id, req)
         .await?;
+    state
+        .metrics
+        .agent_experience_events_total
+        .fetch_add(1, Ordering::Relaxed);
     Ok((StatusCode::CREATED, Json(event)))
 }
 
@@ -6243,6 +6312,10 @@ async fn create_promotion_proposal(
         .state_store
         .create_promotion_proposal(&agent_id, req)
         .await?;
+    state
+        .metrics
+        .agent_promotion_proposals_total
+        .fetch_add(1, Ordering::Relaxed);
     Ok((StatusCode::CREATED, Json(proposal)))
 }
 
@@ -6293,6 +6366,10 @@ async fn approve_promotion_proposal(
         .state_store
         .update_promotion_proposal(&proposal)
         .await?;
+    state
+        .metrics
+        .agent_identity_updates_total
+        .fetch_add(1, Ordering::Relaxed);
     Ok(Json(proposal))
 }
 
@@ -6411,7 +6488,7 @@ async fn get_agent_context(
 
     let experience_weight_sum: f32 = experiences.iter().map(effective_experience_weight).sum();
 
-    Ok(Json(AgentContextResponse {
+    let response = AgentContextResponse {
         identity_version: identity.version,
         experience_events_used: experiences.len() as u32,
         experience_weight_sum,
@@ -6424,7 +6501,12 @@ async fn get_agent_context(
         }),
         context,
         identity,
-    }))
+    };
+    state
+        .metrics
+        .agent_identity_reads_total
+        .fetch_add(1, Ordering::Relaxed);
+    Ok(Json(response))
 }
 
 fn normalize_agent_id(agent_id: &str) -> Result<String, AppError> {
