@@ -31,7 +31,7 @@ Verify it's running:
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"ok","version":"0.3.7"}
+# {"status":"ok","version":"0.4.0"}
 ```
 
 ## 2. Install the Python SDK

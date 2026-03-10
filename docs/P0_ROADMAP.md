@@ -256,7 +256,7 @@ Published, installable, documented SDKs that let developers integrate Mnemo in o
 
 ### Current state
 - `sdk/python/mnemo/` exists with sync client, async client, LangChain extension, LlamaIndex extension, and tests.
-- Package name: `mnemo-client`, version `0.3.7`.
+- Package name: `mnemo-client`, version `0.4.0`.
 - Not published to PyPI. No `pip install mnemo-client` works today.
 - No TypeScript/JavaScript SDK exists anywhere in the repo.
 

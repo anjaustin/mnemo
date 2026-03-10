@@ -89,7 +89,7 @@ Render provides a public HTTPS URL for the `mnemo` web service:
 
 ```bash
 curl https://mnemo-xxxx.onrender.com/health
-# Expected: {"status":"ok","version":"0.3.7"}
+# Expected: {"status":"ok","version":"0.4.0"}
 ```
 
 ---

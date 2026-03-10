@@ -40,7 +40,7 @@ Common issues and solutions when running Mnemo.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Docker image won't pull | Wrong image reference | Use `ghcr.io/anjaustin/mnemo/mnemo-server:latest` or a specific version tag like `:0.3.7`. |
+| Docker image won't pull | Wrong image reference | Use `ghcr.io/anjaustin/mnemo/mnemo-server:latest` or a specific version tag like `:0.4.0`. |
 | Qdrant out of memory | Large collection with many vectors | Increase Qdrant memory or use `MNEMO_QDRANT_PREFIX` to namespace collections. Consider switching to on-disk storage mode. |
 | Redis memory growing | Many webhook events or spans | Webhook events are capped at `max_events_per_webhook` (default: 1000). LLM spans have a 7-day TTL. Check `redis-cli info memory`. |
 | Health check fails after deploy | Services not ready yet | Redis and Qdrant may take 10-30 seconds to start. Most deploy guides include a readiness wait. |

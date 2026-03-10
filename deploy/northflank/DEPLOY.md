@@ -76,7 +76,7 @@ Northflank provides a public URL for the `mnemo-server` service. Test it:
 
 ```bash
 curl https://mnemo-server-xxxx.northflank.app/health
-# Expected: {"status":"ok","version":"0.3.7"}
+# Expected: {"status":"ok","version":"0.4.0"}
 
 curl -s -X POST https://mnemo-server-xxxx.northflank.app/api/v1/memory \
   -H "Content-Type: application/json" \

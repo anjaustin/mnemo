@@ -201,7 +201,7 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release workflow expectation: bump `Cargo.toml` (`workspace.package.version`) and `sdk/python/pyproject.toml` together before tagging.
-- Current in-repo development version: `0.3.7`.
+- Current in-repo development version: `0.4.0`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
@@ -698,7 +698,7 @@ See `docs/DEPLOYMENT_STATUS.md` for the current live fleet matrix, provider quir
 - Raw Vector API (6 endpoints — upsert, search, delete, count, namespace lifecycle) ✅
 - Session Messages API (list, clear, delete-by-index) ✅
 - AnythingLLM vector DB provider (`integrations/anythingllm/`) ✅
-- Python SDK full rebuild: sync + async clients, 45 methods (18 new async parity methods added in v0.3.7), full API coverage ✅
+- Python SDK full rebuild: sync + async clients, 45 methods (18 new async parity methods added in v0.3), full API coverage ✅
 - LangChain `MnemoChatMessageHistory` drop-in adapter ✅
 - LlamaIndex `MnemoChatStore` drop-in adapter (all 7 abstract methods) ✅
 - SDK falsification test suite: 83/83 assertions pass ✅ (40 async + 43 sync)
@@ -712,7 +712,7 @@ See `docs/OPERATOR_UX_PRD.md`, `docs/SDK_INTEGRATIONS_PRD.md`, and `docs/OPERATO
 - Phase 1: 59 new tests — graph engine, LLM providers, Qdrant store, async SDK, webhook persistence ✅
 - Phase 2: 44 new tests — config parsing (24), session messages (7), raw vectors (1), auth integration (6), request-id/API (5) ✅
 - Phase 3: 6 new tests — rate limiting, circuit breaker, RRF reranker, credential scan script, deploy artifact validation script ✅
-- 109 new tests total, ~244 across the project (includes 18 new async parity tests added in v0.3.7)
+- 109 new tests total, ~293 across the project (includes 18 new async parity tests added in v0.3)
 - 3 bugs fixed (Qdrant TOCTOU race, `skip_compatibility_check`, `.gitignore` gaps)
 - 3 new scripts (`credential_scan.sh`, `deploy_artifact_validation.sh`, `docker_build_test.sh`)
 

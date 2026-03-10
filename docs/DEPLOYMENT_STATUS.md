@@ -6,14 +6,14 @@ Current production-style deployment baseline for Phase 2 cloud falsification.
 
 | Platform | URL | Version | Image | Smoke |
 |---|---|---|---|---|
-| Render | `https://mnemo-m70w.onrender.com` | `0.3.7` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | `9/9` |
-| Northflank | `https://http--mnemo-server--blcxq2rhfzbr.code.run` | `0.3.7` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | `9/9` |
-| Railway | `https://mnemo-production-be62.up.railway.app` | `0.3.7` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | `9/9` |
-| DigitalOcean | `http://157.230.213.155:8080` | `0.3.7` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | `9/9` |
-| Vultr | `http://173.199.127.234:8080` | `0.3.7` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | `9/9` |
-| AWS | `http://3.238.130.59:8080` | `0.3.7` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | `9/9` |
-| GCP | `http://34.133.58.28:8080` | `0.3.7` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | `9/9` |
-| Linode | `http://172.232.7.137:8080` | `0.3.7` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | `9/9` |
+| Render | `https://mnemo-m70w.onrender.com` | `0.4.0` | `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` | `9/9` |
+| Northflank | `https://http--mnemo-server--blcxq2rhfzbr.code.run` | `0.4.0` | `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` | `9/9` |
+| Railway | `https://mnemo-production-be62.up.railway.app` | `0.4.0` | `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` | `9/9` |
+| DigitalOcean | `http://157.230.213.155:8080` | `0.4.0` | `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` | `9/9` |
+| Vultr | `http://173.199.127.234:8080` | `0.4.0` | `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` | `9/9` |
+| AWS | `http://3.238.130.59:8080` | `0.4.0` | `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` | `9/9` |
+| GCP | `http://34.133.58.28:8080` | `0.4.0` | `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` | `9/9` |
+| Linode | `http://172.232.7.137:8080` | `0.4.0` | `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` | `9/9` |
 
 ## Current Deployment Profile
 
@@ -43,8 +43,8 @@ Each provider uses its own `MNEMO_QDRANT_PREFIX` to avoid vector-dimension or co
 
 The live fleet was originally validated on a temporary `ttl.sh` image. All deploy guides and IaC templates have been updated to reference the durable GHCR images:
 
-- `ghcr.io/anjaustin/mnemo/mnemo-server:0.3.7`
-- `ghcr.io/anjaustin/mnemo/mnemo-server:0.3`
+- `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0`
+- `ghcr.io/anjaustin/mnemo/mnemo-server:0.4`
 - `ghcr.io/anjaustin/mnemo/mnemo-server:latest`
 
 The fleet status table above reflects the image used at original validation time. New deployments should use the GHCR images above.

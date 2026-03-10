@@ -62,7 +62,7 @@ ssh root@$IP 'tail -f /var/log/mnemo-init.log'
 
 # Health check
 curl http://$IP:8080/health
-# Expected: {"status":"ok","version":"0.3.7"}
+# Expected: {"status":"ok","version":"0.4.0"}
 
 # Write test
 curl -s -X POST http://$IP:8080/api/v1/memory \

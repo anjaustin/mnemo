@@ -18,7 +18,7 @@ Returns server status and version. Also available at `/healthz` for Kubernetes-s
 // Response 200
 {
   "status": "ok",
-  "version": "0.3.7"
+  "version": "0.4.0"
 }
 ```
 

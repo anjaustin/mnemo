@@ -93,7 +93,7 @@ IP=$(terraform output -raw instance_ip)
 
 # Health check (wait ~3 min after apply)
 curl http://$IP:8080/health
-# Expected: {"status":"ok","version":"0.3.7"}
+# Expected: {"status":"ok","version":"0.4.0"}
 
 If you already have shell access to the host, you can also update the stack in place without a working Linode API token by replacing the `mnemo` image in the compose file and keeping `/data/redis` and `/data/qdrant` mounted.
 

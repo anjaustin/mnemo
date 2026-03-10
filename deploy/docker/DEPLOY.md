@@ -27,7 +27,7 @@ Required variables to review:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `MNEMO_VERSION` | `latest` | Pin to `0.3.7` (or a newer release) for reproducibility |
+| `MNEMO_VERSION` | `latest` | Pin to `0.4.0` (or a newer release) for reproducibility |
 | `MNEMO_SERVER_PORT` | `8080` | Host port Mnemo listens on |
 | `MNEMO_LLM_API_KEY` | _(empty)_ | OpenAI/Anthropic key; leave blank to skip enrichment |
 | `MNEMO_AUTH_ENABLED` | `false` | Set `true` + `MNEMO_AUTH_API_KEYS` before public exposure |
@@ -43,7 +43,7 @@ docker compose -f docker-compose.prod.yml up -d
 ```bash
 # Health check
 curl http://localhost:8080/health
-# Expected: {"status":"ok","version":"0.3.7"}
+# Expected: {"status":"ok","version":"0.4.0"}
 
 # Write a memory
 curl -s -X POST http://localhost:8080/api/v1/memory \
