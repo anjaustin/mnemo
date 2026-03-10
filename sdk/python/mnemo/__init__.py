@@ -10,12 +10,16 @@ from ._errors import (
     MnemoValidationError,
 )
 from ._models import (
+    AgentContextResult,
+    AgentIdentityAuditResult,
+    AgentIdentityResult,
     AuditRecord,
     CausalRecallResult,
     ChangesSinceResult,
     ConflictRadarResult,
     ContextResult,
     DeleteResult,
+    ExperienceEventResult,
     GraphCommunityResult,
     GraphEdge,
     GraphEdgesResult,
@@ -33,6 +37,7 @@ from ._models import (
     OpsSummaryResult,
     PolicyPreviewResult,
     PolicyResult,
+    PromotionProposalResult,
     RememberResult,
     ReplayResult,
     RetryResult,
@@ -101,4 +106,10 @@ __all__ = [
     "SpansResult",
     # Memory digest
     "MemoryDigestResult",
+    # Agent identity
+    "AgentIdentityResult",
+    "AgentIdentityAuditResult",
+    "ExperienceEventResult",
+    "PromotionProposalResult",
+    "AgentContextResult",
 ]

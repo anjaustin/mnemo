@@ -27,12 +27,16 @@ from mnemo._errors import (  # noqa: F401 — re-exported for convenience
     MnemoValidationError,
 )
 from mnemo._models import (
+    AgentContextResult,
+    AgentIdentityAuditResult,
+    AgentIdentityResult,
     AuditRecord,
     CausalRecallResult,
     ChangesSinceResult,
     ConflictRadarResult,
     ContextResult,
     DeleteResult,
+    ExperienceEventResult,
     GraphCommunityResult,
     GraphEdge,
     GraphEdgesResult,
@@ -48,6 +52,7 @@ from mnemo._models import (
     Message,
     MessagesResult,
     OpsSummaryResult,
+    PromotionProposalResult,
     PolicyPreviewResult,
     PolicyResult,
     RememberResult,
@@ -945,6 +950,243 @@ class Mnemo:
             request_id=rid,
         )
 
+    # ── Agent Identity ────────────────────────────────────────────────
+
+    def get_agent_identity(
+        self,
+        agent_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> AgentIdentityResult:
+        """Get the current identity profile for an agent.
+
+        Auto-creates a default profile on first access.
+        """
+        body, rid = self._req(
+            "GET", f"/api/v1/agents/{agent_id}/identity", request_id=request_id
+        )
+        return _parse_agent_identity(body, rid)
+
+    def update_agent_identity(
+        self,
+        agent_id: str,
+        core: dict[str, Any],
+        *,
+        request_id: str | None = None,
+    ) -> AgentIdentityResult:
+        """Replace the agent's identity core (versioned, audited).
+
+        Allowed top-level keys: mission, style, boundaries, capabilities, values, persona.
+        Keys containing user/session/episode data are rejected by the contamination guard.
+        """
+        body, rid = self._req(
+            "PUT",
+            f"/api/v1/agents/{agent_id}/identity",
+            {"core": core},
+            request_id=request_id,
+        )
+        return _parse_agent_identity(body, rid)
+
+    def list_agent_identity_versions(
+        self,
+        agent_id: str,
+        *,
+        limit: int = 20,
+        request_id: str | None = None,
+    ) -> list[AgentIdentityResult]:
+        """List historical identity versions (newest first)."""
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/agents/{agent_id}/identity/versions?limit={limit}",
+            request_id=request_id,
+        )
+        return [_parse_agent_identity(v, rid) for v in body.get("versions", [])]
+
+    def list_agent_identity_audit(
+        self,
+        agent_id: str,
+        *,
+        limit: int = 50,
+        request_id: str | None = None,
+    ) -> list[AgentIdentityAuditResult]:
+        """List audit trail for agent identity changes (newest first)."""
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/agents/{agent_id}/identity/audit?limit={limit}",
+            request_id=request_id,
+        )
+        return [_parse_agent_audit(a, rid) for a in body.get("audit", [])]
+
+    def rollback_agent_identity(
+        self,
+        agent_id: str,
+        target_version: int,
+        *,
+        reason: str | None = None,
+        request_id: str | None = None,
+    ) -> AgentIdentityResult:
+        """Rollback agent identity to a previous version.
+
+        Creates a new version with the target version's core.
+        """
+        payload: dict[str, Any] = {"target_version": target_version}
+        if reason is not None:
+            payload["reason"] = reason
+        body, rid = self._req(
+            "POST",
+            f"/api/v1/agents/{agent_id}/identity/rollback",
+            payload,
+            request_id=request_id,
+        )
+        return _parse_agent_identity(body, rid)
+
+    def add_agent_experience(
+        self,
+        agent_id: str,
+        *,
+        user_id: str,
+        session_id: str,
+        category: str,
+        signal: str,
+        confidence: float = 1.0,
+        weight: float = 0.5,
+        decay_half_life_days: int = 30,
+        evidence_episode_ids: list[str] | None = None,
+        request_id: str | None = None,
+    ) -> ExperienceEventResult:
+        """Record an experience event for an agent."""
+        payload: dict[str, Any] = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "category": category,
+            "signal": signal,
+            "confidence": confidence,
+            "weight": weight,
+            "decay_half_life_days": decay_half_life_days,
+        }
+        if evidence_episode_ids is not None:
+            payload["evidence_episode_ids"] = evidence_episode_ids
+        body, rid = self._req(
+            "POST",
+            f"/api/v1/agents/{agent_id}/experience",
+            payload,
+            request_id=request_id,
+        )
+        return _parse_experience_event(body, rid)
+
+    def create_promotion_proposal(
+        self,
+        agent_id: str,
+        *,
+        proposal: str,
+        candidate_core: dict[str, Any],
+        reason: str,
+        source_event_ids: list[str],
+        risk_level: str = "medium",
+        request_id: str | None = None,
+    ) -> PromotionProposalResult:
+        """Create a promotion proposal for agent identity evolution.
+
+        Requires >= 3 source_event_ids as evidence gating.
+        """
+        body, rid = self._req(
+            "POST",
+            f"/api/v1/agents/{agent_id}/promotions",
+            {
+                "proposal": proposal,
+                "candidate_core": candidate_core,
+                "reason": reason,
+                "source_event_ids": source_event_ids,
+                "risk_level": risk_level,
+            },
+            request_id=request_id,
+        )
+        return _parse_promotion_proposal(body, rid)
+
+    def list_promotion_proposals(
+        self,
+        agent_id: str,
+        *,
+        limit: int = 50,
+        request_id: str | None = None,
+    ) -> list[PromotionProposalResult]:
+        """List promotion proposals for an agent (newest first)."""
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/agents/{agent_id}/promotions?limit={limit}",
+            request_id=request_id,
+        )
+        return [_parse_promotion_proposal(p, rid) for p in body.get("proposals", [])]
+
+    def approve_promotion(
+        self,
+        agent_id: str,
+        proposal_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> PromotionProposalResult:
+        """Approve a pending promotion proposal.
+
+        Applies candidate_core to the agent identity (creates new version).
+        """
+        body, rid = self._req(
+            "POST",
+            f"/api/v1/agents/{agent_id}/promotions/{proposal_id}/approve",
+            {},
+            request_id=request_id,
+        )
+        return _parse_promotion_proposal(body, rid)
+
+    def reject_promotion(
+        self,
+        agent_id: str,
+        proposal_id: str,
+        *,
+        reason: str | None = None,
+        request_id: str | None = None,
+    ) -> PromotionProposalResult:
+        """Reject a pending promotion proposal."""
+        payload: dict[str, Any] = {}
+        if reason is not None:
+            payload["reason"] = reason
+        body, rid = self._req(
+            "POST",
+            f"/api/v1/agents/{agent_id}/promotions/{proposal_id}/reject",
+            payload,
+            request_id=request_id,
+        )
+        return _parse_promotion_proposal(body, rid)
+
+    def agent_context(
+        self,
+        agent_id: str,
+        user: str,
+        query: str,
+        *,
+        session: str | None = None,
+        max_tokens: int | None = None,
+        min_relevance: float | None = None,
+        mode: str | None = None,
+        request_id: str | None = None,
+    ) -> AgentContextResult:
+        """Get agent-scoped context combining identity, experience, and user memory."""
+        payload: dict[str, Any] = {"user": user, "query": query}
+        if session is not None:
+            payload["session"] = session
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if min_relevance is not None:
+            payload["min_relevance"] = min_relevance
+        if mode is not None:
+            payload["mode"] = mode
+        body, rid = self._req(
+            "POST",
+            f"/api/v1/agents/{agent_id}/context",
+            payload,
+            request_id=request_id,
+        )
+        return _parse_agent_context(body, rid)
+
     # ── Session messages (framework adapter primitives) ─────────────
 
     def get_messages(
@@ -1205,5 +1447,86 @@ def _parse_graph_entity_detail(
         incoming_edges=[
             _parse_adjacency_edge(e) for e in body.get("incoming_edges", [])
         ],
+        request_id=rid,
+    )
+
+
+# ─── Agent Identity parsers ───────────────────────────────────────
+
+
+def _parse_agent_identity(body: dict[str, Any], rid: str | None) -> AgentIdentityResult:
+    return AgentIdentityResult(
+        agent_id=str(body.get("agent_id", "")),
+        version=int(body.get("version", 0)),
+        core=dict(body.get("core", {})),
+        updated_at=str(body.get("updated_at", "")),
+        request_id=rid,
+    )
+
+
+def _parse_experience_event(
+    body: dict[str, Any], rid: str | None
+) -> ExperienceEventResult:
+    return ExperienceEventResult(
+        id=str(body.get("id", "")),
+        agent_id=str(body.get("agent_id", "")),
+        user_id=str(body.get("user_id", "")),
+        session_id=str(body.get("session_id", "")),
+        category=str(body.get("category", "")),
+        signal=str(body.get("signal", "")),
+        confidence=float(body.get("confidence", 0.0)),
+        weight=float(body.get("weight", 0.0)),
+        decay_half_life_days=int(body.get("decay_half_life_days", 0)),
+        evidence_episode_ids=[str(eid) for eid in body.get("evidence_episode_ids", [])],
+        created_at=str(body.get("created_at", "")),
+        request_id=rid,
+    )
+
+
+def _parse_agent_audit(
+    body: dict[str, Any], rid: str | None
+) -> AgentIdentityAuditResult:
+    return AgentIdentityAuditResult(
+        id=str(body.get("id", "")),
+        agent_id=str(body.get("agent_id", "")),
+        action=str(body.get("action", "")),
+        from_version=body.get("from_version"),
+        to_version=body.get("to_version"),
+        rollback_to_version=body.get("rollback_to_version"),
+        reason=body.get("reason"),
+        created_at=str(body.get("created_at", "")),
+        request_id=rid,
+    )
+
+
+def _parse_promotion_proposal(
+    body: dict[str, Any], rid: str | None
+) -> PromotionProposalResult:
+    return PromotionProposalResult(
+        id=str(body.get("id", "")),
+        agent_id=str(body.get("agent_id", "")),
+        proposal=str(body.get("proposal", "")),
+        candidate_core=dict(body.get("candidate_core", {})),
+        reason=str(body.get("reason", "")),
+        risk_level=str(body.get("risk_level", "medium")),
+        status=str(body.get("status", "")),
+        source_event_ids=[str(eid) for eid in body.get("source_event_ids", [])],
+        created_at=str(body.get("created_at", "")),
+        approved_at=body.get("approved_at"),
+        rejected_at=body.get("rejected_at"),
+        request_id=rid,
+    )
+
+
+def _parse_agent_context(body: dict[str, Any], rid: str | None) -> AgentContextResult:
+    identity_raw = body.get("identity", {})
+    return AgentContextResult(
+        context=dict(body.get("context", {})),
+        identity=_parse_agent_identity(identity_raw, None),
+        identity_version=int(body.get("identity_version", 0)),
+        experience_events_used=int(body.get("experience_events_used", 0)),
+        experience_weight_sum=float(body.get("experience_weight_sum", 0.0)),
+        user_memory_items_used=int(body.get("user_memory_items_used", 0)),
+        attribution_guards=dict(body.get("attribution_guards", {})),
         request_id=rid,
     )

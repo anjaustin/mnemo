@@ -477,3 +477,86 @@ class MemoryDigestResult:
     generated_at: str
     model: str
     request_id: str | None = None
+
+
+# ─── Agent Identity ────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class AgentIdentityResult:
+    """Versioned agent identity profile."""
+
+    agent_id: str
+    version: int
+    core: dict[str, Any]
+    """Opaque JSON identity blob (mission, style, boundaries, etc.)."""
+    updated_at: str
+    request_id: str | None = None
+
+
+@dataclass(slots=True)
+class ExperienceEventResult:
+    """A single agent experience event."""
+
+    id: str
+    agent_id: str
+    user_id: str
+    session_id: str
+    category: str
+    signal: str
+    confidence: float
+    weight: float
+    decay_half_life_days: int
+    evidence_episode_ids: list[str]
+    created_at: str
+    request_id: str | None = None
+
+
+@dataclass(slots=True)
+class AgentIdentityAuditResult:
+    """Audit event for agent identity changes."""
+
+    id: str
+    agent_id: str
+    action: str
+    """One of: created, updated, rolled_back."""
+    from_version: int | None = None
+    to_version: int | None = None
+    rollback_to_version: int | None = None
+    reason: str | None = None
+    created_at: str = ""
+    request_id: str | None = None
+
+
+@dataclass(slots=True)
+class PromotionProposalResult:
+    """A promotion proposal for agent identity evolution."""
+
+    id: str
+    agent_id: str
+    proposal: str
+    candidate_core: dict[str, Any]
+    reason: str
+    risk_level: str
+    status: str
+    """One of: pending, approved, rejected."""
+    source_event_ids: list[str]
+    created_at: str
+    approved_at: str | None = None
+    rejected_at: str | None = None
+    request_id: str | None = None
+
+
+@dataclass(slots=True)
+class AgentContextResult:
+    """Agent-scoped context combining identity, experience, and user memory."""
+
+    context: dict[str, Any]
+    """Flattened context block (entities, facts, episodes, token_count)."""
+    identity: AgentIdentityResult
+    identity_version: int
+    experience_events_used: int
+    experience_weight_sum: float
+    user_memory_items_used: int
+    attribution_guards: dict[str, bool]
+    request_id: str | None = None

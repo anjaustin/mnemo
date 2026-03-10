@@ -22,12 +22,17 @@ from aioresponses import aioresponses
 
 from mnemo import AsyncMnemo
 from mnemo._models import (
+    AgentContextResult,
+    AgentIdentityAuditResult,
+    AgentIdentityResult,
     AuditRecord,
     ChangesSinceResult,
     ContextResult,
     DeleteResult,
+    ExperienceEventResult,
     HealthResult,
     ImportJobResult,
+    PromotionProposalResult,
     MessagesResult,
     PolicyPreviewResult,
     PolicyResult,
@@ -992,6 +997,316 @@ async def test_async_get_import_job():
             assert result.status == "completed"
             assert result.total_messages == 50
             assert result.sessions_touched == 3
+
+
+# ── Agent Identity ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_async_get_agent_identity():
+    """get_agent_identity() returns AgentIdentityResult with auto-created profile."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/agents/support-bot/identity",
+                payload={
+                    "agent_id": "support-bot",
+                    "version": 1,
+                    "core": {},
+                    "updated_at": "2026-03-10T00:00:00Z",
+                },
+            )
+            result = await client.get_agent_identity("support-bot")
+            assert isinstance(result, AgentIdentityResult)
+            assert result.agent_id == "support-bot"
+            assert result.version == 1
+            assert result.core == {}
+
+
+@pytest.mark.asyncio
+async def test_async_update_agent_identity():
+    """update_agent_identity() sends core and returns updated profile."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.put(
+                f"{BASE}/api/v1/agents/support-bot/identity",
+                payload={
+                    "agent_id": "support-bot",
+                    "version": 2,
+                    "core": {"mission": "Help users with billing"},
+                    "updated_at": "2026-03-10T01:00:00Z",
+                },
+            )
+            result = await client.update_agent_identity(
+                "support-bot", {"mission": "Help users with billing"}
+            )
+            assert isinstance(result, AgentIdentityResult)
+            assert result.version == 2
+            assert result.core["mission"] == "Help users with billing"
+
+
+@pytest.mark.asyncio
+async def test_async_list_agent_identity_versions():
+    """list_agent_identity_versions() returns list of AgentIdentityResult."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/agents/support-bot/identity/versions?limit=20",
+                payload={
+                    "versions": [
+                        {
+                            "agent_id": "support-bot",
+                            "version": 2,
+                            "core": {"mission": "v2"},
+                            "updated_at": "t2",
+                        },
+                        {
+                            "agent_id": "support-bot",
+                            "version": 1,
+                            "core": {},
+                            "updated_at": "t1",
+                        },
+                    ]
+                },
+            )
+            result = await client.list_agent_identity_versions("support-bot")
+            assert len(result) == 2
+            assert all(isinstance(v, AgentIdentityResult) for v in result)
+            assert result[0].version == 2
+
+
+@pytest.mark.asyncio
+async def test_async_list_agent_identity_audit():
+    """list_agent_identity_audit() returns list of AgentIdentityAuditResult."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/api/v1/agents/support-bot/identity/audit?limit=50",
+                payload={
+                    "audit": [
+                        {
+                            "id": "a-1",
+                            "agent_id": "support-bot",
+                            "action": "updated",
+                            "from_version": 1,
+                            "to_version": 2,
+                            "created_at": "2026-03-10T01:00:00Z",
+                        },
+                        {
+                            "id": "a-0",
+                            "agent_id": "support-bot",
+                            "action": "created",
+                            "to_version": 1,
+                            "created_at": "2026-03-10T00:00:00Z",
+                        },
+                    ]
+                },
+            )
+            result = await client.list_agent_identity_audit("support-bot")
+            assert len(result) == 2
+            assert all(isinstance(a, AgentIdentityAuditResult) for a in result)
+            assert result[0].action == "updated"
+            assert result[0].from_version == 1
+
+
+@pytest.mark.asyncio
+async def test_async_rollback_agent_identity():
+    """rollback_agent_identity() returns new version with restored core."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/agents/support-bot/identity/rollback",
+                payload={
+                    "agent_id": "support-bot",
+                    "version": 4,
+                    "core": {"mission": "original mission"},
+                    "updated_at": "2026-03-10T02:00:00Z",
+                },
+            )
+            result = await client.rollback_agent_identity(
+                "support-bot", 2, reason="reverting bad update"
+            )
+            assert isinstance(result, AgentIdentityResult)
+            assert result.version == 4
+
+
+@pytest.mark.asyncio
+async def test_async_add_agent_experience():
+    """add_agent_experience() returns ExperienceEventResult."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/agents/support-bot/experience",
+                payload={
+                    "id": "exp-1",
+                    "agent_id": "support-bot",
+                    "user_id": "u-1",
+                    "session_id": "s-1",
+                    "category": "skill_acquisition",
+                    "signal": "User praised billing explanation",
+                    "confidence": 0.9,
+                    "weight": 0.5,
+                    "decay_half_life_days": 30,
+                    "evidence_episode_ids": [],
+                    "created_at": "2026-03-10T00:00:00Z",
+                },
+                status=201,
+            )
+            result = await client.add_agent_experience(
+                "support-bot",
+                user_id="u-1",
+                session_id="s-1",
+                category="skill_acquisition",
+                signal="User praised billing explanation",
+                confidence=0.9,
+            )
+            assert isinstance(result, ExperienceEventResult)
+            assert result.category == "skill_acquisition"
+            assert result.confidence == 0.9
+
+
+@pytest.mark.asyncio
+async def test_async_promotion_lifecycle():
+    """create, list, approve, reject promotions."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            # Create
+            m.post(
+                f"{BASE}/api/v1/agents/support-bot/promotions",
+                payload={
+                    "id": "prop-1",
+                    "agent_id": "support-bot",
+                    "proposal": "Add refund handling",
+                    "candidate_core": {"mission": "billing + refunds"},
+                    "reason": "Learned refund process",
+                    "risk_level": "medium",
+                    "status": "pending",
+                    "source_event_ids": ["e1", "e2", "e3"],
+                    "created_at": "2026-03-10T00:00:00Z",
+                },
+                status=201,
+            )
+            proposal = await client.create_promotion_proposal(
+                "support-bot",
+                proposal="Add refund handling",
+                candidate_core={"mission": "billing + refunds"},
+                reason="Learned refund process",
+                source_event_ids=["e1", "e2", "e3"],
+            )
+            assert isinstance(proposal, PromotionProposalResult)
+            assert proposal.status == "pending"
+
+            # List
+            m.get(
+                f"{BASE}/api/v1/agents/support-bot/promotions?limit=50",
+                payload={
+                    "proposals": [
+                        {
+                            "id": "prop-1",
+                            "agent_id": "support-bot",
+                            "proposal": "Add refund handling",
+                            "candidate_core": {"mission": "billing + refunds"},
+                            "reason": "Learned refund process",
+                            "risk_level": "medium",
+                            "status": "pending",
+                            "source_event_ids": ["e1", "e2", "e3"],
+                            "created_at": "2026-03-10T00:00:00Z",
+                        }
+                    ]
+                },
+            )
+            proposals = await client.list_promotion_proposals("support-bot")
+            assert len(proposals) == 1
+
+            # Approve
+            m.post(
+                f"{BASE}/api/v1/agents/support-bot/promotions/prop-1/approve",
+                payload={
+                    "id": "prop-1",
+                    "agent_id": "support-bot",
+                    "proposal": "Add refund handling",
+                    "candidate_core": {"mission": "billing + refunds"},
+                    "reason": "Learned refund process",
+                    "risk_level": "medium",
+                    "status": "approved",
+                    "source_event_ids": ["e1", "e2", "e3"],
+                    "created_at": "2026-03-10T00:00:00Z",
+                    "approved_at": "2026-03-10T01:00:00Z",
+                },
+            )
+            approved = await client.approve_promotion("support-bot", "prop-1")
+            assert approved.status == "approved"
+            assert approved.approved_at is not None
+
+
+@pytest.mark.asyncio
+async def test_async_reject_promotion():
+    """reject_promotion() returns rejected proposal with reason appended."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/agents/support-bot/promotions/prop-2/reject",
+                payload={
+                    "id": "prop-2",
+                    "agent_id": "support-bot",
+                    "proposal": "Add refund handling",
+                    "candidate_core": {"mission": "billing + refunds"},
+                    "reason": "Too risky",
+                    "risk_level": "high",
+                    "status": "rejected",
+                    "source_event_ids": ["e1", "e2", "e3"],
+                    "created_at": "2026-03-10T00:00:00Z",
+                    "rejected_at": "2026-03-10T01:00:00Z",
+                },
+            )
+            rejected = await client.reject_promotion(
+                "support-bot", "prop-2", reason="Too risky"
+            )
+            assert isinstance(rejected, PromotionProposalResult)
+            assert rejected.status == "rejected"
+            assert rejected.rejected_at is not None
+
+
+@pytest.mark.asyncio
+async def test_async_agent_context():
+    """agent_context() returns AgentContextResult with identity and attribution guards."""
+    async with AsyncMnemo(BASE, max_retries=0) as client:
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/api/v1/agents/support-bot/context",
+                payload={
+                    "context": {
+                        "entities": [],
+                        "facts": [],
+                        "episodes": [],
+                        "text": "Agent identity block...",
+                        "token_count": 150,
+                    },
+                    "identity": {
+                        "agent_id": "support-bot",
+                        "version": 3,
+                        "core": {"mission": "Help with billing"},
+                        "updated_at": "2026-03-10T00:00:00Z",
+                    },
+                    "identity_version": 3,
+                    "experience_events_used": 5,
+                    "experience_weight_sum": 2.1,
+                    "user_memory_items_used": 12,
+                    "attribution_guards": {
+                        "self_user_separation_enforced": True,
+                        "identity_plane_isolated": True,
+                    },
+                },
+            )
+            result = await client.agent_context(
+                "support-bot", "alice", "What billing issues does Alice have?"
+            )
+            assert isinstance(result, AgentContextResult)
+            assert result.identity.agent_id == "support-bot"
+            assert result.identity_version == 3
+            assert result.experience_events_used == 5
+            assert result.attribution_guards["self_user_separation_enforced"] is True
+            assert result.attribution_guards["identity_plane_isolated"] is True
 
 
 if __name__ == "__main__":
