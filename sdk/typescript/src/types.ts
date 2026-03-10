@@ -297,3 +297,196 @@ export interface MemoryDigestOptions {
   refresh?: boolean;
   requestId?: string;
 }
+
+// ─── Time Travel ───────────────────────────────────────────────────
+
+export interface ChangesSinceOptions {
+  fromDt: string;
+  toDt: string;
+  session?: string;
+  requestId?: string;
+}
+
+export interface ChangesSinceResult {
+  added_facts: Record<string, unknown>[];
+  superseded_facts: Record<string, unknown>[];
+  confidence_deltas: Record<string, unknown>[];
+  head_changes: Record<string, unknown>[];
+  added_episodes: Record<string, unknown>[];
+  summary: string;
+  from: string;
+  to: string;
+  request_id?: string;
+}
+
+export interface ConflictRadarResult {
+  conflicts: Record<string, unknown>[];
+  user_id: string;
+  request_id?: string;
+}
+
+export interface CausalRecallResult {
+  chains: Record<string, unknown>[];
+  query: string;
+  request_id?: string;
+}
+
+export interface TimeTravelTraceOptions {
+  fromDt: string;
+  toDt: string;
+  session?: string;
+  contract?: string;
+  retrievalPolicy?: string;
+  maxTokens?: number;
+  minRelevance?: number;
+  requestId?: string;
+}
+
+export interface TimeTravelTraceResult {
+  snapshot_from: Record<string, unknown>;
+  snapshot_to: Record<string, unknown>;
+  gained_facts: Record<string, unknown>[];
+  lost_facts: Record<string, unknown>[];
+  gained_episodes: Record<string, unknown>[];
+  lost_episodes: Record<string, unknown>[];
+  timeline: Record<string, unknown>[];
+  summary: string;
+  from: string;
+  to: string;
+  request_id?: string;
+}
+
+export interface TimeTravelSummaryOptions {
+  fromDt: string;
+  toDt: string;
+  session?: string;
+  requestId?: string;
+}
+
+export interface TimeTravelSummaryResult {
+  summary: Record<string, unknown>;
+  request_id?: string;
+}
+
+// ─── Governance (extended) ─────────────────────────────────────────
+
+export interface SetPolicyOptions {
+  retentionDaysMessage?: number;
+  retentionDaysText?: number;
+  retentionDaysJson?: number;
+  webhookDomainAllowlist?: string[];
+  defaultMemoryContract?: string;
+  defaultRetrievalPolicy?: string;
+  requestId?: string;
+}
+
+export interface PolicyPreviewOptions {
+  retentionDaysMessage?: number;
+  retentionDaysText?: number;
+  retentionDaysJson?: number;
+  requestId?: string;
+}
+
+export interface PolicyPreviewResult {
+  estimated_episodes_affected: number;
+  policy: Record<string, unknown>;
+  request_id?: string;
+}
+
+export interface AuditRecord {
+  id: string;
+  event_type: string;
+  user_id: string;
+  details: Record<string, unknown>;
+  created_at: string;
+  request_id?: string;
+}
+
+// ─── Webhooks (extended) ───────────────────────────────────────────
+
+export interface WebhookStats {
+  webhook_id: string;
+  window_seconds: number;
+  delivered: number;
+  failed: number;
+  dead_letter: number;
+  request_id?: string;
+}
+
+export interface ReplayResult {
+  replayed: number;
+  events: Record<string, unknown>[];
+  request_id?: string;
+}
+
+export interface RetryResult {
+  ok: boolean;
+  event_id: string;
+  request_id?: string;
+}
+
+// ─── Operator ──────────────────────────────────────────────────────
+
+export interface OpsSummaryOptions {
+  windowSeconds?: number;
+  requestId?: string;
+}
+
+export interface OpsSummaryResult {
+  http_requests_total: number;
+  http_responses_2xx: number;
+  http_responses_4xx: number;
+  http_responses_5xx: number;
+  policy_update_total: number;
+  policy_violation_total: number;
+  webhook_deliveries_success_total: number;
+  webhook_deliveries_failure_total: number;
+  webhook_dead_letter_total: number;
+  governance_audit_total: number;
+  request_id?: string;
+}
+
+// ─── Trace Lookup ──────────────────────────────────────────────────
+
+export interface TraceLookupOptions {
+  fromDt?: string;
+  toDt?: string;
+  limit?: number;
+  requestId?: string;
+}
+
+export interface TraceLookupResult {
+  request_id: string;
+  episodes: Record<string, unknown>[];
+  webhook_events: Record<string, unknown>[];
+  webhook_audit: Record<string, unknown>[];
+  governance_audit: Record<string, unknown>[];
+}
+
+// ─── Sessions ──────────────────────────────────────────────────────
+
+export interface SessionInfo {
+  id: string;
+  user_id: string;
+  name?: string;
+  episode_count: number;
+  created_at: string;
+  updated_at: string;
+  request_id?: string;
+}
+
+export interface SessionsResult {
+  data: SessionInfo[];
+  count: number;
+  request_id?: string;
+}
+
+export interface ListSessionsOptions {
+  limit?: number;
+  requestId?: string;
+}
+
+export interface CreateSessionOptions {
+  name?: string;
+  requestId?: string;
+}

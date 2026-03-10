@@ -21,6 +21,8 @@ from ._models import (
     GraphEdgesResult,
     GraphEntitiesResult,
     GraphEntity,
+    GraphEntityDetail,
+    AdjacencyEdge,
     GraphNeighborsResult,
     HealthResult,
     ImportJobResult,
@@ -87,6 +89,8 @@ __all__ = [
     "DeleteResult",
     # Knowledge graph
     "GraphEntity",
+    "GraphEntityDetail",
+    "AdjacencyEdge",
     "GraphEdge",
     "GraphEntitiesResult",
     "GraphEdgesResult",

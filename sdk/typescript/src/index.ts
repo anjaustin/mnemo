@@ -54,9 +54,36 @@ export type {
   MemoryDigestResult,
   // Governance
   PolicyResult,
+  SetPolicyOptions,
+  PolicyPreviewOptions,
+  PolicyPreviewResult,
+  AuditRecord,
   // Webhooks
   WebhookResult,
   WebhookEvent,
+  WebhookStats,
+  ReplayResult,
+  RetryResult,
+  // Time Travel
+  ChangesSinceOptions,
+  ChangesSinceResult,
+  ConflictRadarResult,
+  CausalRecallResult,
+  TimeTravelTraceOptions,
+  TimeTravelTraceResult,
+  TimeTravelSummaryOptions,
+  TimeTravelSummaryResult,
+  // Operator
+  OpsSummaryOptions,
+  OpsSummaryResult,
+  // Trace Lookup
+  TraceLookupOptions,
+  TraceLookupResult,
+  // Sessions
+  SessionInfo,
+  SessionsResult,
+  ListSessionsOptions,
+  CreateSessionOptions,
   // Import
   ImportJobResult,
 } from './types.js';

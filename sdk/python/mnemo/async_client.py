@@ -42,6 +42,8 @@ from mnemo._models import (
     GraphEdgesResult,
     GraphEntitiesResult,
     GraphEntity,
+    GraphEntityDetail,
+    AdjacencyEdge,
     GraphNeighborsResult,
     HealthResult,
     ImportJobResult,
@@ -68,6 +70,7 @@ from mnemo._transport import opt
 from mnemo.client import (
     _parse_audit,
     _parse_context,
+    _parse_graph_entity_detail,
     _parse_import_job,
     _parse_policy,
     _parse_spans_result,
@@ -860,7 +863,7 @@ class AsyncMnemo:
         self,
         user: str,
         *,
-        limit: int = 100,
+        limit: int = 20,
         request_id: str | None = None,
     ) -> GraphEntitiesResult:
         """List all entities in the knowledge graph for a user."""
@@ -895,21 +898,20 @@ class AsyncMnemo:
         entity_id: str,
         *,
         request_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> GraphEntityDetail:
         """Get a single entity with adjacency information."""
         body, rid = await self._req(
             "GET",
             f"/api/v1/graph/{user}/entities/{entity_id}",
             request_id=request_id,
         )
-        body["request_id"] = rid
-        return body
+        return _parse_graph_entity_detail(body, rid)
 
     async def graph_edges(
         self,
         user: str,
         *,
-        limit: int = 100,
+        limit: int = 20,
         label: str | None = None,
         valid_only: bool = True,
         request_id: str | None = None,

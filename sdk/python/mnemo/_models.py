@@ -323,6 +323,35 @@ class GraphEntity:
 
 
 @dataclass(slots=True)
+class AdjacencyEdge:
+    """Simplified edge returned in entity detail (adjacency view)."""
+
+    id: str
+    label: str
+    fact: str
+    valid: bool = True
+    source_entity_id: str | None = None
+    target_entity_id: str | None = None
+
+
+@dataclass(slots=True)
+class GraphEntityDetail:
+    """Full entity detail with adjacency (outgoing/incoming edges)."""
+
+    id: str
+    name: str
+    entity_type: str
+    summary: str | None = None
+    mention_count: int = 0
+    community_id: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+    outgoing_edges: list[AdjacencyEdge] = field(default_factory=list)
+    incoming_edges: list[AdjacencyEdge] = field(default_factory=list)
+    request_id: str | None = None
+
+
+@dataclass(slots=True)
 class GraphEdge:
     id: str
     source_entity_id: str

@@ -38,6 +38,8 @@ from mnemo._models import (
     GraphEdgesResult,
     GraphEntitiesResult,
     GraphEntity,
+    GraphEntityDetail,
+    AdjacencyEdge,
     GraphNeighborsResult,
     HealthResult,
     ImportJobResult,
@@ -675,7 +677,7 @@ class Mnemo:
         self,
         user: str,
         *,
-        limit: int = 100,
+        limit: int = 20,
         request_id: str | None = None,
     ) -> GraphEntitiesResult:
         """List all entities in the knowledge graph for a user."""
@@ -710,20 +712,20 @@ class Mnemo:
         entity_id: str,
         *,
         request_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> GraphEntityDetail:
         """Get a single entity with its adjacency information."""
-        body, _rid = self._req(
+        body, rid = self._req(
             "GET",
             f"/api/v1/graph/{user}/entities/{entity_id}",
             request_id=request_id,
         )
-        return body
+        return _parse_graph_entity_detail(body, rid)
 
     def graph_edges(
         self,
         user: str,
         *,
-        limit: int = 100,
+        limit: int = 20,
         label: str | None = None,
         valid_only: bool = True,
         request_id: str | None = None,
@@ -1099,5 +1101,38 @@ def _parse_import_job(body: dict[str, Any], rid: str | None) -> ImportJobResult:
         created_at=str(j.get("created_at", "")),
         started_at=j.get("started_at"),
         finished_at=j.get("finished_at"),
+        request_id=rid,
+    )
+
+
+def _parse_adjacency_edge(e: dict[str, Any]) -> AdjacencyEdge:
+    return AdjacencyEdge(
+        id=str(e.get("id", "")),
+        label=str(e.get("label", "")),
+        fact=str(e.get("fact", "")),
+        valid=bool(e.get("valid", True)),
+        source_entity_id=e.get("source_entity_id"),
+        target_entity_id=e.get("target_entity_id"),
+    )
+
+
+def _parse_graph_entity_detail(
+    body: dict[str, Any], rid: str | None
+) -> GraphEntityDetail:
+    return GraphEntityDetail(
+        id=str(body.get("id", "")),
+        name=str(body.get("name", "")),
+        entity_type=str(body.get("entity_type", "unknown")),
+        summary=body.get("summary"),
+        mention_count=int(body.get("mention_count", 0)),
+        community_id=body.get("community_id"),
+        created_at=str(body.get("created_at", "")),
+        updated_at=str(body.get("updated_at", "")),
+        outgoing_edges=[
+            _parse_adjacency_edge(e) for e in body.get("outgoing_edges", [])
+        ],
+        incoming_edges=[
+            _parse_adjacency_edge(e) for e in body.get("incoming_edges", [])
+        ],
         request_id=rid,
     )

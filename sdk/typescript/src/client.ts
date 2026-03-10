@@ -20,8 +20,14 @@
 
 import type {
   AddOptions,
+  AuditRecord,
+  CausalRecallResult,
+  ChangesSinceOptions,
+  ChangesSinceResult,
+  ConflictRadarResult,
   ContextOptions,
   ContextResult,
+  CreateSessionOptions,
   DeleteResult,
   GraphCommunityOptions,
   GraphCommunityResult,
@@ -33,15 +39,32 @@ import type {
   GraphNeighborsResult,
   HealthResult,
   ImportJobResult,
+  ListSessionsOptions,
   MemoryDigestOptions,
   MemoryDigestResult,
   MnemoClientOptions,
+  OpsSummaryOptions,
+  OpsSummaryResult,
+  PolicyPreviewOptions,
+  PolicyPreviewResult,
   PolicyResult,
   RememberResult,
+  ReplayResult,
+  RetryResult,
+  SessionInfo,
+  SessionsResult,
+  SetPolicyOptions,
   SpansOptions,
   SpansResult,
+  TimeTravelSummaryOptions,
+  TimeTravelSummaryResult,
+  TimeTravelTraceOptions,
+  TimeTravelTraceResult,
+  TraceLookupOptions,
+  TraceLookupResult,
   WebhookEvent,
   WebhookResult,
+  WebhookStats,
 } from './types.js';
 
 export class MnemoError extends Error {
@@ -229,6 +252,96 @@ export class MnemoClient {
     return { ...body, request_id: rid };
   }
 
+  // ─── Time Travel ─────────────────────────────────────────────────
+
+  /** Get memory changes (added/superseded facts) between two timestamps. */
+  async changesSince(
+    user: string,
+    options: ChangesSinceOptions,
+  ): Promise<ChangesSinceResult> {
+    const body: Record<string, unknown> = { from_dt: options.fromDt, to_dt: options.toDt };
+    if (options.session) body['session'] = options.session;
+    const [res, rid] = await this.request<ChangesSinceResult>({
+      method: 'POST',
+      path: `/api/v1/memory/${encodeURIComponent(user)}/changes_since`,
+      body,
+      requestId: options.requestId,
+    });
+    return { ...res, request_id: rid };
+  }
+
+  /** Detect conflicting facts in a user's memory. */
+  async conflictRadar(user: string, requestId?: string): Promise<ConflictRadarResult> {
+    const [body, rid] = await this.request<ConflictRadarResult>({
+      method: 'POST',
+      path: `/api/v1/memory/${encodeURIComponent(user)}/conflict_radar`,
+      body: {},
+      requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Retrieve causal reasoning chains for a query. */
+  async causalRecall(
+    user: string,
+    query: string,
+    requestId?: string,
+  ): Promise<CausalRecallResult> {
+    const [body, rid] = await this.request<CausalRecallResult>({
+      method: 'POST',
+      path: `/api/v1/memory/${encodeURIComponent(user)}/causal_recall`,
+      body: { query },
+      requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Diff memory snapshots over a time window. */
+  async timeTravelTrace(
+    user: string,
+    query: string,
+    options: TimeTravelTraceOptions,
+  ): Promise<TimeTravelTraceResult> {
+    const body: Record<string, unknown> = {
+      query,
+      from_dt: options.fromDt,
+      to_dt: options.toDt,
+    };
+    if (options.session) body['session'] = options.session;
+    if (options.contract) body['contract'] = options.contract;
+    if (options.retrievalPolicy) body['retrieval_policy'] = options.retrievalPolicy;
+    if (options.maxTokens !== undefined) body['max_tokens'] = options.maxTokens;
+    if (options.minRelevance !== undefined) body['min_relevance'] = options.minRelevance;
+    const [res, rid] = await this.request<TimeTravelTraceResult>({
+      method: 'POST',
+      path: `/api/v1/memory/${encodeURIComponent(user)}/time_travel/trace`,
+      body,
+      requestId: options.requestId,
+    });
+    return { ...res, request_id: rid };
+  }
+
+  /** Lightweight snapshot delta counts for fast rendering. */
+  async timeTravelSummary(
+    user: string,
+    query: string,
+    options: TimeTravelSummaryOptions,
+  ): Promise<TimeTravelSummaryResult> {
+    const body: Record<string, unknown> = {
+      query,
+      from_dt: options.fromDt,
+      to_dt: options.toDt,
+    };
+    if (options.session) body['session'] = options.session;
+    const [res, rid] = await this.request<TimeTravelSummaryResult>({
+      method: 'POST',
+      path: `/api/v1/memory/${encodeURIComponent(user)}/time_travel/summary`,
+      body,
+      requestId: options.requestId,
+    });
+    return { summary: res as unknown as Record<string, unknown>, request_id: rid };
+  }
+
   // ─── Knowledge Graph API ─────────────────────────────────────────
 
   /** List all entities in the user's knowledge graph. */
@@ -236,7 +349,7 @@ export class MnemoClient {
     user: string,
     options: GraphEntitiesOptions = {},
   ): Promise<GraphEntitiesResult> {
-    const limit = options.limit ?? 100;
+    const limit = options.limit ?? 20;
     const [body, rid] = await this.request<GraphEntitiesResult>({
       method: 'GET',
       path: `/api/v1/graph/${encodeURIComponent(user)}/entities?limit=${limit}`,
@@ -261,7 +374,7 @@ export class MnemoClient {
 
   /** List edges in the user's knowledge graph. */
   async graphEdges(user: string, options: GraphEdgesOptions = {}): Promise<GraphEdgesResult> {
-    const limit = options.limit ?? 100;
+    const limit = options.limit ?? 20;
     const validOnly = options.validOnly ?? true;
     let path = `/api/v1/graph/${encodeURIComponent(user)}/edges?limit=${limit}&valid_only=${validOnly}`;
     if (options.label) path += `&label=${encodeURIComponent(options.label)}`;
@@ -321,7 +434,7 @@ export class MnemoClient {
     const limit = options.limit ?? 100;
     const [body, rid] = await this.request<SpansResult>({
       method: 'GET',
-      path: `/api/v1/spans/user/${userId}?limit=${limit}`,
+      path: `/api/v1/spans/user/${encodeURIComponent(userId)}?limit=${limit}`,
       requestId: options.requestId,
     });
     return { ...body, request_id: rid };
@@ -377,6 +490,53 @@ export class MnemoClient {
     return { ...body.policy, request_id: rid };
   }
 
+  /** Create or update a governance policy for a user. */
+  async setPolicy(user: string, options: SetPolicyOptions = {}): Promise<PolicyResult> {
+    const body: Record<string, unknown> = {};
+    if (options.retentionDaysMessage !== undefined) body['retention_days_message'] = options.retentionDaysMessage;
+    if (options.retentionDaysText !== undefined) body['retention_days_text'] = options.retentionDaysText;
+    if (options.retentionDaysJson !== undefined) body['retention_days_json'] = options.retentionDaysJson;
+    if (options.webhookDomainAllowlist) body['webhook_domain_allowlist'] = options.webhookDomainAllowlist;
+    if (options.defaultMemoryContract) body['default_memory_contract'] = options.defaultMemoryContract;
+    if (options.defaultRetrievalPolicy) body['default_retrieval_policy'] = options.defaultRetrievalPolicy;
+    const [res, rid] = await this.request<{ policy: PolicyResult }>({
+      method: 'PUT',
+      path: `/api/v1/policies/${encodeURIComponent(user)}`,
+      body,
+      requestId: options.requestId,
+    });
+    return { ...res.policy, request_id: rid };
+  }
+
+  /** Preview the impact of a policy change without applying it. */
+  async previewPolicy(user: string, options: PolicyPreviewOptions = {}): Promise<PolicyPreviewResult> {
+    const body: Record<string, unknown> = {};
+    if (options.retentionDaysMessage !== undefined) body['retention_days_message'] = options.retentionDaysMessage;
+    if (options.retentionDaysText !== undefined) body['retention_days_text'] = options.retentionDaysText;
+    if (options.retentionDaysJson !== undefined) body['retention_days_json'] = options.retentionDaysJson;
+    const [res, rid] = await this.request<PolicyPreviewResult>({
+      method: 'POST',
+      path: `/api/v1/policies/${encodeURIComponent(user)}/preview`,
+      body,
+      requestId: options.requestId,
+    });
+    return { ...res, request_id: rid };
+  }
+
+  /** List governance audit events for a user's policy. */
+  async getPolicyAudit(
+    user: string,
+    options: { limit?: number; requestId?: string } = {},
+  ): Promise<AuditRecord[]> {
+    const limit = options.limit ?? 50;
+    const [body] = await this.request<{ data: AuditRecord[] }>({
+      method: 'GET',
+      path: `/api/v1/policies/${encodeURIComponent(user)}/audit?limit=${limit}`,
+      requestId: options.requestId,
+    });
+    return body.data ?? [];
+  }
+
   // ─── Webhooks ────────────────────────────────────────────────────
 
   /** Register a webhook subscription. */
@@ -395,17 +555,203 @@ export class MnemoClient {
     return { ...body.webhook, request_id: rid };
   }
 
+  /** Get a webhook by ID. */
+  async getWebhook(webhookId: string, requestId?: string): Promise<WebhookResult> {
+    const [body, rid] = await this.request<{ webhook: WebhookResult }>({
+      method: 'GET',
+      path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}`,
+      requestId,
+    });
+    return { ...body.webhook, request_id: rid };
+  }
+
+  /** Delete a webhook. */
+  async deleteWebhook(webhookId: string, requestId?: string): Promise<DeleteResult> {
+    const [body, rid] = await this.request<DeleteResult>({
+      method: 'DELETE',
+      path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}`,
+      requestId,
+    });
+    return { deleted: body.deleted, request_id: rid };
+  }
+
   /** List webhook events for a webhook. */
   async listWebhookEvents(
     webhookId: string,
-    requestId?: string,
+    options: { limit?: number; requestId?: string } = {},
   ): Promise<{ events: WebhookEvent[]; count: number }> {
+    const limit = options.limit ?? 20;
     const [body] = await this.request<{ events: WebhookEvent[]; count: number }>({
       method: 'GET',
-      path: `/api/v1/memory/webhooks/${webhookId}/events`,
-      requestId,
+      path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}/events?limit=${limit}`,
+      requestId: options.requestId,
     });
     return body;
+  }
+
+  /** List dead-letter events for a webhook. */
+  async listDeadLetterEvents(
+    webhookId: string,
+    options: { limit?: number; requestId?: string } = {},
+  ): Promise<{ events: WebhookEvent[]; count: number }> {
+    const limit = options.limit ?? 20;
+    const [body] = await this.request<{ events: WebhookEvent[]; count: number }>({
+      method: 'GET',
+      path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}/events/dead-letter?limit=${limit}`,
+      requestId: options.requestId,
+    });
+    return body;
+  }
+
+  /** Replay webhook events from a cursor. */
+  async replayEvents(
+    webhookId: string,
+    options: {
+      afterEventId?: string;
+      limit?: number;
+      includeDelivered?: boolean;
+      includeDeadLetter?: boolean;
+      requestId?: string;
+    } = {},
+  ): Promise<ReplayResult> {
+    const limit = options.limit ?? 100;
+    const includeDelivered = options.includeDelivered ?? true;
+    const includeDeadLetter = options.includeDeadLetter ?? true;
+    let path = `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}/events/replay?limit=${limit}&include_delivered=${includeDelivered}&include_dead_letter=${includeDeadLetter}`;
+    if (options.afterEventId) path += `&after=${encodeURIComponent(options.afterEventId)}`;
+    const [body, rid] = await this.request<ReplayResult>({
+      method: 'GET',
+      path,
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Manually retry a failed webhook event. */
+  async retryEvent(
+    webhookId: string,
+    eventId: string,
+    options: { force?: boolean; requestId?: string } = {},
+  ): Promise<RetryResult> {
+    const [body, rid] = await this.request<RetryResult>({
+      method: 'POST',
+      path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}/events/${encodeURIComponent(eventId)}/retry`,
+      body: { force: options.force ?? false },
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Get delivery stats for a webhook. */
+  async getWebhookStats(
+    webhookId: string,
+    options: { windowSeconds?: number; requestId?: string } = {},
+  ): Promise<WebhookStats> {
+    const windowSeconds = options.windowSeconds ?? 300;
+    const [body, rid] = await this.request<WebhookStats>({
+      method: 'GET',
+      path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}/stats?window_seconds=${windowSeconds}`,
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** List audit events for a webhook. */
+  async getWebhookAudit(
+    webhookId: string,
+    options: { limit?: number; requestId?: string } = {},
+  ): Promise<AuditRecord[]> {
+    const limit = options.limit ?? 20;
+    const [body] = await this.request<{ events: AuditRecord[] }>({
+      method: 'GET',
+      path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}/audit?limit=${limit}`,
+      requestId: options.requestId,
+    });
+    return body.events ?? [];
+  }
+
+  // ─── Operator ────────────────────────────────────────────────────
+
+  /** Get operator dashboard metrics summary. */
+  async opsSummary(options: OpsSummaryOptions = {}): Promise<OpsSummaryResult> {
+    const windowSeconds = options.windowSeconds ?? 300;
+    const [body, rid] = await this.request<OpsSummaryResult>({
+      method: 'GET',
+      path: `/api/v1/ops/summary?window_seconds=${windowSeconds}`,
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  // ─── Trace Lookup ────────────────────────────────────────────────
+
+  /** Look up cross-pipeline trace by request correlation ID. */
+  async traceLookup(
+    requestIdToFind: string,
+    options: TraceLookupOptions = {},
+  ): Promise<TraceLookupResult> {
+    const limit = options.limit ?? 100;
+    let path = `/api/v1/traces/${encodeURIComponent(requestIdToFind)}?limit=${limit}`;
+    if (options.fromDt) path += `&from=${encodeURIComponent(options.fromDt)}`;
+    if (options.toDt) path += `&to=${encodeURIComponent(options.toDt)}`;
+    const [body] = await this.request<TraceLookupResult>({
+      method: 'GET',
+      path,
+      requestId: options.requestId,
+    });
+    return body;
+  }
+
+  // ─── Sessions ────────────────────────────────────────────────────
+
+  /** List sessions for a user. */
+  async listSessions(
+    user: string,
+    options: ListSessionsOptions = {},
+  ): Promise<SessionsResult> {
+    const limit = options.limit ?? 20;
+    const [body, rid] = await this.request<SessionsResult>({
+      method: 'GET',
+      path: `/api/v1/sessions?user=${encodeURIComponent(user)}&limit=${limit}`,
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Create a new session. */
+  async createSession(
+    user: string,
+    options: CreateSessionOptions = {},
+  ): Promise<SessionInfo> {
+    const body: Record<string, unknown> = { user };
+    if (options.name) body['name'] = options.name;
+    const [res, rid] = await this.request<SessionInfo>({
+      method: 'POST',
+      path: '/api/v1/sessions',
+      body,
+      requestId: options.requestId,
+    });
+    return { ...res, request_id: rid };
+  }
+
+  /** Get a session by ID. */
+  async getSession(sessionId: string, requestId?: string): Promise<SessionInfo> {
+    const [body, rid] = await this.request<SessionInfo>({
+      method: 'GET',
+      path: `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Delete a session. */
+  async deleteSession(sessionId: string, requestId?: string): Promise<DeleteResult> {
+    const [body, rid] = await this.request<DeleteResult>({
+      method: 'DELETE',
+      path: `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      requestId,
+    });
+    return { deleted: body.deleted, request_id: rid };
   }
 
   // ─── Session Messages ─────────────────────────────────────────────

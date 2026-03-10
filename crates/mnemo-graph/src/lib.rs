@@ -307,6 +307,8 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
         user_id: Uuid,
         max_iterations: u32,
     ) -> StorageResult<HashMap<Uuid, Uuid>> {
+        use mnemo_core::models::edge::EdgeFilter;
+
         // Load all entities for user
         let entities = self.store.list_entities(user_id, 10000, None).await?;
         if entities.is_empty() {
@@ -316,27 +318,30 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
         // Initialize: each entity is its own community
         let mut labels: HashMap<Uuid, Uuid> = entities.iter().map(|e| (e.id, e.id)).collect();
 
-        // Build adjacency from edges
+        // Build adjacency from edges — single batch query instead of N individual calls
+        let all_edges = self
+            .store
+            .query_edges(
+                user_id,
+                EdgeFilter {
+                    include_invalidated: false,
+                    limit: u32::MAX,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_or_default();
+
         let mut adjacency: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-        for entity in &entities {
-            let outgoing = self
-                .store
-                .get_outgoing_edges(entity.id)
-                .await
-                .unwrap_or_default();
-            for edge in &outgoing {
-                if !edge.is_valid() {
-                    continue;
-                }
-                adjacency
-                    .entry(entity.id)
-                    .or_default()
-                    .push(edge.target_entity_id);
-                adjacency
-                    .entry(edge.target_entity_id)
-                    .or_default()
-                    .push(entity.id);
-            }
+        for edge in &all_edges {
+            adjacency
+                .entry(edge.source_entity_id)
+                .or_default()
+                .push(edge.target_entity_id);
+            adjacency
+                .entry(edge.target_entity_id)
+                .or_default()
+                .push(edge.source_entity_id);
         }
 
         // Iterate label propagation
@@ -538,17 +543,14 @@ mod tests {
             Ok(())
         }
 
-        async fn query_edges(
-            &self,
-            user_id: Uuid,
-            _filter: EdgeFilter,
-        ) -> StorageResult<Vec<Edge>> {
+        async fn query_edges(&self, user_id: Uuid, filter: EdgeFilter) -> StorageResult<Vec<Edge>> {
             Ok(self
                 .edges
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|e| e.user_id == user_id)
+                .filter(|e| e.user_id == user_id && filter.matches(e))
+                .take(filter.limit as usize)
                 .cloned()
                 .collect())
         }

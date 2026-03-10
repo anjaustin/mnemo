@@ -54,8 +54,9 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
    `EdgeFilter.matches()`. 1 integration test with both filter types.
 10. ~~**Document graph API in API.md**~~ — **DONE.** Full documentation for all
     7 graph endpoints with query params, examples, and response schemas.
-11. **Batch edge loading for community detection** — Replace N individual
-    `get_outgoing_edges` calls with a bulk query.
+11. ~~**Batch edge loading for community detection**~~ — **DONE.** Replaced N
+    individual `get_outgoing_edges` calls with single `query_edges` batch query
+    in `detect_communities`. Mock store updated with `EdgeFilter.matches()`.
 12. ~~**Integration tests for graph API**~~ — **DONE.** 12 integration tests
     covering all 7 graph API endpoints + cross-user auth boundary tests.
 
@@ -73,8 +74,9 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
     running LLM calls or mocking the span sink).
 
 ### P0-5: Python SDK
-17. **Type `graph_entity()` return** — Currently returns raw `dict`; should
-    return a typed model.
+17. ~~**Type `graph_entity()` return**~~ — **DONE.** Added `GraphEntityDetail`
+    and `AdjacencyEdge` models. Both sync and async clients now return typed
+    `GraphEntityDetail` with `outgoing_edges`/`incoming_edges` lists.
 
 ### P0-5b: LlamaIndex adapter
     ~~**Harden LlamaIndex adapter**~~ — **DONE + FALSIFIED.** Falsification
@@ -90,18 +92,23 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
     59 unit tests (36 sync + 13 async + 10 edge cases).
 
 ### P0-6: TypeScript SDK
-18. **Feature parity with Python SDK** — Missing: time travel, conflict radar,
-    causal recall, governance, full webhook management, operator summary.
-19. **Build-validate locally** — `npm` is not available on this machine; the
-    TS SDK was written but not compiled. CI should catch type errors.
+18. ~~**Feature parity with Python SDK**~~ — **DONE.** Added 20+ methods:
+    `changesSince`, `conflictRadar`, `causalRecall`, `timeTravelTrace`,
+    `timeTravelSummary`, `setPolicy`, `previewPolicy`, `getPolicyAudit`,
+    `getWebhook`, `deleteWebhook`, `listDeadLetterEvents`, `replayEvents`,
+    `retryEvent`, `getWebhookStats`, `getWebhookAudit`, `opsSummary`,
+    `traceLookup`, `listSessions`, `createSession`, `getSession`, `deleteSession`.
+    Full type definitions added.
+19. **Build-validate locally** — `npm`/`node` not available on this machine;
+    the TS SDK was written but not compiled. CI should catch type errors.
 
 ## Tier 2: Polish
 
-20. **Clean up redundant `use UserStore` imports** — Five warnings in graph
-    handlers (already imported at module level).
-21. **Align default limits** — Server defaults to 20 for graph edges, SDKs
-    default to 100. Pick one and align.
-22. **Add `encodeURIComponent` to `spansByUser` userId** in TS SDK.
+20. ~~**Clean up redundant `use UserStore` imports**~~ — **DONE.** Already
+    resolved; clippy shows zero warnings.
+21. ~~**Align default limits**~~ — **DONE.** Both Python and TS SDK graph
+    entity/edge methods aligned to server default of 20.
+22. ~~**Add `encodeURIComponent` to `spansByUser` userId**~~ — **DONE.**
 23. **Proactive re-ranking** — P0.2 from the sleep-time spec (re-score
     entity/edge relevance during idle windows).
 
