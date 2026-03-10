@@ -7251,3 +7251,126 @@ async fn test_graph_subgraph() {
     );
     assert!(body["edges"].as_array().unwrap().len() >= 2);
 }
+
+// ─── LLM Span Endpoint Tests ──────────────────────────────────────
+
+fn make_api_test_span(
+    request_id: Option<&str>,
+    user_id: Option<Uuid>,
+    operation: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> mnemo_core::models::span::LlmSpan {
+    mnemo_core::models::span::LlmSpan {
+        id: Uuid::now_v7(),
+        request_id: request_id.map(String::from),
+        user_id,
+        provider: "test-provider".into(),
+        model: "test-model".into(),
+        operation: operation.into(),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        total_tokens: 150,
+        latency_ms: 200,
+        success: true,
+        error: None,
+        started_at,
+        finished_at: started_at + chrono::Duration::milliseconds(200),
+    }
+}
+
+#[tokio::test]
+async fn test_spans_by_request_from_redis() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    let rid = format!("span-req-{}", Uuid::now_v7());
+    let user_id = Uuid::now_v7();
+    let now = chrono::Utc::now();
+
+    // Inject spans directly into Redis (bypassing in-memory buffer)
+    use mnemo_core::traits::storage::SpanStore;
+    let span1 = make_api_test_span(Some(&rid), Some(user_id), "extract", now);
+    let span2 = make_api_test_span(
+        Some(&rid),
+        Some(user_id),
+        "embed_episode",
+        now + chrono::Duration::milliseconds(500),
+    );
+    state_store.save_span(&span1).await.unwrap();
+    state_store.save_span(&span2).await.unwrap();
+
+    // Query via API
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/spans/request/{rid}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "spans by request should succeed: {body}");
+    assert_eq!(body["request_id"].as_str().unwrap(), rid);
+    assert_eq!(body["count"].as_u64().unwrap(), 2);
+    assert_eq!(body["total_tokens"].as_u64().unwrap(), 300); // 150 * 2
+
+    let spans = body["spans"].as_array().unwrap();
+    assert_eq!(spans.len(), 2);
+    // Ascending order
+    assert_eq!(spans[0]["operation"].as_str().unwrap(), "extract");
+    assert_eq!(spans[1]["operation"].as_str().unwrap(), "embed_episode");
+}
+
+#[tokio::test]
+async fn test_spans_by_user_from_redis() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    let user_id = Uuid::now_v7();
+    let now = chrono::Utc::now();
+
+    // Inject spans directly into Redis
+    use mnemo_core::traits::storage::SpanStore;
+    let span1 = make_api_test_span(None, Some(user_id), "extract", now);
+    let span2 = make_api_test_span(
+        None,
+        Some(user_id),
+        "summarize",
+        now + chrono::Duration::seconds(1),
+    );
+    state_store.save_span(&span1).await.unwrap();
+    state_store.save_span(&span2).await.unwrap();
+
+    // Query via API
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/spans/user/{user_id}?limit=10"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "spans by user should succeed: {body}");
+    assert_eq!(body["count"].as_u64().unwrap(), 2);
+
+    let spans = body["spans"].as_array().unwrap();
+    assert_eq!(spans.len(), 2);
+    // Descending order (newest first)
+    assert_eq!(spans[0]["operation"].as_str().unwrap(), "summarize");
+    assert_eq!(spans[1]["operation"].as_str().unwrap(), "extract");
+}
+
+#[tokio::test]
+async fn test_spans_by_request_empty_returns_empty() {
+    let app = build_test_app().await;
+
+    let (status, body) = get_request(
+        &app,
+        "/api/v1/spans/request/nonexistent-request-id",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 0);
+    assert_eq!(body["spans"].as_array().unwrap().len(), 0);
+}

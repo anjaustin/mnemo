@@ -66,12 +66,26 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
     via `.with_span_sink()`. Instrumented 4 ingest worker LLM calls: `extract`,
     `embed_episode`, `session_summarize`, `digest`. Shared ring buffer between
     server routes and ingest worker.
-14. **Persist spans to Redis** — In-memory ring buffer lost on restart. Deferred (P1).
+14. ~~**Persist spans to Redis**~~ — **DONE.** `SpanStore` trait added to
+    `mnemo-core` with 4 methods (`save_span`, `get_spans_by_request`,
+    `get_spans_by_user`, `list_recent_spans`). Implemented by `RedisStateStore`
+    with 7-day TTL (`SPAN_TTL_SECS = 604800`). Key schema:
+    `{prefix}span:{id}` (JSON + EXPIRE), `{prefix}spans` (global sorted set),
+    `{prefix}spans_request:{request_id}` and `{prefix}spans_user:{user_id}`
+    (index sorted sets with TTL). Wired into both `IngestWorker.record_span()`
+    and server's `record_llm_span()` with best-effort persistence. Query
+    handlers (`list_spans_by_request`, `list_spans_by_user`) now read from
+    Redis first with in-memory ring buffer fallback. 5 storage-level + 3
+    API-level integration tests.
 15. ~~**Expose user-lookup in dashboard**~~ — **DONE.** Added User ID input
     field + "Lookup by User" button to LLM Spans dashboard page. Added User column
     to span results table. Refactored span rendering into `renderSpanTable()`.
-16. **Integration tests for span endpoints** — Deferred (span creation requires
-    running LLM calls or mocking the span sink).
+16. ~~**Integration tests for span endpoints**~~ — **DONE.** 5 storage-level
+    tests (`save_and_load_by_request`, `load_by_user`, `list_recent`,
+    `no_request_id_not_indexed`, `roundtrip_preserves_fields`) + 3 API-level
+    tests (`spans_by_request_from_redis`, `spans_by_user_from_redis`,
+    `spans_by_request_empty_returns_empty`). Tests inject spans directly via
+    `SpanStore::save_span()` to verify the Redis read-through path.
 
 ### P0-5: Python SDK
 17. ~~**Type `graph_entity()` return**~~ — **DONE.** Added `GraphEntityDetail`
@@ -135,8 +149,7 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
 
 ## Tier 3: Future capabilities
 
-24. **Redis-backed span persistence with TTL** — Replace in-memory VecDeque
-    with Redis sorted set, auto-expire after 7 days.
+24. ~~**Redis-backed span persistence with TTL**~~ — **DONE.** (See item 14 above.)
 25. **Webhook TLS enforcement for updates** — Currently only checked at
     registration; should also check on `PATCH` webhook updates.
 26. **Structured LLM output for digest** — Replace prompt parsing with

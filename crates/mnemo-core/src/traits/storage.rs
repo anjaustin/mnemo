@@ -12,6 +12,7 @@ use crate::models::{
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams},
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
+    span::LlmSpan,
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 
@@ -330,18 +331,55 @@ pub trait DigestStore: Send + Sync {
     async fn delete_digest(&self, user_id: Uuid) -> StorageResult<()>;
 }
 
+// ─── Span Storage ──────────────────────────────────────────────────
+
+/// Storage for LLM call spans (tracing/observability).
+///
+/// Spans are persisted with a 7-day TTL by default. The store supports
+/// querying by request correlation ID, user ID, or listing recent spans.
+#[allow(async_fn_in_trait)]
+pub trait SpanStore: Send + Sync {
+    /// Persist an LLM span. Implementations should apply a TTL (e.g. 7 days).
+    async fn save_span(&self, span: &LlmSpan) -> StorageResult<()>;
+
+    /// Load spans by request correlation ID, ordered by `started_at` ascending.
+    async fn get_spans_by_request(&self, request_id: &str) -> StorageResult<Vec<LlmSpan>>;
+
+    /// Load recent spans for a user, ordered by `started_at` descending.
+    /// Returns at most `limit` spans.
+    async fn get_spans_by_user(&self, user_id: Uuid, limit: usize) -> StorageResult<Vec<LlmSpan>>;
+
+    /// Load recent spans across all users, ordered by `started_at` descending.
+    /// Returns at most `limit` spans.
+    async fn list_recent_spans(&self, limit: usize) -> StorageResult<Vec<LlmSpan>>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
 /// Users, sessions, episodes, entities, edges — anything that's JSON/structured data.
 pub trait StateStore:
-    UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + AgentStore + DigestStore
+    UserStore
+    + SessionStore
+    + EpisodeStore
+    + EntityStore
+    + EdgeStore
+    + AgentStore
+    + DigestStore
+    + SpanStore
 {
 }
 
 /// Blanket implementation for StateStore.
 impl<T> StateStore for T where
-    T: UserStore + SessionStore + EpisodeStore + EntityStore + EdgeStore + AgentStore + DigestStore
+    T: UserStore
+        + SessionStore
+        + EpisodeStore
+        + EntityStore
+        + EdgeStore
+        + AgentStore
+        + DigestStore
+        + SpanStore
 {
 }
 

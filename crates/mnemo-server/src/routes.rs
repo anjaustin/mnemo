@@ -35,8 +35,8 @@ use mnemo_core::models::{
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::storage::{
-    AgentStore, EdgeStore, EntityStore, EpisodeStore, RawVectorStore, SessionStore, UserStore,
-    VectorStore,
+    AgentStore, EdgeStore, EntityStore, EpisodeStore, RawVectorStore, SessionStore, SpanStore,
+    UserStore, VectorStore,
 };
 
 use mnemo_retrieval::Reranker;
@@ -8151,8 +8151,15 @@ use crate::state::{LlmSpan, MemoryDigest};
 /// Maximum number of LLM spans retained in the in-memory ring buffer.
 const MAX_LLM_SPANS: usize = 500;
 
-/// Record an LLM span into the ring buffer, evicting the oldest if full.
+/// Record an LLM span into the ring buffer and persist to Redis.
+/// Redis persistence is best-effort; failures are logged but do not propagate.
 async fn record_llm_span(state: &AppState, span: LlmSpan) {
+    // Persist to Redis (best-effort)
+    if let Err(e) = state.state_store.save_span(&span).await {
+        tracing::warn!("Failed to persist LLM span to Redis: {e}");
+    }
+
+    // Also push to the in-memory ring buffer
     let mut spans = state.llm_spans.write().await;
     if spans.len() >= MAX_LLM_SPANS {
         spans.pop_front();
@@ -8163,15 +8170,25 @@ async fn record_llm_span(state: &AppState, span: LlmSpan) {
 /// `GET /api/v1/spans/request/:request_id`
 ///
 /// Return all LLM call spans associated with a specific request ID.
+/// Reads from Redis first; falls back to the in-memory ring buffer if Redis
+/// returns no results (e.g. spans were created before persistence was enabled).
 async fn list_spans_by_request(
     State(state): State<AppState>,
     Path(request_id): Path<String>,
 ) -> Json<serde_json::Value> {
-    let spans = state.llm_spans.read().await;
-    let matched: Vec<&LlmSpan> = spans
-        .iter()
-        .filter(|s| s.request_id.as_deref() == Some(request_id.as_str()))
-        .collect();
+    // Try Redis first
+    let matched: Vec<LlmSpan> = match state.state_store.get_spans_by_request(&request_id).await {
+        Ok(spans) if !spans.is_empty() => spans,
+        _ => {
+            // Fallback to in-memory ring buffer
+            let spans = state.llm_spans.read().await;
+            spans
+                .iter()
+                .filter(|s| s.request_id.as_deref() == Some(request_id.as_str()))
+                .cloned()
+                .collect()
+        }
+    };
     Json(serde_json::json!({
         "request_id": request_id,
         "spans": matched,
@@ -8184,6 +8201,8 @@ async fn list_spans_by_request(
 /// `GET /api/v1/spans/user/:user_id`
 ///
 /// Return recent LLM spans for a given user ID.
+/// Reads from Redis first; falls back to the in-memory ring buffer if Redis
+/// returns no results.
 #[derive(Deserialize)]
 struct SpansUserParams {
     #[serde(default = "default_spans_limit")]
@@ -8199,13 +8218,23 @@ async fn list_spans_by_user(
     Path(user_id): Path<Uuid>,
     Query(params): Query<SpansUserParams>,
 ) -> Json<serde_json::Value> {
-    let spans = state.llm_spans.read().await;
-    let matched: Vec<&LlmSpan> = spans
-        .iter()
-        .rev()
-        .filter(|s| s.user_id == Some(user_id))
-        .take(params.limit)
-        .collect();
+    let clamped_limit = params.limit.clamp(1, 1000);
+    // Try Redis first
+    let matched: Vec<LlmSpan> =
+        match state.state_store.get_spans_by_user(user_id, clamped_limit).await {
+            Ok(spans) if !spans.is_empty() => spans,
+            _ => {
+                // Fallback to in-memory ring buffer
+                let spans = state.llm_spans.read().await;
+                spans
+                    .iter()
+                    .rev()
+                    .filter(|s| s.user_id == Some(user_id))
+                    .take(clamped_limit)
+                    .cloned()
+                    .collect()
+            }
+        };
     Json(serde_json::json!({
         "user_id": user_id,
         "spans": matched,

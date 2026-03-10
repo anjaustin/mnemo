@@ -434,3 +434,178 @@ async fn test_digest_delete() {
     let all = store.list_digests().await.unwrap();
     assert!(!all.iter().any(|d| d.user_id == user_id));
 }
+
+// ─── Span Storage ──────────────────────────────────────────────────
+
+fn make_test_span(
+    request_id: Option<&str>,
+    user_id: Option<Uuid>,
+    operation: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> mnemo_core::models::span::LlmSpan {
+    mnemo_core::models::span::LlmSpan {
+        id: Uuid::now_v7(),
+        request_id: request_id.map(String::from),
+        user_id,
+        provider: "test-provider".into(),
+        model: "test-model".into(),
+        operation: operation.into(),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        total_tokens: 150,
+        latency_ms: 250,
+        success: true,
+        error: None,
+        started_at,
+        finished_at: started_at + chrono::Duration::milliseconds(250),
+    }
+}
+
+#[tokio::test]
+async fn test_span_save_and_load_by_request() {
+    let store = get_store().await;
+    let rid = format!("req-{}", Uuid::now_v7());
+    let user_id = Uuid::now_v7();
+    let now = chrono::Utc::now();
+
+    // No spans initially
+    let spans = store.get_spans_by_request(&rid).await.unwrap();
+    assert!(spans.is_empty());
+
+    // Save two spans with the same request ID
+    let span1 = make_test_span(Some(&rid), Some(user_id), "extract", now);
+    let span2 = make_test_span(
+        Some(&rid),
+        Some(user_id),
+        "embed_episode",
+        now + chrono::Duration::milliseconds(500),
+    );
+    store.save_span(&span1).await.unwrap();
+    store.save_span(&span2).await.unwrap();
+
+    // Load by request ID — should return both in ascending order
+    let loaded = store.get_spans_by_request(&rid).await.unwrap();
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].id, span1.id);
+    assert_eq!(loaded[0].operation, "extract");
+    assert_eq!(loaded[1].id, span2.id);
+    assert_eq!(loaded[1].operation, "embed_episode");
+}
+
+#[tokio::test]
+async fn test_span_load_by_user() {
+    let store = get_store().await;
+    let user_id = Uuid::now_v7();
+    let other_user = Uuid::now_v7();
+    let now = chrono::Utc::now();
+
+    // Save spans for two different users
+    let span1 = make_test_span(None, Some(user_id), "extract", now);
+    let span2 = make_test_span(
+        None,
+        Some(user_id),
+        "summarize",
+        now + chrono::Duration::seconds(1),
+    );
+    let span3 = make_test_span(None, Some(other_user), "digest", now);
+    store.save_span(&span1).await.unwrap();
+    store.save_span(&span2).await.unwrap();
+    store.save_span(&span3).await.unwrap();
+
+    // Load by user — should return only user's spans in descending order
+    let loaded = store.get_spans_by_user(user_id, 100).await.unwrap();
+    assert_eq!(loaded.len(), 2);
+    // Descending: newest first
+    assert_eq!(loaded[0].id, span2.id);
+    assert_eq!(loaded[1].id, span1.id);
+
+    // Other user should have their own spans
+    let other_loaded = store.get_spans_by_user(other_user, 100).await.unwrap();
+    assert_eq!(other_loaded.len(), 1);
+    assert_eq!(other_loaded[0].id, span3.id);
+}
+
+#[tokio::test]
+async fn test_span_list_recent() {
+    let store = get_store().await;
+    let now = chrono::Utc::now();
+
+    let span1 = make_test_span(None, None, "extract", now);
+    let span2 = make_test_span(
+        None,
+        None,
+        "summarize",
+        now + chrono::Duration::seconds(1),
+    );
+    let span3 = make_test_span(
+        None,
+        None,
+        "digest",
+        now + chrono::Duration::seconds(2),
+    );
+    store.save_span(&span1).await.unwrap();
+    store.save_span(&span2).await.unwrap();
+    store.save_span(&span3).await.unwrap();
+
+    // list_recent_spans with limit — descending order
+    let recent = store.list_recent_spans(2).await.unwrap();
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[0].id, span3.id); // newest
+    assert_eq!(recent[1].id, span2.id);
+
+    // All spans
+    let all = store.list_recent_spans(100).await.unwrap();
+    assert_eq!(all.len(), 3);
+}
+
+#[tokio::test]
+async fn test_span_no_request_id_not_indexed_by_request() {
+    let store = get_store().await;
+    let now = chrono::Utc::now();
+
+    // Span with no request_id
+    let span = make_test_span(None, None, "extract", now);
+    store.save_span(&span).await.unwrap();
+
+    // Should appear in global list
+    let all = store.list_recent_spans(100).await.unwrap();
+    assert!(all.iter().any(|s| s.id == span.id));
+
+    // Should NOT appear in any request_id query
+    let by_req = store.get_spans_by_request("nonexistent").await.unwrap();
+    assert!(by_req.is_empty());
+}
+
+#[tokio::test]
+async fn test_span_roundtrip_preserves_fields() {
+    let store = get_store().await;
+    let user_id = Uuid::now_v7();
+    let rid = format!("req-{}", Uuid::now_v7());
+    let now = chrono::Utc::now();
+
+    let mut span = make_test_span(Some(&rid), Some(user_id), "extract", now);
+    span.success = false;
+    span.error = Some("test error message".into());
+    span.prompt_tokens = 200;
+    span.completion_tokens = 300;
+    span.total_tokens = 500;
+    span.latency_ms = 1234;
+
+    store.save_span(&span).await.unwrap();
+
+    let loaded = store.get_spans_by_request(&rid).await.unwrap();
+    assert_eq!(loaded.len(), 1);
+    let loaded = &loaded[0];
+    assert_eq!(loaded.id, span.id);
+    assert_eq!(loaded.request_id.as_deref(), Some(rid.as_str()));
+    assert_eq!(loaded.user_id, Some(user_id));
+    assert_eq!(loaded.provider, "test-provider");
+    assert_eq!(loaded.model, "test-model");
+    assert_eq!(loaded.operation, "extract");
+    assert_eq!(loaded.prompt_tokens, 200);
+    assert_eq!(loaded.completion_tokens, 300);
+    assert_eq!(loaded.total_tokens, 500);
+    assert_eq!(loaded.latency_ms, 1234);
+    assert!(!loaded.success);
+    assert_eq!(loaded.error.as_deref(), Some("test error message"));
+}

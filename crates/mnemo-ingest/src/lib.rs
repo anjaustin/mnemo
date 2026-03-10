@@ -23,7 +23,8 @@ use mnemo_core::models::episode::Episode;
 use mnemo_core::models::session::UpdateSessionRequest;
 use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
 use mnemo_core::traits::storage::{
-    DigestStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, StorageResult, VectorStore,
+    DigestStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, SpanStore, StorageResult,
+    VectorStore,
 };
 
 /// Re-export `LlmSpan` from mnemo-core so callers can use `mnemo_ingest::LlmSpan`.
@@ -93,7 +94,7 @@ pub type DigestCache = Arc<RwLock<HashMap<Uuid, MemoryDigest>>>;
 /// and generates memory digests in the background.
 pub struct IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore,
+    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore + SpanStore,
     V: VectorStore,
     L: LlmProvider,
     E: EmbeddingProvider,
@@ -116,7 +117,7 @@ where
 
 impl<S, V, L, E> IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore + Send + Sync + 'static,
+    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore + SpanStore + Send + Sync + 'static,
     V: VectorStore + Send + Sync + 'static,
     L: LlmProvider + Send + Sync + 'static,
     E: EmbeddingProvider + Send + Sync + 'static,
@@ -155,8 +156,15 @@ where
         self
     }
 
-    /// Record an LLM span into the shared ring buffer (if attached).
+    /// Record an LLM span into the shared ring buffer (if attached) and
+    /// persist to Redis via the SpanStore.
     async fn record_span(&self, span: LlmSpan) {
+        // Persist to Redis (best-effort — don't fail the pipeline on span storage errors)
+        if let Err(e) = self.state_store.save_span(&span).await {
+            tracing::warn!("Failed to persist LLM span to Redis: {e}");
+        }
+
+        // Also push to the in-memory ring buffer for backward compatibility
         if let Some(ref sink) = self.span_sink {
             let mut spans = sink.write().await;
             if spans.len() >= MAX_SPANS {

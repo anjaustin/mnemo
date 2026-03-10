@@ -16,6 +16,7 @@ use mnemo_core::models::{
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams, ProcessingStatus},
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
+    span::LlmSpan,
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::storage::*;
@@ -43,6 +44,10 @@ use mnemo_core::traits::storage::*;
 /// {prefix}rid_episodes:{request_id}   → Sorted Set (score=epoch_ms, member="{ep_id}:{user_id}:{sess_id}")
 /// {prefix}digest:{user_id}            → JSON MemoryDigest
 /// {prefix}digests                      → Sorted Set (score=generated_at_ms, member=user_id)
+/// {prefix}span:{id}                   → JSON LlmSpan (TTL: 7 days)
+/// {prefix}spans                        → Sorted Set (score=started_at_ms, member=span_id)
+/// {prefix}spans_request:{request_id}  → Sorted Set (score=started_at_ms, member=span_id)
+/// {prefix}spans_user:{user_id}        → Sorted Set (score=started_at_ms, member=span_id)
 /// ```
 #[derive(Clone)]
 pub struct RedisStateStore {
@@ -1204,5 +1209,134 @@ impl DigestStore for RedisStateStore {
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
         Ok(())
+    }
+}
+
+// ─── SpanStore ─────────────────────────────────────────────────────
+
+/// 7-day TTL for span keys (in seconds).
+const SPAN_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+
+impl SpanStore for RedisStateStore {
+    async fn save_span(&self, span: &LlmSpan) -> StorageResult<()> {
+        let span_id = span.id.to_string();
+        let key = self.key(&["span", &span_id]);
+        let global_zset = self.key(&["spans"]);
+        let json = serde_json::to_string(span)
+            .map_err(|e| MnemoError::Serialization(e.to_string()))?;
+        let score = span.started_at.timestamp_millis() as f64;
+
+        let mut conn = self.conn.clone();
+
+        // Atomic pipeline: JSON.SET + EXPIRE + ZADD global + optional index sets
+        let mut pipe = redis::pipe();
+        pipe.atomic()
+            .cmd("JSON.SET")
+            .arg(&key)
+            .arg("$")
+            .arg(&json)
+            .ignore()
+            .cmd("EXPIRE")
+            .arg(&key)
+            .arg(SPAN_TTL_SECS)
+            .ignore()
+            .cmd("ZADD")
+            .arg(&global_zset)
+            .arg(score)
+            .arg(&span_id)
+            .ignore();
+
+        // Index by request_id if present
+        if let Some(ref rid) = span.request_id {
+            let req_zset = self.key(&["spans_request", rid]);
+            pipe.cmd("ZADD")
+                .arg(&req_zset)
+                .arg(score)
+                .arg(&span_id)
+                .ignore()
+                .cmd("EXPIRE")
+                .arg(&req_zset)
+                .arg(SPAN_TTL_SECS)
+                .ignore();
+        }
+
+        // Index by user_id if present
+        if let Some(uid) = span.user_id {
+            let user_zset = self.key(&["spans_user", &uid.to_string()]);
+            pipe.cmd("ZADD")
+                .arg(&user_zset)
+                .arg(score)
+                .arg(&span_id)
+                .ignore()
+                .cmd("EXPIRE")
+                .arg(&user_zset)
+                .arg(SPAN_TTL_SECS)
+                .ignore();
+        }
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_spans_by_request(&self, request_id: &str) -> StorageResult<Vec<LlmSpan>> {
+        let req_zset = self.key(&["spans_request", request_id]);
+        let mut conn = self.conn.clone();
+
+        let span_ids: Vec<String> = conn
+            .zrange(&req_zset, 0, -1)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut spans = Vec::with_capacity(span_ids.len());
+        for sid in &span_ids {
+            let key = self.key(&["span", sid]);
+            if let Some(span) = self.get_json::<LlmSpan>(&key).await? {
+                spans.push(span);
+            }
+        }
+        Ok(spans)
+    }
+
+    async fn get_spans_by_user(&self, user_id: Uuid, limit: usize) -> StorageResult<Vec<LlmSpan>> {
+        let user_zset = self.key(&["spans_user", &user_id.to_string()]);
+        let mut conn = self.conn.clone();
+
+        let clamped = limit.clamp(1, 1000) as isize;
+        let span_ids: Vec<String> = conn
+            .zrevrange(&user_zset, 0, clamped - 1)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut spans = Vec::with_capacity(span_ids.len());
+        for sid in &span_ids {
+            let key = self.key(&["span", sid]);
+            if let Some(span) = self.get_json::<LlmSpan>(&key).await? {
+                spans.push(span);
+            }
+        }
+        Ok(spans)
+    }
+
+    async fn list_recent_spans(&self, limit: usize) -> StorageResult<Vec<LlmSpan>> {
+        let global_zset = self.key(&["spans"]);
+        let mut conn = self.conn.clone();
+
+        let clamped = limit.clamp(1, 1000) as isize;
+        let span_ids: Vec<String> = conn
+            .zrevrange(&global_zset, 0, clamped - 1)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut spans = Vec::with_capacity(span_ids.len());
+        for sid in &span_ids {
+            let key = self.key(&["span", sid]);
+            if let Some(span) = self.get_json::<LlmSpan>(&key).await? {
+                spans.push(span);
+            }
+        }
+        Ok(spans)
     }
 }
