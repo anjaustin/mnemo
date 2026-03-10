@@ -270,3 +270,159 @@ impl PromotionProposal {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_agent_identity_new_defaults() {
+        let profile = AgentIdentityProfile::new("support-bot".into());
+        assert_eq!(profile.agent_id, "support-bot");
+        assert_eq!(profile.version, 1);
+        assert_eq!(profile.core, json!({}));
+    }
+
+    #[test]
+    fn test_agent_identity_apply_update_increments_version() {
+        let mut profile = AgentIdentityProfile::new("bot".into());
+        assert_eq!(profile.version, 1);
+        let req = UpdateAgentIdentityRequest {
+            core: json!({"mission": "help with billing"}),
+        };
+        profile.apply_update(req);
+        assert_eq!(profile.version, 2);
+        assert_eq!(profile.core["mission"], "help with billing");
+    }
+
+    #[test]
+    fn test_agent_identity_apply_update_replaces_core_entirely() {
+        let mut profile = AgentIdentityProfile::new("bot".into());
+        profile.core = json!({"mission": "old", "style": "formal"});
+        let req = UpdateAgentIdentityRequest {
+            core: json!({"mission": "new"}),
+        };
+        profile.apply_update(req);
+        // "style" should be gone — full replacement, not merge
+        assert!(profile.core.get("style").is_none());
+        assert_eq!(profile.core["mission"], "new");
+    }
+
+    #[test]
+    fn test_agent_identity_serialization_roundtrip() {
+        let profile = AgentIdentityProfile::new("bot-v2".into());
+        let json_str = serde_json::to_string(&profile).unwrap();
+        let restored: AgentIdentityProfile = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(restored.agent_id, "bot-v2");
+        assert_eq!(restored.version, 1);
+    }
+
+    #[test]
+    fn test_experience_event_from_request_defaults() {
+        let req = CreateExperienceRequest {
+            id: None,
+            user_id: None,
+            session_id: None,
+            category: "tone".into(),
+            signal: "user prefers formal".into(),
+            confidence: 0.9,
+            weight: 0.5,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            created_at: None,
+        };
+        let event = ExperienceEvent::from_request("bot", req);
+        assert_eq!(event.agent_id, "bot");
+        assert_eq!(event.category, "tone");
+        assert_eq!(event.confidence, 0.9);
+        assert_eq!(event.weight, 0.5);
+        assert_eq!(event.decay_half_life_days, 30);
+    }
+
+    #[test]
+    fn test_experience_event_from_request_preserves_client_id() {
+        let client_id = Uuid::now_v7();
+        let req = CreateExperienceRequest {
+            id: Some(client_id),
+            user_id: None,
+            session_id: None,
+            category: "domain".into(),
+            signal: "knows billing".into(),
+            confidence: 0.8,
+            weight: 0.7,
+            decay_half_life_days: 60,
+            evidence_episode_ids: vec![],
+            created_at: None,
+        };
+        let event = ExperienceEvent::from_request("bot", req);
+        assert_eq!(event.id, client_id);
+    }
+
+    #[test]
+    fn test_promotion_proposal_from_request_defaults_to_pending() {
+        let req = CreatePromotionProposalRequest {
+            id: None,
+            proposal: "Add refund handling".into(),
+            candidate_core: json!({"mission": "billing + refunds"}),
+            reason: "Learned from 3 sessions".into(),
+            risk_level: "low".into(),
+            source_event_ids: vec![Uuid::now_v7(); 3],
+        };
+        let proposal = PromotionProposal::from_request("bot", req);
+        assert_eq!(proposal.status, PromotionStatus::Pending);
+        assert_eq!(proposal.agent_id, "bot");
+        assert_eq!(proposal.risk_level, "low");
+        assert!(proposal.approved_at.is_none());
+        assert!(proposal.rejected_at.is_none());
+    }
+
+    #[test]
+    fn test_promotion_status_serde_roundtrip() {
+        assert_eq!(
+            serde_json::to_string(&PromotionStatus::Pending).unwrap(),
+            "\"pending\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PromotionStatus::Approved).unwrap(),
+            "\"approved\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PromotionStatus::Rejected).unwrap(),
+            "\"rejected\""
+        );
+        let round: PromotionStatus = serde_json::from_str("\"rejected\"").unwrap();
+        assert_eq!(round, PromotionStatus::Rejected);
+    }
+
+    #[test]
+    fn test_audit_action_serde_roundtrip() {
+        assert_eq!(
+            serde_json::to_string(&AgentIdentityAuditAction::Created).unwrap(),
+            "\"created\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AgentIdentityAuditAction::Updated).unwrap(),
+            "\"updated\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AgentIdentityAuditAction::RolledBack).unwrap(),
+            "\"rolled_back\""
+        );
+    }
+
+    #[test]
+    fn test_default_weight_and_half_life() {
+        let json_str = r#"{"category":"x","signal":"y","confidence":0.5}"#;
+        let req: CreateExperienceRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(req.weight, 0.5);
+        assert_eq!(req.decay_half_life_days, 30);
+    }
+
+    #[test]
+    fn test_default_risk_level() {
+        let json_str = r#"{"proposal":"p","reason":"r","source_event_ids":[]}"#;
+        let req: CreatePromotionProposalRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(req.risk_level, "medium");
+    }
+}
