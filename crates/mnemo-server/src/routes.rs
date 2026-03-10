@@ -26,7 +26,7 @@ use mnemo_core::models::{
         RetrievalSource, TemporalIntent,
     },
     edge::{Edge, EdgeFilter, ExtractedRelationship},
-    entity::{Entity, ExtractedEntity},
+    entity::{Entity, EntityType, ExtractedEntity},
     episode::{
         BatchCreateEpisodesRequest, CreateEpisodeRequest, Episode, EpisodeType, ListEpisodesParams,
         MessageRole, ProcessingStatus,
@@ -1190,6 +1190,7 @@ pub fn build_router(state: AppState) -> Router {
             get(graph_neighbors),
         )
         .route("/api/v1/graph/:user/community", get(graph_community))
+        .route("/api/v1/graph/:user/path", get(graph_shortest_path))
         // LLM span tracing
         .route(
             "/api/v1/spans/request/:request_id",
@@ -7731,21 +7732,69 @@ async fn vectors_exists(
 
 // ─── Knowledge Graph API ───────────────────────────────────────────────────
 
+/// Query parameters for entity listing with optional type/name filters.
+#[derive(Deserialize)]
+struct GraphEntitiesParams {
+    #[serde(default = "default_limit")]
+    limit: u32,
+    after: Option<Uuid>,
+    /// Filter by entity type (case-insensitive, e.g. "person", "concept").
+    entity_type: Option<String>,
+    /// Filter by entity name (case-insensitive substring match).
+    name: Option<String>,
+}
+
 /// `GET /api/v1/graph/:user/entities`
 ///
 /// List all entities for a user in a graph-API response envelope.
+/// Supports optional `entity_type` and `name` query parameters for filtering.
 async fn graph_list_entities(
     State(state): State<AppState>,
     Path(user): Path<String>,
-    Query(params): Query<PaginationParams>,
+    Query(params): Query<GraphEntitiesParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let user_rec = find_user_by_identifier(&state, &user).await?;
     let clamped_limit = params.limit.clamp(1, 1000);
+    // Fetch more than requested if filtering (filter reduces result count).
+    // We over-fetch by 4x when filters are active to improve the chance of
+    // filling the requested limit, capped at 1000.
+    let has_filter = params.entity_type.is_some() || params.name.is_some();
+    let fetch_limit = if has_filter {
+        (clamped_limit * 4).min(1000)
+    } else {
+        clamped_limit
+    };
     let entities = state
         .state_store
-        .list_entities(user_rec.id, clamped_limit, params.after)
+        .list_entities(user_rec.id, fetch_limit, params.after)
         .await?;
-    let data: Vec<serde_json::Value> = entities
+
+    // Apply optional filters
+    let type_filter = params
+        .entity_type
+        .as_deref()
+        .map(EntityType::from_str_flexible);
+    let name_lower = params.name.as_deref().map(|n| n.to_lowercase());
+
+    let filtered: Vec<&Entity> = entities
+        .iter()
+        .filter(|e| {
+            if let Some(ref t) = type_filter {
+                if e.entity_type.as_str() != t.as_str() {
+                    return false;
+                }
+            }
+            if let Some(ref n) = name_lower {
+                if !e.name.to_lowercase().contains(n.as_str()) {
+                    return false;
+                }
+            }
+            true
+        })
+        .take(clamped_limit as usize)
+        .collect();
+
+    let data: Vec<serde_json::Value> = filtered
         .iter()
         .map(|e| {
             serde_json::json!({
@@ -7821,13 +7870,17 @@ async fn graph_get_entity(
 
 /// `GET /api/v1/graph/:user/edges`
 ///
-/// List edges for a user with optional label filter.
+/// List edges for a user with optional label, source, and target filters.
 #[derive(Deserialize)]
 struct GraphEdgesParams {
     #[serde(default = "default_limit")]
     limit: u32,
     label: Option<String>,
     valid_only: Option<bool>,
+    /// Filter edges by source entity ID.
+    source_entity_id: Option<Uuid>,
+    /// Filter edges by target entity ID.
+    target_entity_id: Option<Uuid>,
 }
 
 async fn graph_list_edges(
@@ -7841,6 +7894,8 @@ async fn graph_list_edges(
         label: params.label.clone(),
         include_invalidated,
         limit: params.limit.clamp(1, 1000),
+        source_entity_id: params.source_entity_id,
+        target_entity_id: params.target_entity_id,
         ..Default::default()
     };
     let edges = state.state_store.query_edges(user_rec.id, filter).await?;
@@ -7997,6 +8052,94 @@ async fn graph_community(
         "total_entities": labels.len(),
         "community_count": communities.len(),
         "communities": community_list,
+    })))
+}
+
+/// `GET /api/v1/graph/:user/path`
+///
+/// Find the shortest path between two entities in the user's knowledge graph.
+#[derive(Deserialize)]
+struct GraphPathParams {
+    /// Source entity ID.
+    from: Uuid,
+    /// Target entity ID.
+    to: Uuid,
+    /// Maximum hops to search (default: 10, capped at 20).
+    #[serde(default = "default_path_max_depth")]
+    max_depth: u32,
+    /// Only follow valid (non-invalidated) edges (default: true).
+    #[serde(default = "default_true")]
+    valid_only: bool,
+}
+
+fn default_path_max_depth() -> u32 {
+    10
+}
+
+async fn graph_shortest_path(
+    State(state): State<AppState>,
+    Path(user): Path<String>,
+    Query(params): Query<GraphPathParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let user_rec = find_user_by_identifier(&state, &user).await?;
+
+    // Verify both entities belong to the user
+    let from_entity = state.state_store.get_entity(params.from).await?;
+    if from_entity.user_id != user_rec.id {
+        return Err(AppError(MnemoError::NotFound {
+            resource_type: "entity".into(),
+            id: params.from.to_string(),
+        }));
+    }
+    let to_entity = state.state_store.get_entity(params.to).await?;
+    if to_entity.user_id != user_rec.id {
+        return Err(AppError(MnemoError::NotFound {
+            resource_type: "entity".into(),
+            id: params.to.to_string(),
+        }));
+    }
+
+    let result = state
+        .graph
+        .find_shortest_path(
+            params.from,
+            params.to,
+            params.max_depth.min(20),
+            params.valid_only,
+        )
+        .await?;
+
+    let steps: Vec<serde_json::Value> = result
+        .steps
+        .iter()
+        .map(|s| {
+            let mut step = serde_json::json!({
+                "entity_id": s.entity.id,
+                "entity_name": s.entity.name,
+                "entity_type": s.entity.entity_type.as_str(),
+                "depth": s.depth,
+            });
+            if let Some(ref edge) = s.edge {
+                step["edge"] = serde_json::json!({
+                    "id": edge.id,
+                    "source_entity_id": edge.source_entity_id,
+                    "target_entity_id": edge.target_entity_id,
+                    "label": edge.label,
+                    "fact": edge.fact,
+                    "valid": edge.is_valid(),
+                });
+            }
+            step
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "from": params.from,
+        "to": params.to,
+        "found": result.found,
+        "path_length": if result.found { result.steps.len().saturating_sub(1) } else { 0 },
+        "steps": steps,
+        "entities_visited": result.entities_visited,
     })))
 }
 

@@ -32,6 +32,26 @@ pub struct Subgraph {
     pub entities_visited: usize,
 }
 
+/// A step in a shortest path between two entities.
+#[derive(Debug, Clone)]
+pub struct PathStep {
+    pub entity: Entity,
+    /// The edge that was traversed to reach this entity (None for the source).
+    pub edge: Option<Edge>,
+    /// Hop distance from the source entity (0 = source).
+    pub depth: u32,
+}
+
+/// Result of a shortest path search.
+#[derive(Debug, Clone)]
+pub struct ShortestPath {
+    pub steps: Vec<PathStep>,
+    /// Total entities visited during the search.
+    pub entities_visited: usize,
+    /// Whether a path was found.
+    pub found: bool,
+}
+
 /// Graph traversal engine.
 pub struct GraphEngine<S: EntityStore + EdgeStore> {
     store: Arc<S>,
@@ -129,6 +149,154 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
             entities_visited: visited.len(),
             nodes,
             edges: all_edges,
+        })
+    }
+
+    /// BFS shortest path from `from_id` to `to_id`.
+    ///
+    /// - `max_depth`: maximum hops to search (prevents runaway on large graphs)
+    /// - `valid_only`: if true, only follow currently valid edges
+    ///
+    /// Returns a `ShortestPath` with the ordered steps from source to target,
+    /// or an empty path with `found: false` if no path exists within `max_depth`.
+    pub async fn find_shortest_path(
+        &self,
+        from_id: Uuid,
+        to_id: Uuid,
+        max_depth: u32,
+        valid_only: bool,
+    ) -> StorageResult<ShortestPath> {
+        if from_id == to_id {
+            // Trivial: source == target
+            let entity = match self.store.get_entity(from_id).await {
+                Ok(e) => e,
+                Err(_) => {
+                    return Ok(ShortestPath {
+                        steps: vec![],
+                        entities_visited: 0,
+                        found: false,
+                    })
+                }
+            };
+            return Ok(ShortestPath {
+                steps: vec![PathStep {
+                    entity,
+                    edge: None,
+                    depth: 0,
+                }],
+                entities_visited: 1,
+                found: true,
+            });
+        }
+
+        // BFS with parent tracking: entity_id -> (parent_entity_id, edge_used)
+        let mut visited: HashMap<Uuid, (Option<Uuid>, Option<Edge>)> = HashMap::new();
+        let mut queue: VecDeque<(Uuid, u32)> = VecDeque::new();
+
+        visited.insert(from_id, (None, None));
+        queue.push_back((from_id, 0));
+
+        let mut found = false;
+
+        while let Some((entity_id, depth)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+
+            let outgoing = self
+                .store
+                .get_outgoing_edges(entity_id)
+                .await
+                .unwrap_or_default();
+            let incoming = self
+                .store
+                .get_incoming_edges(entity_id)
+                .await
+                .unwrap_or_default();
+
+            let filtered_out: Vec<Edge> = if valid_only {
+                outgoing.into_iter().filter(|e| e.is_valid()).collect()
+            } else {
+                outgoing
+            };
+            let filtered_in: Vec<Edge> = if valid_only {
+                incoming.into_iter().filter(|e| e.is_valid()).collect()
+            } else {
+                incoming
+            };
+
+            // Check outgoing neighbors
+            for edge in &filtered_out {
+                let neighbor = edge.target_entity_id;
+                if let std::collections::hash_map::Entry::Vacant(e) = visited.entry(neighbor) {
+                    e.insert((Some(entity_id), Some(edge.clone())));
+                    if neighbor == to_id {
+                        found = true;
+                        break;
+                    }
+                    queue.push_back((neighbor, depth + 1));
+                }
+            }
+            if found {
+                break;
+            }
+
+            // Check incoming neighbors (bidirectional traversal)
+            for edge in &filtered_in {
+                let neighbor = edge.source_entity_id;
+                if let std::collections::hash_map::Entry::Vacant(e) = visited.entry(neighbor) {
+                    e.insert((Some(entity_id), Some(edge.clone())));
+                    if neighbor == to_id {
+                        found = true;
+                        break;
+                    }
+                    queue.push_back((neighbor, depth + 1));
+                }
+            }
+            if found {
+                break;
+            }
+        }
+
+        let entities_visited = visited.len();
+
+        if !found {
+            return Ok(ShortestPath {
+                steps: vec![],
+                entities_visited,
+                found: false,
+            });
+        }
+
+        // Reconstruct path from target back to source
+        let mut path_ids: Vec<(Uuid, Option<Edge>)> = Vec::new();
+        let mut current = to_id;
+        while let Some((parent, edge)) = visited.get(&current) {
+            path_ids.push((current, edge.clone()));
+            match parent {
+                Some(p) => current = *p,
+                None => break, // reached source
+            }
+        }
+        path_ids.reverse();
+
+        // Resolve entities for each step
+        let mut steps = Vec::with_capacity(path_ids.len());
+        for (i, (entity_id, edge)) in path_ids.into_iter().enumerate() {
+            match self.store.get_entity(entity_id).await {
+                Ok(entity) => steps.push(PathStep {
+                    entity,
+                    edge,
+                    depth: i as u32,
+                }),
+                Err(_) => continue,
+            }
+        }
+
+        Ok(ShortestPath {
+            steps,
+            entities_visited,
+            found: true,
         })
     }
 
@@ -748,5 +916,252 @@ mod tests {
                 assert_eq!(node.depth, 2, "2-hop neighbor depth must be 2");
             }
         }
+    }
+
+    // ── SP-01: Shortest path finds direct connection ──────────────
+
+    #[tokio::test]
+    async fn test_shortest_path_direct_connection() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_edge(make_edge(a.id, b.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+        let result = engine
+            .find_shortest_path(a.id, b.id, 10, false)
+            .await
+            .unwrap();
+
+        assert!(result.found, "path should be found");
+        assert_eq!(result.steps.len(), 2, "path A->B has 2 steps");
+        assert_eq!(result.steps[0].entity.id, a.id);
+        assert_eq!(result.steps[1].entity.id, b.id);
+        assert!(
+            result.steps[0].edge.is_none(),
+            "source step has no incoming edge"
+        );
+        assert!(result.steps[1].edge.is_some(), "target step has edge");
+    }
+
+    // ── SP-02: Shortest path finds multi-hop route ────────────────
+
+    #[tokio::test]
+    async fn test_shortest_path_multi_hop() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // A -> B -> C -> D
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        let d = make_entity("D", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_entity(c.clone());
+        store.add_entity(d.clone());
+        store.add_edge(make_edge(a.id, b.id, user_id, true));
+        store.add_edge(make_edge(b.id, c.id, user_id, true));
+        store.add_edge(make_edge(c.id, d.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+        let result = engine
+            .find_shortest_path(a.id, d.id, 10, false)
+            .await
+            .unwrap();
+
+        assert!(result.found);
+        assert_eq!(result.steps.len(), 4, "path A->B->C->D has 4 steps");
+        assert_eq!(result.steps[0].entity.id, a.id);
+        assert_eq!(result.steps[3].entity.id, d.id);
+    }
+
+    // ── SP-03: Shortest path returns not found for disconnected ───
+
+    #[tokio::test]
+    async fn test_shortest_path_disconnected() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        // No edge between A and B
+
+        let engine = GraphEngine::new(store);
+        let result = engine
+            .find_shortest_path(a.id, b.id, 10, false)
+            .await
+            .unwrap();
+
+        assert!(!result.found, "path should not be found");
+        assert!(result.steps.is_empty());
+    }
+
+    // ── SP-04: Shortest path same source and target ───────────────
+
+    #[tokio::test]
+    async fn test_shortest_path_same_node() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        let a = make_entity("A", user_id);
+        store.add_entity(a.clone());
+
+        let engine = GraphEngine::new(store);
+        let result = engine
+            .find_shortest_path(a.id, a.id, 10, false)
+            .await
+            .unwrap();
+
+        assert!(result.found);
+        assert_eq!(result.steps.len(), 1, "same node path has 1 step");
+        assert_eq!(result.steps[0].entity.id, a.id);
+    }
+
+    // ── SP-05: Shortest path respects max_depth ───────────────────
+
+    #[tokio::test]
+    async fn test_shortest_path_max_depth() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // A -> B -> C -> D (3 hops)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        let d = make_entity("D", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_entity(c.clone());
+        store.add_entity(d.clone());
+        store.add_edge(make_edge(a.id, b.id, user_id, true));
+        store.add_edge(make_edge(b.id, c.id, user_id, true));
+        store.add_edge(make_edge(c.id, d.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+
+        // max_depth=2 should fail (3 hops needed)
+        let result = engine
+            .find_shortest_path(a.id, d.id, 2, false)
+            .await
+            .unwrap();
+        assert!(
+            !result.found,
+            "should not find path at depth 2 when 3 hops needed"
+        );
+
+        // max_depth=3 should succeed
+        let store2 = Arc::new(MockGraphStore::new());
+        store2.add_entity(a.clone());
+        store2.add_entity(b.clone());
+        store2.add_entity(c.clone());
+        store2.add_entity(d.clone());
+        store2.add_edge(make_edge(a.id, b.id, user_id, true));
+        store2.add_edge(make_edge(b.id, c.id, user_id, true));
+        store2.add_edge(make_edge(c.id, d.id, user_id, true));
+        let engine2 = GraphEngine::new(store2);
+        let result2 = engine2
+            .find_shortest_path(a.id, d.id, 3, false)
+            .await
+            .unwrap();
+        assert!(result2.found, "should find path at depth 3");
+    }
+
+    // ── SP-06: Shortest path valid_only filters invalidated edges ──
+
+    #[tokio::test]
+    async fn test_shortest_path_valid_only() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // A -> B (invalidated), A -> C -> B (valid path)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_entity(c.clone());
+        store.add_edge(make_edge(a.id, b.id, user_id, false)); // invalidated
+        store.add_edge(make_edge(a.id, c.id, user_id, true));
+        store.add_edge(make_edge(c.id, b.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+
+        // valid_only=true should find A->C->B (2 hops)
+        let result = engine
+            .find_shortest_path(a.id, b.id, 10, true)
+            .await
+            .unwrap();
+        assert!(result.found);
+        assert_eq!(result.steps.len(), 3, "valid path is A->C->B (3 steps)");
+
+        // valid_only=false should find A->B (1 hop, the direct but invalidated edge)
+        let store2 = Arc::new(MockGraphStore::new());
+        store2.add_entity(a.clone());
+        store2.add_entity(b.clone());
+        store2.add_entity(c.clone());
+        store2.add_edge(make_edge(a.id, b.id, user_id, false));
+        store2.add_edge(make_edge(a.id, c.id, user_id, true));
+        store2.add_edge(make_edge(c.id, b.id, user_id, true));
+        let engine2 = GraphEngine::new(store2);
+        let result2 = engine2
+            .find_shortest_path(a.id, b.id, 10, false)
+            .await
+            .unwrap();
+        assert!(result2.found);
+        assert_eq!(
+            result2.steps.len(),
+            2,
+            "with invalidated edges included, direct path A->B (2 steps)"
+        );
+    }
+
+    // ── SP-07: Shortest path follows incoming edges ────────────────
+
+    #[tokio::test]
+    async fn test_shortest_path_follows_incoming() {
+        let user_id = Uuid::now_v7();
+        let store = Arc::new(MockGraphStore::new());
+
+        // B -> A, B -> C (path from A to C goes A<-B->C)
+        let a = make_entity("A", user_id);
+        let b = make_entity("B", user_id);
+        let c = make_entity("C", user_id);
+        store.add_entity(a.clone());
+        store.add_entity(b.clone());
+        store.add_entity(c.clone());
+        store.add_edge(make_edge(b.id, a.id, user_id, true)); // incoming for A
+        store.add_edge(make_edge(b.id, c.id, user_id, true));
+
+        let engine = GraphEngine::new(store);
+        let result = engine
+            .find_shortest_path(a.id, c.id, 10, false)
+            .await
+            .unwrap();
+
+        assert!(result.found, "should find path via incoming edge: A<-B->C");
+        assert_eq!(result.steps.len(), 3);
+    }
+
+    // ── SP-08: Shortest path nonexistent entities ─────────────────
+
+    #[tokio::test]
+    async fn test_shortest_path_nonexistent() {
+        let store = Arc::new(MockGraphStore::new());
+        let engine = GraphEngine::new(store);
+
+        let result = engine
+            .find_shortest_path(Uuid::now_v7(), Uuid::now_v7(), 10, false)
+            .await
+            .unwrap();
+
+        assert!(!result.found);
+        assert!(result.steps.is_empty());
     }
 }

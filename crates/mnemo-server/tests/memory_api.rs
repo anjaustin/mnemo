@@ -19,7 +19,7 @@ use mnemo_core::models::edge::{Edge, ExtractedRelationship};
 use mnemo_core::models::entity::{Entity, EntityType, ExtractedEntity};
 use mnemo_core::traits::fulltext::FullTextStore;
 use mnemo_core::traits::llm::EmbeddingConfig;
-use mnemo_core::traits::storage::{EdgeStore, EntityStore};
+use mnemo_core::traits::storage::{EdgeStore, EntityStore, UserStore};
 use mnemo_graph::GraphEngine;
 use mnemo_llm::{EmbedderKind, OpenAiCompatibleEmbedder};
 use mnemo_retrieval::RetrievalEngine;
@@ -6782,4 +6782,472 @@ async fn test_digest_post_without_llm_returns_error() {
             .contains("LLM provider"),
         "error should mention LLM provider not configured, got: {body}"
     );
+}
+
+// ─── Graph API Integration Tests ───────────────────────────────────────────
+
+/// Helper: create a user, entities, and edges for graph API tests.
+/// Returns (user_id, entity_ids: [A, B, C, D]) where:
+///   A -> B -> C (chain), A -> D (separate branch), all valid
+async fn setup_graph_data(state_store: &Arc<RedisStateStore>) -> (Uuid, [Uuid; 4]) {
+    use mnemo_core::models::user::CreateUserRequest;
+
+    let user = state_store
+        .create_user(CreateUserRequest {
+            id: None,
+            name: "graph-test-user".into(),
+            external_id: Some(format!("graph-ext-{}", Uuid::now_v7())),
+            email: None,
+            metadata: serde_json::Value::Null,
+        })
+        .await
+        .unwrap();
+
+    let now = chrono::Utc::now();
+    let mut entity_ids = [Uuid::nil(); 4];
+    let names = ["Alpha", "Beta", "Gamma", "Delta"];
+    let types = [
+        EntityType::Person,
+        EntityType::Concept,
+        EntityType::Concept,
+        EntityType::Location,
+    ];
+
+    for (i, (name, etype)) in names.iter().zip(types.iter()).enumerate() {
+        let entity = Entity {
+            id: Uuid::now_v7(),
+            user_id: user.id,
+            name: name.to_string(),
+            entity_type: etype.clone(),
+            summary: Some(format!("{name} summary")),
+            aliases: vec![],
+            metadata: serde_json::Value::Null,
+            mention_count: 1,
+            community_id: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let created = state_store.create_entity(entity).await.unwrap();
+        entity_ids[i] = created.id;
+    }
+
+    // Edges: A->B, B->C, A->D
+    let edges = [
+        (entity_ids[0], entity_ids[1], "knows"),
+        (entity_ids[1], entity_ids[2], "related_to"),
+        (entity_ids[0], entity_ids[3], "located_in"),
+    ];
+    for (src, tgt, label) in &edges {
+        let edge = Edge {
+            id: Uuid::now_v7(),
+            user_id: user.id,
+            source_entity_id: *src,
+            target_entity_id: *tgt,
+            label: label.to_string(),
+            fact: format!("{} {} {}", src, label, tgt),
+            valid_at: now,
+            invalid_at: None,
+            ingested_at: now,
+            source_episode_id: Uuid::now_v7(),
+            invalidated_by_episode_id: None,
+            confidence: 0.9,
+            corroboration_count: 1,
+            metadata: serde_json::Value::Null,
+            created_at: now,
+            updated_at: now,
+        };
+        state_store.create_edge(edge).await.unwrap();
+    }
+
+    (user.id, entity_ids)
+}
+
+// ── GRAPH-01: List entities returns all entities for user ──────────
+
+#[tokio::test]
+async fn test_graph_list_entities() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, _eids) = setup_graph_data(&state_store).await;
+
+    let (status, body) = get_request(&app, &format!("/api/v1/graph/{user_id}/entities")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 4);
+    assert_eq!(body["data"].as_array().unwrap().len(), 4);
+    assert_eq!(body["user_id"].as_str().unwrap(), user_id.to_string());
+}
+
+// ── GRAPH-02: List entities with entity_type filter ────────────────
+
+#[tokio::test]
+async fn test_graph_list_entities_type_filter() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, _eids) = setup_graph_data(&state_store).await;
+
+    // Filter by "concept" — should return Beta and Gamma
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/graph/{user_id}/entities?entity_type=concept"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        2,
+        "expected 2 concept entities, got: {body}"
+    );
+
+    // Filter by "person" — should return Alpha only
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/graph/{user_id}/entities?entity_type=person"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 1);
+    assert_eq!(body["data"][0]["name"].as_str().unwrap(), "Alpha");
+}
+
+// ── GRAPH-03: List entities with name filter ───────────────────────
+
+#[tokio::test]
+async fn test_graph_list_entities_name_filter() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, _eids) = setup_graph_data(&state_store).await;
+
+    // Substring match: "lpha" should match "Alpha" only
+    let (status, body) =
+        get_request(&app, &format!("/api/v1/graph/{user_id}/entities?name=lpha")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        1,
+        "expected 1 entity matching 'lpha', got: {body}"
+    );
+    assert_eq!(body["data"][0]["name"].as_str().unwrap(), "Alpha");
+
+    // Case-insensitive: "BETA" should match "Beta"
+    let (status, body) =
+        get_request(&app, &format!("/api/v1/graph/{user_id}/entities?name=BETA")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        1,
+        "expected 1 entity matching 'BETA', got: {body}"
+    );
+}
+
+// ── GRAPH-04: Get single entity with adjacency ─────────────────────
+
+#[tokio::test]
+async fn test_graph_get_entity() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, eids) = setup_graph_data(&state_store).await;
+
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/graph/{user_id}/entities/{}", eids[0]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"].as_str().unwrap(), "Alpha");
+    // Alpha has 2 outgoing edges (->Beta, ->Delta) and 0 incoming
+    assert_eq!(body["outgoing_edges"].as_array().unwrap().len(), 2);
+    assert_eq!(body["incoming_edges"].as_array().unwrap().len(), 0);
+}
+
+// ── GRAPH-05: Get entity cross-user returns 404 ────────────────────
+
+#[tokio::test]
+async fn test_graph_get_entity_cross_user_404() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (_user_id, eids) = setup_graph_data(&state_store).await;
+
+    // Create a different user
+    let (status, other_user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({ "name": "other-user" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let other_id = other_user["id"].as_str().unwrap();
+
+    // Try to access first user's entity via second user
+    let (status, _body) = get_request(
+        &app,
+        &format!("/api/v1/graph/{other_id}/entities/{}", eids[0]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ── GRAPH-06: List edges with filters ──────────────────────────────
+
+#[tokio::test]
+async fn test_graph_list_edges() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, eids) = setup_graph_data(&state_store).await;
+
+    // List all edges
+    let (status, body) = get_request(&app, &format!("/api/v1/graph/{user_id}/edges")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        3,
+        "expected 3 edges, got: {body}"
+    );
+
+    // Filter by label
+    let (status, body) =
+        get_request(&app, &format!("/api/v1/graph/{user_id}/edges?label=knows")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"].as_u64().unwrap(), 1);
+
+    // Filter by source_entity_id
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/graph/{user_id}/edges?source_entity_id={}", eids[0]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        2,
+        "Alpha has 2 outgoing edges"
+    );
+
+    // Filter by target_entity_id
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/graph/{user_id}/edges?target_entity_id={}", eids[1]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["count"].as_u64().unwrap(),
+        1,
+        "Beta has 1 incoming edge"
+    );
+}
+
+// ── GRAPH-07: Neighbors endpoint ───────────────────────────────────
+
+#[tokio::test]
+async fn test_graph_neighbors() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, eids) = setup_graph_data(&state_store).await;
+
+    // 1-hop neighbors of Alpha: Beta and Delta
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/graph/{user_id}/neighbors/{}", eids[0]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["seed_entity_id"].as_str().unwrap(),
+        eids[0].to_string()
+    );
+    // Nodes should include Alpha (seed, depth=0) + Beta + Delta (depth=1) = 3
+    assert_eq!(
+        body["nodes"].as_array().unwrap().len(),
+        3,
+        "expected 3 nodes (Alpha + 2 neighbors), got: {body}"
+    );
+}
+
+// ── GRAPH-08: Community detection ──────────────────────────────────
+
+#[tokio::test]
+async fn test_graph_community() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, _eids) = setup_graph_data(&state_store).await;
+
+    let (status, body) = get_request(&app, &format!("/api/v1/graph/{user_id}/community")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["total_entities"].as_u64().unwrap(), 4);
+    assert!(body["community_count"].as_u64().unwrap() >= 1);
+    assert!(!body["communities"].as_array().unwrap().is_empty());
+}
+
+// ── GRAPH-09: Shortest path found ──────────────────────────────────
+
+#[tokio::test]
+async fn test_graph_shortest_path_found() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, eids) = setup_graph_data(&state_store).await;
+
+    // Path from Alpha to Gamma: A -> B -> C (2 hops)
+    let (status, body) = get_request(
+        &app,
+        &format!(
+            "/api/v1/graph/{user_id}/path?from={}&to={}",
+            eids[0], eids[2]
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["found"].as_bool().unwrap(), "path should be found");
+    assert_eq!(
+        body["path_length"].as_u64().unwrap(),
+        2,
+        "A->B->C is 2 hops"
+    );
+    assert_eq!(body["steps"].as_array().unwrap().len(), 3);
+    assert_eq!(body["steps"][0]["entity_name"].as_str().unwrap(), "Alpha");
+    assert_eq!(body["steps"][2]["entity_name"].as_str().unwrap(), "Gamma");
+}
+
+// ── GRAPH-10: Shortest path not found ──────────────────────────────
+
+#[tokio::test]
+async fn test_graph_shortest_path_not_found() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (user_id, _eids) = setup_graph_data(&state_store).await;
+
+    // Create an isolated entity with no edges
+    let now = chrono::Utc::now();
+    let isolated = Entity {
+        id: Uuid::now_v7(),
+        user_id,
+        name: "Isolated".to_string(),
+        entity_type: EntityType::Concept,
+        summary: None,
+        aliases: vec![],
+        metadata: serde_json::Value::Null,
+        mention_count: 1,
+        community_id: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let isolated = state_store.create_entity(isolated).await.unwrap();
+
+    let (status, body) = get_request(
+        &app,
+        &format!(
+            "/api/v1/graph/{user_id}/path?from={}&to={}",
+            _eids[0], isolated.id
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body["found"].as_bool().unwrap(),
+        "path should not be found"
+    );
+    assert_eq!(body["path_length"].as_u64().unwrap(), 0);
+    assert!(body["steps"].as_array().unwrap().is_empty());
+}
+
+// ── GRAPH-11: Shortest path cross-user entity returns 404 ──────────
+
+#[tokio::test]
+async fn test_graph_shortest_path_cross_user() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (_user_id, eids) = setup_graph_data(&state_store).await;
+
+    // Create a different user
+    let (status, other_user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({ "name": "other-graph-user" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let other_id = other_user["id"].as_str().unwrap();
+
+    // Try to find path using other user — entities don't belong to them
+    let (status, _body) = get_request(
+        &app,
+        &format!(
+            "/api/v1/graph/{other_id}/path?from={}&to={}",
+            eids[0], eids[1]
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ── GRAPH-12: Subgraph endpoint ────────────────────────────────────
+
+#[tokio::test]
+async fn test_graph_subgraph() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+    let (_user_id, eids) = setup_graph_data(&state_store).await;
+
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/entities/{}/subgraph?depth=1", eids[0]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Alpha at depth=0, Beta+Delta at depth=1 = 3 nodes
+    assert_eq!(
+        body["nodes"].as_array().unwrap().len(),
+        3,
+        "expected 3 nodes in subgraph, got: {body}"
+    );
+    assert!(body["edges"].as_array().unwrap().len() >= 2);
 }

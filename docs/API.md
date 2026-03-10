@@ -1312,9 +1312,180 @@ GET /api/v1/users/:user_id/edges?label=prefers&include_invalidated=true
 
 ## Graph
 
+The graph API provides first-class access to a user's knowledge graph. Entity and edge filtering, neighborhood traversal, shortest-path search, and community detection are all available.
+
+All graph endpoints accept a `:user` path parameter which can be a UUID, `external_id`, or user name.
+
+### `GET /api/v1/graph/:user/entities`
+
+List all entities for a user with optional filtering.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | int | `20` | Max results (1–1000) |
+| `after` | UUID | null | Cursor for pagination |
+| `entity_type` | string | null | Filter by type (case-insensitive: `person`, `concept`, `organization`, `product`, `location`, `event`) |
+| `name` | string | null | Filter by name (case-insensitive substring match) |
+
+```
+GET /api/v1/graph/kendra/entities?entity_type=person&limit=10
+```
+
+```json
+// Response 200
+{
+  "data": [
+    {
+      "id": "...", "name": "Kendra", "entity_type": "person",
+      "summary": "A runner", "mention_count": 5,
+      "community_id": null, "created_at": "...", "updated_at": "..."
+    }
+  ],
+  "count": 1,
+  "user_id": "..."
+}
+```
+
+### `GET /api/v1/graph/:user/entities/:entity_id`
+
+Get a single entity with its outgoing and incoming edges. Returns 404 if the entity does not belong to the specified user (prevents cross-user data leaks).
+
+```json
+// Response 200
+{
+  "id": "...", "name": "Kendra", "entity_type": "person",
+  "summary": "A runner", "mention_count": 5,
+  "community_id": null, "created_at": "...", "updated_at": "...",
+  "outgoing_edges": [
+    { "id": "...", "target_entity_id": "...", "label": "prefers", "fact": "...", "valid": true }
+  ],
+  "incoming_edges": [
+    { "id": "...", "source_entity_id": "...", "label": "knows", "fact": "...", "valid": true }
+  ]
+}
+```
+
+### `GET /api/v1/graph/:user/edges`
+
+List edges for a user with optional label, source, and target filters.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | int | `20` | Max results (1–1000) |
+| `label` | string | null | Filter by edge label |
+| `valid_only` | bool | `true` | Exclude invalidated edges |
+| `source_entity_id` | UUID | null | Filter by source entity |
+| `target_entity_id` | UUID | null | Filter by target entity |
+
+```
+GET /api/v1/graph/kendra/edges?label=prefers&source_entity_id=019...&valid_only=true
+```
+
+```json
+// Response 200
+{
+  "data": [
+    {
+      "id": "...", "source_entity_id": "...", "target_entity_id": "...",
+      "label": "prefers", "fact": "Kendra prefers Nike", "confidence": 0.95,
+      "valid_at": "...", "invalid_at": null, "valid": true, "created_at": "..."
+    }
+  ],
+  "count": 1,
+  "user_id": "..."
+}
+```
+
+### `GET /api/v1/graph/:user/neighbors/:entity_id`
+
+Multi-hop neighborhood traversal from a seed entity using BFS. Returns 404 if the entity does not belong to the specified user.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `depth` | int | `1` | Max hops (capped at 10) |
+| `max_nodes` | int | `50` | Max entities (capped at 500) |
+| `valid_only` | bool | `true` | Only follow valid edges |
+
+```json
+// Response 200
+{
+  "seed_entity_id": "...",
+  "depth": 1,
+  "nodes": [
+    { "id": "...", "name": "Kendra", "entity_type": "person", "summary": "...", "depth": 0 },
+    { "id": "...", "name": "Nike", "entity_type": "organization", "summary": null, "depth": 1 }
+  ],
+  "edges": [
+    { "id": "...", "source_entity_id": "...", "target_entity_id": "...", "label": "prefers", "fact": "...", "valid": true }
+  ],
+  "entities_visited": 3
+}
+```
+
+### `GET /api/v1/graph/:user/path`
+
+Find the shortest path between two entities in the user's knowledge graph using BFS. Returns 404 if either entity does not belong to the specified user.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `from` | UUID | **required** | Source entity ID |
+| `to` | UUID | **required** | Target entity ID |
+| `max_depth` | int | `10` | Max hops to search (capped at 20) |
+| `valid_only` | bool | `true` | Only follow valid edges |
+
+```
+GET /api/v1/graph/kendra/path?from=019...abc&to=019...def
+```
+
+```json
+// Response 200
+{
+  "from": "019...abc",
+  "to": "019...def",
+  "found": true,
+  "path_length": 2,
+  "steps": [
+    { "entity_id": "019...abc", "entity_name": "Kendra", "entity_type": "person", "depth": 0 },
+    {
+      "entity_id": "019...mid", "entity_name": "Running", "entity_type": "concept", "depth": 1,
+      "edge": { "id": "...", "source_entity_id": "...", "target_entity_id": "...", "label": "enjoys", "fact": "...", "valid": true }
+    },
+    {
+      "entity_id": "019...def", "entity_name": "Nike", "entity_type": "organization", "depth": 2,
+      "edge": { "id": "...", "source_entity_id": "...", "target_entity_id": "...", "label": "produces", "fact": "...", "valid": true }
+    }
+  ],
+  "entities_visited": 8
+}
+```
+
+When no path exists, `found` is `false`, `path_length` is `0`, and `steps` is empty.
+
+### `GET /api/v1/graph/:user/community`
+
+Run community detection (label propagation) over the user's entity graph.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_iterations` | int | `20` | Max label propagation iterations (1–100) |
+
+```json
+// Response 200
+{
+  "user_id": "...",
+  "total_entities": 12,
+  "community_count": 3,
+  "communities": [
+    { "community_id": "...", "member_count": 5, "entity_ids": ["...", "..."] },
+    { "community_id": "...", "member_count": 4, "entity_ids": ["...", "..."] },
+    { "community_id": "...", "member_count": 3, "entity_ids": ["...", "..."] }
+  ]
+}
+```
+
 ### `GET /api/v1/entities/:id/subgraph?depth=2&max_nodes=50`
 
-Traverse the knowledge graph from a seed entity using BFS.
+Traverse the knowledge graph from a seed entity using BFS. This is a lower-level endpoint that does not require a user path parameter (the entity ID is globally unique).
 
 ```json
 // Response 200
