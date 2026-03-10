@@ -213,6 +213,7 @@ where
         }
 
         // ── Graph traversal for top entities ───────────────────
+        let facts_before_graph_traversal = block.facts.len();
         for entity_summary in block.entities.iter().take(3) {
             let outgoing = self
                 .state_store
@@ -280,7 +281,7 @@ where
         if !ft_entity_hits.is_empty() || !ft_edge_hits.is_empty() {
             block.sources.push(RetrievalSource::FullTextSearch);
         }
-        if block.facts.iter().any(|f| f.relevance < 1.0) {
+        if block.facts.len() > facts_before_graph_traversal {
             block.sources.push(RetrievalSource::GraphTraversal);
         }
 

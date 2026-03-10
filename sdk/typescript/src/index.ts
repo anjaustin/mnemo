@@ -47,6 +47,9 @@ export type {
   GraphNeighborsResult,
   GraphCommunity,
   GraphCommunityResult,
+  GraphPathStep,
+  GraphPathResult,
+  GraphPathOptions,
   // LLM Spans
   LlmSpan,
   SpansResult,
@@ -86,4 +89,6 @@ export type {
   CreateSessionOptions,
   // Import
   ImportJobResult,
+  ImportChatHistoryOptions,
+  ImportChatHistoryResult,
 } from './types.js';

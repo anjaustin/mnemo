@@ -7678,3 +7678,72 @@ async fn test_patch_webhook_creates_audit_entry() {
         rows
     );
 }
+
+// ── F-10: HMAC signature tamper detection ──────────────────────────
+
+/// Verify that a tampered body produces a different HMAC signature,
+/// demonstrating that webhook consumers can detect payload tampering.
+#[test]
+fn test_hmac_tampered_body_does_not_verify() {
+    let secret = "whsec_tamper_test_secret";
+    let timestamp = "1700000000";
+    let original_body = r#"{"event_type":"head_advanced","user_id":"123"}"#;
+    let tampered_body = r#"{"event_type":"head_advanced","user_id":"456"}"#;
+
+    let original_sig = compute_expected_signature(secret, timestamp, original_body);
+    let tampered_sig = compute_expected_signature(secret, timestamp, tampered_body);
+
+    // Original signature must verify against original body
+    assert!(
+        !original_sig.is_empty(),
+        "Signature should not be empty"
+    );
+    assert!(
+        original_sig.starts_with("t="),
+        "Signature must start with t= prefix"
+    );
+    assert!(
+        original_sig.contains(",v1="),
+        "Signature must contain ,v1= prefix for the digest"
+    );
+
+    // Tampered body must produce a DIFFERENT signature
+    assert_ne!(
+        original_sig, tampered_sig,
+        "Tampered body must produce a different HMAC signature"
+    );
+
+    // Wrong secret must also produce a different signature
+    let wrong_secret_sig = compute_expected_signature("whsec_wrong_secret", timestamp, original_body);
+    assert_ne!(
+        original_sig, wrong_secret_sig,
+        "Wrong signing secret must produce a different HMAC signature"
+    );
+}
+
+/// Verify that the HMAC signature format follows the expected convention:
+/// `t=<unix_timestamp>,v1=<hex_hmac_sha256>`.
+#[test]
+fn test_hmac_signature_format_correctness() {
+    let secret = "whsec_format_test";
+    let timestamp = "1700000000";
+    let body = r#"{"ok":true}"#;
+
+    let sig = compute_expected_signature(secret, timestamp, body);
+
+    // Parse t= and v1= components
+    let parts: Vec<&str> = sig.splitn(2, ",v1=").collect();
+    assert_eq!(parts.len(), 2, "Signature must have t= and v1= components");
+
+    let t_part = parts[0];
+    assert!(t_part.starts_with("t="), "First component must be t=<timestamp>");
+    let ts = &t_part[2..];
+    assert_eq!(ts, timestamp, "Timestamp in signature must match input");
+
+    let hex_digest = parts[1];
+    assert_eq!(hex_digest.len(), 64, "HMAC-SHA256 hex digest must be 64 characters");
+    assert!(
+        hex_digest.chars().all(|c| c.is_ascii_hexdigit()),
+        "Digest must be valid hex"
+    );
+}

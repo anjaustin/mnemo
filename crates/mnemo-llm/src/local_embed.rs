@@ -175,7 +175,7 @@ pub mod inner {
     }
 
     /// Map a model string to a `fastembed::EmbeddingModel` variant.
-    fn model_from_str(s: &str) -> LlmResult<EmbeddingModel> {
+    pub(crate) fn model_from_str(s: &str) -> LlmResult<EmbeddingModel> {
         match s {
             "AllMiniLML6V2" => Ok(EmbeddingModel::AllMiniLML6V2),
             "AllMiniLML6V2Q" => Ok(EmbeddingModel::AllMiniLML6V2Q),
@@ -203,3 +203,120 @@ pub mod inner {
 pub use inner::FastEmbedder;
 #[cfg(feature = "local-embed")]
 pub use inner::{DEFAULT_LOCAL_DIMENSIONS, DEFAULT_LOCAL_MODEL};
+
+// ── Tests ────────────────────────────────────────────────────────────────
+#[cfg(all(test, feature = "local-embed"))]
+mod tests {
+    use super::inner::*;
+    use mnemo_core::traits::llm::EmbeddingProvider;
+
+    /// Cosine similarity between two vectors.
+    fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+        let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if mag_a == 0.0 || mag_b == 0.0 {
+            return 0.0;
+        }
+        dot / (mag_a * mag_b)
+    }
+
+    // ── F-03a: Unknown model string returns EmbeddingProvider error ──
+
+    #[test]
+    fn test_unknown_model_returns_error() {
+        let err = model_from_str("NonExistentModel").unwrap_err();
+        match err {
+            mnemo_core::error::MnemoError::EmbeddingProvider { message, .. } => {
+                assert!(
+                    message.contains("Unknown local embedding model"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("expected EmbeddingProvider error, got {:?}", other),
+        }
+    }
+
+    // ── F-03b: All supported model strings resolve correctly ──
+
+    #[test]
+    fn test_all_supported_models_resolve() {
+        let models = [
+            "AllMiniLML6V2",
+            "AllMiniLML6V2Q",
+            "BGESmallENV15",
+            "BGESmallENV15Q",
+            "BGEBaseENV15",
+            "BGEBaseENV15Q",
+            "BGELargeENV15",
+            "BGELargeENV15Q",
+            "BGEM3",
+        ];
+        for m in &models {
+            assert!(
+                model_from_str(m).is_ok(),
+                "model_from_str should succeed for '{}'",
+                m
+            );
+        }
+    }
+
+    // ── F-03c: FastEmbedder produces correct dimension count ──
+
+    #[tokio::test]
+    async fn test_fast_embedder_dimensions_and_nonzero() {
+        // Use production config: AllMiniLML6V2, 384 dims
+        let embedder = FastEmbedder::new("AllMiniLML6V2", 384)
+            .expect("FastEmbedder should initialise with AllMiniLML6V2");
+
+        assert_eq!(embedder.dimensions(), 384);
+        assert_eq!(embedder.provider_name(), "local");
+
+        let vec = embedder.embed("Hello world").await.unwrap();
+        assert_eq!(
+            vec.len(),
+            384,
+            "embedding should have 384 dimensions, got {}",
+            vec.len()
+        );
+
+        // At least some components must be nonzero
+        let nonzero = vec.iter().filter(|&&v| v.abs() > 1e-9).count();
+        assert!(
+            nonzero > 10,
+            "embedding should have many nonzero components, got {}",
+            nonzero
+        );
+    }
+
+    // ── F-03d: Batch embedding + semantic similarity sanity check ──
+
+    #[tokio::test]
+    async fn test_fast_embedder_batch_and_similarity() {
+        let embedder = FastEmbedder::new("AllMiniLML6V2", 384)
+            .expect("FastEmbedder should initialise");
+
+        let texts = vec![
+            "The cat sat on the mat".to_string(),       // A
+            "A kitten rested on the rug".to_string(),    // B (similar to A)
+            "Quantum chromodynamics governs quarks".to_string(), // C (dissimilar)
+        ];
+
+        let vecs = embedder.embed_batch(&texts).await.unwrap();
+        assert_eq!(vecs.len(), 3);
+        for (i, v) in vecs.iter().enumerate() {
+            assert_eq!(v.len(), 384, "vector {} should be 384-dim", i);
+        }
+
+        let sim_ab = cosine_sim(&vecs[0], &vecs[1]);
+        let sim_ac = cosine_sim(&vecs[0], &vecs[2]);
+
+        assert!(
+            sim_ab > sim_ac,
+            "similar sentences should have higher cosine sim: sim(A,B)={:.4} vs sim(A,C)={:.4}",
+            sim_ab,
+            sim_ac
+        );
+    }
+}

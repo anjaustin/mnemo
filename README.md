@@ -163,7 +163,7 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 - **Thread HEAD + Metadata Planner** - Improves relevance with deterministic head selection and metadata prefilter controls.
 - **Identity-aware Context** - Balances stable identity with recent experience signals.
 - **Chat History Importer** - Migrates existing histories with async jobs, dry-run validation, and idempotent replay protection.
-- **Memory Lifecycle Webhooks** - Emits `head_advanced`, `fact_added`, `fact_superseded`, and `conflict_detected` events with retry/backoff delivery and optional HMAC signatures.
+- **Memory Lifecycle Webhooks** - Emits `head_advanced` and `conflict_detected` events proactively on writes; `fact_added` and `fact_superseded` events are emitted when `changes_since` detects mutations. All events include retry/backoff delivery and optional HMAC signatures.
 - **Time Travel Trace** - Compares memory snapshots across two points in time and returns timeline-level "why it changed" evidence.
 - **Time Travel Summary** - Returns fast gained/lost fact and episode counters for first-pass RCA.
 - **Governance Policies** - Per-user retention defaults, webhook domain allowlists, and audit trails for policy/destructive operations.

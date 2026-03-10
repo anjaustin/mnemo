@@ -128,6 +128,55 @@ export interface GraphCommunityResult {
   request_id?: string;
 }
 
+// ─── Graph Shortest Path ───────────────────────────────────────────
+
+export interface GraphPathStep {
+  entity_id: string;
+  entity_name: string;
+  entity_type: string;
+  depth: number;
+  edge?: {
+    id: string;
+    source_entity_id: string;
+    target_entity_id: string;
+    label: string;
+    fact: string;
+    valid: boolean;
+  };
+}
+
+export interface GraphPathResult {
+  from: string;
+  to: string;
+  found: boolean;
+  path_length: number;
+  steps: GraphPathStep[];
+  entities_visited: number;
+  request_id?: string;
+}
+
+export interface GraphPathOptions {
+  maxDepth?: number;
+  validOnly?: boolean;
+  requestId?: string;
+}
+
+// ─── Import Chat History ───────────────────────────────────────────
+
+export interface ImportChatHistoryOptions {
+  defaultSession?: string;
+  dryRun?: boolean;
+  idempotencyKey?: string;
+  requestId?: string;
+}
+
+export interface ImportChatHistoryResult {
+  ok: boolean;
+  job_id: string;
+  status: string;
+  request_id?: string;
+}
+
 // ─── LLM Spans ─────────────────────────────────────────────────────
 
 export interface LlmSpan {

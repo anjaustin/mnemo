@@ -37,7 +37,11 @@ import type {
   GraphEntitiesResult,
   GraphNeighborsOptions,
   GraphNeighborsResult,
+  GraphPathOptions,
+  GraphPathResult,
   HealthResult,
+  ImportChatHistoryOptions,
+  ImportChatHistoryResult,
   ImportJobResult,
   ListSessionsOptions,
   MemoryDigestOptions,
@@ -411,6 +415,23 @@ export class MnemoClient {
     const [body, rid] = await this.request<GraphCommunityResult>({
       method: 'GET',
       path: `/api/v1/graph/${encodeURIComponent(user)}/community?max_iterations=${maxIterations}`,
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Find the shortest path between two entities in the knowledge graph. */
+  async graphShortestPath(
+    user: string,
+    from: string,
+    to: string,
+    options: GraphPathOptions = {},
+  ): Promise<GraphPathResult> {
+    const maxDepth = options.maxDepth ?? 10;
+    const validOnly = options.validOnly ?? true;
+    const [body, rid] = await this.request<GraphPathResult>({
+      method: 'GET',
+      path: `/api/v1/graph/${encodeURIComponent(user)}/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&max_depth=${maxDepth}&valid_only=${validOnly}`,
       requestId: options.requestId,
     });
     return { ...body, request_id: rid };
@@ -833,6 +854,64 @@ export class MnemoClient {
       requestId,
     });
     return { ...body, request_id: rid };
+  }
+
+  /**
+   * Import chat history from an external source (e.g. ChatGPT, Claude).
+   *
+   * @param user - Username or UUID.
+   * @param source - Source format: "chatgpt" or "claude".
+   * @param payload - The raw export JSON payload.
+   */
+  async importChatHistory(
+    user: string,
+    source: string,
+    payload: unknown,
+    options: ImportChatHistoryOptions = {},
+  ): Promise<ImportChatHistoryResult> {
+    const body: Record<string, unknown> = { user, source, payload };
+    if (options.defaultSession) body['default_session'] = options.defaultSession;
+    if (options.dryRun !== undefined) body['dry_run'] = options.dryRun;
+    if (options.idempotencyKey) body['idempotency_key'] = options.idempotencyKey;
+    const [res, rid] = await this.request<ImportChatHistoryResult>({
+      method: 'POST',
+      path: '/api/v1/import/chat-history',
+      body,
+      requestId: options.requestId,
+    });
+    return { ...res, request_id: rid };
+  }
+
+  // ─── Delete Operations ──────────────────────────────────────────
+
+  /** Delete an entity by ID. */
+  async deleteEntity(entityId: string, requestId?: string): Promise<DeleteResult> {
+    const [body, rid] = await this.request<DeleteResult>({
+      method: 'DELETE',
+      path: `/api/v1/entities/${encodeURIComponent(entityId)}`,
+      requestId,
+    });
+    return { deleted: body.deleted, request_id: rid };
+  }
+
+  /** Delete an edge by ID. */
+  async deleteEdge(edgeId: string, requestId?: string): Promise<DeleteResult> {
+    const [body, rid] = await this.request<DeleteResult>({
+      method: 'DELETE',
+      path: `/api/v1/edges/${encodeURIComponent(edgeId)}`,
+      requestId,
+    });
+    return { deleted: body.deleted, request_id: rid };
+  }
+
+  /** Delete a user and all associated data. */
+  async deleteUser(userId: string, requestId?: string): Promise<DeleteResult> {
+    const [body, rid] = await this.request<DeleteResult>({
+      method: 'DELETE',
+      path: `/api/v1/users/${encodeURIComponent(userId)}`,
+      requestId,
+    });
+    return { deleted: body.deleted, request_id: rid };
   }
 }
 
