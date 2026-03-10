@@ -9,7 +9,7 @@
 //! - Contradiction detection and edge invalidation
 //! - Exponential backoff retry on transient failures
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -25,6 +25,16 @@ use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
 use mnemo_core::traits::storage::{
     DigestStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, StorageResult, VectorStore,
 };
+
+/// Re-export `LlmSpan` from mnemo-core so callers can use `mnemo_ingest::LlmSpan`.
+pub use mnemo_core::models::span::LlmSpan;
+
+/// Shared span sink. The server creates this (same VecDeque as AppState.llm_spans)
+/// and passes it to the worker so ingest spans appear alongside route spans.
+pub type SpanSink = Arc<RwLock<VecDeque<LlmSpan>>>;
+
+/// Maximum spans retained in the ring buffer (must match MAX_LLM_SPANS in routes.rs).
+const MAX_SPANS: usize = 500;
 
 fn episode_request_id(episode: &Episode) -> Option<&str> {
     episode
@@ -95,6 +105,8 @@ where
     config: IngestConfig,
     /// Shared digest cache (same Arc as AppState.memory_digests).
     digest_cache: Option<DigestCache>,
+    /// Shared span ring buffer (same Arc as AppState.llm_spans).
+    span_sink: Option<SpanSink>,
     /// Per-user last-activity tracking for idle detection.
     user_activity: RwLock<HashMap<Uuid, Instant>>,
     /// Users whose digest has already been generated this idle window.
@@ -123,6 +135,7 @@ where
             embedder,
             config,
             digest_cache: None,
+            span_sink: None,
             user_activity: RwLock::new(HashMap::new()),
             digest_generated: RwLock::new(std::collections::HashSet::new()),
         }
@@ -133,6 +146,24 @@ where
     pub fn with_digest_cache(mut self, cache: DigestCache) -> Self {
         self.digest_cache = Some(cache);
         self
+    }
+
+    /// Attach the shared LLM span sink so ingest-time spans appear alongside
+    /// route-time spans in `GET /api/v1/spans/*`.
+    pub fn with_span_sink(mut self, sink: SpanSink) -> Self {
+        self.span_sink = Some(sink);
+        self
+    }
+
+    /// Record an LLM span into the shared ring buffer (if attached).
+    async fn record_span(&self, span: LlmSpan) {
+        if let Some(ref sink) = self.span_sink {
+            let mut spans = sink.write().await;
+            if spans.len() >= MAX_SPANS {
+                spans.pop_front();
+            }
+            spans.push_back(span);
+        }
     }
 
     /// Run the ingestion loop. Call this in a tokio::spawn.
@@ -287,7 +318,33 @@ where
         );
 
         let model_name = self.llm.model_name().to_string();
-        let raw = self.llm.summarize(&prompt, 512).await?;
+        let digest_start = chrono::Utc::now();
+        let digest_t0 = Instant::now();
+        let digest_result = self.llm.summarize(&prompt, 512).await;
+        let digest_elapsed = digest_t0.elapsed();
+        let digest_ok = digest_result.is_ok();
+        self.record_span(LlmSpan {
+            id: Uuid::now_v7(),
+            request_id: None,
+            user_id: Some(user_id),
+            provider: self.llm.provider_name().to_string(),
+            model: model_name.clone(),
+            operation: "digest".to_string(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            latency_ms: digest_elapsed.as_millis() as u64,
+            success: digest_ok,
+            error: if digest_ok {
+                None
+            } else {
+                Some(digest_result.as_ref().err().unwrap().to_string())
+            },
+            started_at: digest_start,
+            finished_at: chrono::Utc::now(),
+        })
+        .await;
+        let raw = digest_result?;
 
         let (summary_text, dominant_topics) = if let Some(idx) = raw.find("TOPICS:") {
             let summary = raw[..idx].trim().to_string();
@@ -391,10 +448,36 @@ where
             .collect();
 
         // 2. Extract via LLM
+        let extract_start = chrono::Utc::now();
+        let extract_t0 = Instant::now();
         let extraction = self
             .llm
             .extract_entities_and_relationships(&episode.content, &hints)
-            .await?;
+            .await;
+        let extract_elapsed = extract_t0.elapsed();
+        let extract_ok = extraction.is_ok();
+        self.record_span(LlmSpan {
+            id: Uuid::now_v7(),
+            request_id: episode_request_id(episode).map(String::from),
+            user_id: Some(episode.user_id),
+            provider: self.llm.provider_name().to_string(),
+            model: self.llm.model_name().to_string(),
+            operation: "extract".to_string(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            latency_ms: extract_elapsed.as_millis() as u64,
+            success: extract_ok,
+            error: if extract_ok {
+                None
+            } else {
+                Some(extraction.as_ref().err().unwrap().to_string())
+            },
+            started_at: extract_start,
+            finished_at: chrono::Utc::now(),
+        })
+        .await;
+        let extraction = extraction?;
 
         // 3. Resolve entities (dedup against existing graph)
         let mut name_to_id: std::collections::HashMap<String, Uuid> =
@@ -477,7 +560,33 @@ where
         }
 
         // 5. Episode embedding
-        let ep_emb = self.embedder.embed(&episode.content).await?;
+        let embed_start = chrono::Utc::now();
+        let embed_t0 = Instant::now();
+        let ep_emb = self.embedder.embed(&episode.content).await;
+        let embed_elapsed = embed_t0.elapsed();
+        let embed_ok = ep_emb.is_ok();
+        self.record_span(LlmSpan {
+            id: Uuid::now_v7(),
+            request_id: episode_request_id(episode).map(String::from),
+            user_id: Some(episode.user_id),
+            provider: self.embedder.provider_name().to_string(),
+            model: self.embedder.provider_name().to_string(),
+            operation: "embed_episode".to_string(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            latency_ms: embed_elapsed.as_millis() as u64,
+            success: embed_ok,
+            error: if embed_ok {
+                None
+            } else {
+                Some(ep_emb.as_ref().err().unwrap().to_string())
+            },
+            started_at: embed_start,
+            finished_at: chrono::Utc::now(),
+        })
+        .await;
+        let ep_emb = ep_emb?;
         self.vector_store
             .upsert_episode_embedding(
                 episode.id,
@@ -505,7 +614,33 @@ where
                         threshold,
                         "Triggering progressive session summarization"
                     );
-                    match self.llm.summarize(&episode.content, 256).await {
+                    let sum_start = chrono::Utc::now();
+                    let sum_t0 = Instant::now();
+                    let sum_result = self.llm.summarize(&episode.content, 256).await;
+                    let sum_elapsed = sum_t0.elapsed();
+                    let sum_ok = sum_result.is_ok();
+                    self.record_span(LlmSpan {
+                        id: Uuid::now_v7(),
+                        request_id: episode_request_id(episode).map(String::from),
+                        user_id: Some(episode.user_id),
+                        provider: self.llm.provider_name().to_string(),
+                        model: self.llm.model_name().to_string(),
+                        operation: "session_summarize".to_string(),
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                        latency_ms: sum_elapsed.as_millis() as u64,
+                        success: sum_ok,
+                        error: if sum_ok {
+                            None
+                        } else {
+                            Some(sum_result.as_ref().err().unwrap().to_string())
+                        },
+                        started_at: sum_start,
+                        finished_at: chrono::Utc::now(),
+                    })
+                    .await;
+                    match sum_result {
                         Ok(summary_text) => {
                             // Rough token count: ~4 chars/token
                             let tokens = (summary_text.len() / 4).max(1) as u32;

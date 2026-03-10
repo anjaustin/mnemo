@@ -2232,6 +2232,44 @@ function initSpans() {
   document.getElementById('spans-request-id').addEventListener('keydown', e => {
     if (e.key === 'Enter') loadSpans();
   });
+  document.getElementById('spans-user-lookup-btn').addEventListener('click', () => loadSpansByUser());
+  document.getElementById('spans-user-id').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadSpansByUser();
+  });
+}
+
+function renderSpanTable(data, label) {
+  const spans = data.spans || [];
+  if (spans.length === 0) {
+    document.getElementById('spans-results').innerHTML = `<p class="muted">No LLM spans found for ${label}.</p>`;
+    return;
+  }
+  const rows = spans.map(s => {
+    const latency = s.latency_ms != null ? `${s.latency_ms}ms` : '--';
+    const status = s.success ? badge('ok', 'green') : badge('error', 'red');
+    const userId = s.user_id ? `<code style="font-size:10px">${escapeHtml(s.user_id.substring(0,8))}...</code>` : '--';
+    return `<tr>
+      <td>${badge(s.operation || '--', 'blue')}</td>
+      <td><code>${escapeHtml(s.model || '--')}</code></td>
+      <td>${s.prompt_tokens ?? '--'}</td>
+      <td>${s.completion_tokens ?? '--'}</td>
+      <td>${s.total_tokens ?? '--'}</td>
+      <td>${latency}</td>
+      <td>${status}</td>
+      <td>${userId}</td>
+      <td style="font-size:11px">${fmtDateAgo(s.started_at)}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('spans-results').innerHTML = `
+    <div class="stat-grid" style="margin-bottom:12px">
+      <div class="stat-row"><span>Spans</span><span>${data.count}</span></div>
+      <div class="stat-row"><span>Total tokens</span><span>${data.total_tokens ?? '--'}</span></div>
+      <div class="stat-row"><span>Total latency</span><span>${data.total_latency_ms != null ? data.total_latency_ms + 'ms' : '--'}</span></div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Operation</th><th>Model</th><th>Prompt tk</th><th>Compl tk</th><th>Total tk</th><th>Latency</th><th>Status</th><th>User</th><th>Time</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
 }
 
 async function loadSpans() {
@@ -2241,35 +2279,20 @@ async function loadSpans() {
   mnemo.show('spans-results');
   try {
     const data = await mnemo.api('GET', `/api/v1/spans/request/${encodeURIComponent(requestId)}`);
-    const spans = data.spans || [];
-    if (spans.length === 0) {
-      document.getElementById('spans-results').innerHTML = `<p class="muted">No LLM spans found for request <code>${escapeHtml(requestId)}</code>.</p>`;
-      return;
-    }
-    const rows = spans.map(s => {
-      const latency = s.latency_ms != null ? `${s.latency_ms}ms` : '--';
-      const status = s.success ? badge('ok', 'green') : badge('error', 'red');
-      return `<tr>
-        <td>${badge(s.operation || '--', 'blue')}</td>
-        <td><code>${escapeHtml(s.model || '--')}</code></td>
-        <td>${s.prompt_tokens ?? '--'}</td>
-        <td>${s.completion_tokens ?? '--'}</td>
-        <td>${s.total_tokens ?? '--'}</td>
-        <td>${latency}</td>
-        <td>${status}</td>
-        <td style="font-size:11px">${fmtDateAgo(s.started_at)}</td>
-      </tr>`;
-    }).join('');
-    document.getElementById('spans-results').innerHTML = `
-      <div class="stat-grid" style="margin-bottom:12px">
-        <div class="stat-row"><span>Spans</span><span>${data.count}</span></div>
-        <div class="stat-row"><span>Total tokens</span><span>${data.total_tokens ?? '--'}</span></div>
-        <div class="stat-row"><span>Total latency</span><span>${data.total_latency_ms != null ? data.total_latency_ms + 'ms' : '--'}</span></div>
-      </div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Operation</th><th>Model</th><th>Prompt tk</th><th>Compl tk</th><th>Total tk</th><th>Latency</th><th>Status</th><th>Time</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>`;
+    renderSpanTable(data, `request <code>${escapeHtml(requestId)}</code>`);
+  } catch (e) {
+    mnemo.error('spans-results', 'Failed to load spans: ' + e.message);
+  }
+}
+
+async function loadSpansByUser() {
+  const userId = document.getElementById('spans-user-id').value.trim();
+  if (!userId) { toast.warn('Input required', 'Enter a user ID.'); return; }
+  mnemo.loading('spans-results');
+  mnemo.show('spans-results');
+  try {
+    const data = await mnemo.api('GET', `/api/v1/spans/user/${encodeURIComponent(userId)}`);
+    renderSpanTable(data, `user <code>${escapeHtml(userId)}</code>`);
   } catch (e) {
     mnemo.error('spans-results', 'Failed to load spans: ' + e.message);
   }

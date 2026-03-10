@@ -137,6 +137,10 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(tokio::sync::RwLock::new(map))
     };
 
+    // Create shared span ring buffer before spawning the worker so both
+    // the server routes and the ingest worker record into the same VecDeque.
+    let llm_spans = Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new()));
+
     // Spawn ingestion worker with provider-specific LLM type
     // (generics require concrete types, so we branch here).
     // We also keep an LlmHandle in AppState for on-demand extraction
@@ -153,7 +157,8 @@ async fn main() -> anyhow::Result<()> {
                 embedder.clone(),
                 ingest_config,
             )
-            .with_digest_cache(digest_cache.clone());
+            .with_digest_cache(digest_cache.clone())
+            .with_span_sink(llm_spans.clone());
             tokio::spawn(async move { worker.run().await });
             Some(handle)
         }
@@ -168,7 +173,8 @@ async fn main() -> anyhow::Result<()> {
                 embedder.clone(),
                 ingest_config,
             )
-            .with_digest_cache(digest_cache.clone());
+            .with_digest_cache(digest_cache.clone())
+            .with_span_sink(llm_spans.clone());
             tokio::spawn(async move { worker.run().await });
             Some(handle)
         }
@@ -264,7 +270,7 @@ async fn main() -> anyhow::Result<()> {
             config.redis.prefix, config.webhooks.persistence_prefix
         ),
         metrics: Arc::new(ServerMetrics::default()),
-        llm_spans: Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        llm_spans,
         memory_digests: digest_cache,
         require_tls: config.server.require_tls,
         audit_signing_secret: config.server.audit_signing_secret.clone(),

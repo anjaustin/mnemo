@@ -210,27 +210,9 @@ impl LlmHandle {
     }
 }
 
-/// A single LLM call span captured for tracing/observability.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmSpan {
-    pub id: Uuid,
-    /// The `x-mnemo-request-id` that triggered this call (if available).
-    pub request_id: Option<String>,
-    pub user_id: Option<Uuid>,
-    pub provider: String,
-    pub model: String,
-    /// "extract", "summarize", "detect_contradictions", "chat_completion"
-    pub operation: String,
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-    pub latency_ms: u64,
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    pub finished_at: chrono::DateTime<chrono::Utc>,
-}
+/// Re-export LlmSpan from mnemo-core so both the server routes and
+/// the ingest worker share the same concrete type.
+pub use mnemo_core::models::span::LlmSpan;
 
 /// Re-export MemoryDigest from mnemo-ingest so both the server routes and
 /// the ingest worker share the same concrete type.
