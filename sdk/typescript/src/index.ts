@@ -91,4 +91,15 @@ export type {
   ImportJobResult,
   ImportChatHistoryOptions,
   ImportChatHistoryResult,
+  // Agent Identity
+  AgentIdentityResult,
+  AgentIdentityAuditResult,
+  ExperienceEventResult,
+  PromotionProposalResult,
+  AgentContextResult,
+  AddExperienceOptions,
+  CreatePromotionOptions,
+  AgentContextOptions,
+  AgentListOptions,
+  RollbackOptions,
 } from './types.js';

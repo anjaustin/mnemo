@@ -19,7 +19,13 @@
  */
 
 import type {
+  AddExperienceOptions,
   AddOptions,
+  AgentContextOptions,
+  AgentContextResult,
+  AgentIdentityAuditResult,
+  AgentIdentityResult,
+  AgentListOptions,
   AuditRecord,
   CausalRecallResult,
   ChangesSinceOptions,
@@ -27,8 +33,10 @@ import type {
   ConflictRadarResult,
   ContextOptions,
   ContextResult,
+  CreatePromotionOptions,
   CreateSessionOptions,
   DeleteResult,
+  ExperienceEventResult,
   GraphCommunityOptions,
   GraphCommunityResult,
   GraphEdgesOptions,
@@ -52,9 +60,11 @@ import type {
   PolicyPreviewOptions,
   PolicyPreviewResult,
   PolicyResult,
+  PromotionProposalResult,
   RememberResult,
   ReplayResult,
   RetryResult,
+  RollbackOptions,
   SessionInfo,
   SessionsResult,
   SetPolicyOptions,
@@ -912,6 +922,190 @@ export class MnemoClient {
       requestId,
     });
     return { deleted: body.deleted, request_id: rid };
+  }
+
+  // ─── Agent Identity ──────────────────────────────────────────────
+
+  /** Get the current identity profile for an agent (auto-creates on first access). */
+  async getAgentIdentity(agentId: string, requestId?: string): Promise<AgentIdentityResult> {
+    const [body, rid] = await this.request<AgentIdentityResult>({
+      method: 'GET',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/identity`,
+      requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Replace the agent's identity core (versioned, audited). */
+  async updateAgentIdentity(
+    agentId: string,
+    core: Record<string, unknown>,
+    requestId?: string,
+  ): Promise<AgentIdentityResult> {
+    const [body, rid] = await this.request<AgentIdentityResult>({
+      method: 'PUT',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/identity`,
+      body: { core },
+      requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** List historical identity versions (newest first). */
+  async listAgentIdentityVersions(
+    agentId: string,
+    options: AgentListOptions = {},
+  ): Promise<AgentIdentityResult[]> {
+    const limit = options.limit ?? 20;
+    const [body, rid] = await this.request<{ versions: AgentIdentityResult[] }>({
+      method: 'GET',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/identity/versions?limit=${limit}`,
+      requestId: options.requestId,
+    });
+    return (body.versions ?? []).map((v) => ({ ...v, request_id: rid }));
+  }
+
+  /** List audit trail for agent identity changes (newest first). */
+  async listAgentIdentityAudit(
+    agentId: string,
+    options: AgentListOptions = {},
+  ): Promise<AgentIdentityAuditResult[]> {
+    const limit = options.limit ?? 50;
+    const [body, rid] = await this.request<{ audit: AgentIdentityAuditResult[] }>({
+      method: 'GET',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/identity/audit?limit=${limit}`,
+      requestId: options.requestId,
+    });
+    return (body.audit ?? []).map((a) => ({ ...a, request_id: rid }));
+  }
+
+  /** Rollback agent identity to a previous version. */
+  async rollbackAgentIdentity(
+    agentId: string,
+    targetVersion: number,
+    options: RollbackOptions = {},
+  ): Promise<AgentIdentityResult> {
+    const payload: Record<string, unknown> = { target_version: targetVersion };
+    if (options.reason !== undefined) payload.reason = options.reason;
+    const [body, rid] = await this.request<AgentIdentityResult>({
+      method: 'POST',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/identity/rollback`,
+      body: payload,
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Record an experience event for an agent. */
+  async addAgentExperience(
+    agentId: string,
+    options: AddExperienceOptions,
+  ): Promise<ExperienceEventResult> {
+    const payload: Record<string, unknown> = {
+      user_id: options.userId,
+      session_id: options.sessionId,
+      category: options.category,
+      signal: options.signal,
+      confidence: options.confidence ?? 1.0,
+      weight: options.weight ?? 0.5,
+      decay_half_life_days: options.decayHalfLifeDays ?? 30,
+    };
+    if (options.evidenceEpisodeIds) payload.evidence_episode_ids = options.evidenceEpisodeIds;
+    const [body, rid] = await this.request<ExperienceEventResult>({
+      method: 'POST',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/experience`,
+      body: payload,
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Create a promotion proposal for agent identity evolution. Requires >= 3 source event IDs. */
+  async createPromotionProposal(
+    agentId: string,
+    options: CreatePromotionOptions,
+  ): Promise<PromotionProposalResult> {
+    const [body, rid] = await this.request<PromotionProposalResult>({
+      method: 'POST',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/promotions`,
+      body: {
+        proposal: options.proposal,
+        candidate_core: options.candidateCore,
+        reason: options.reason,
+        source_event_ids: options.sourceEventIds,
+        risk_level: options.riskLevel ?? 'medium',
+      },
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** List promotion proposals for an agent (newest first). */
+  async listPromotionProposals(
+    agentId: string,
+    options: AgentListOptions = {},
+  ): Promise<PromotionProposalResult[]> {
+    const limit = options.limit ?? 50;
+    const [body, rid] = await this.request<{ proposals: PromotionProposalResult[] }>({
+      method: 'GET',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/promotions?limit=${limit}`,
+      requestId: options.requestId,
+    });
+    return (body.proposals ?? []).map((p) => ({ ...p, request_id: rid }));
+  }
+
+  /** Approve a pending promotion proposal. Applies candidate_core to the identity. */
+  async approvePromotion(
+    agentId: string,
+    proposalId: string,
+    requestId?: string,
+  ): Promise<PromotionProposalResult> {
+    const [body, rid] = await this.request<PromotionProposalResult>({
+      method: 'POST',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/promotions/${encodeURIComponent(proposalId)}/approve`,
+      body: {},
+      requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Reject a pending promotion proposal. */
+  async rejectPromotion(
+    agentId: string,
+    proposalId: string,
+    reason?: string,
+    requestId?: string,
+  ): Promise<PromotionProposalResult> {
+    const payload: Record<string, unknown> = {};
+    if (reason !== undefined) payload.reason = reason;
+    const [body, rid] = await this.request<PromotionProposalResult>({
+      method: 'POST',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/promotions/${encodeURIComponent(proposalId)}/reject`,
+      body: payload,
+      requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /** Get agent-scoped context combining identity, experience, and user memory. */
+  async agentContext(
+    agentId: string,
+    user: string,
+    query: string,
+    options: AgentContextOptions = {},
+  ): Promise<AgentContextResult> {
+    const payload: Record<string, unknown> = { user, query };
+    if (options.session !== undefined) payload.session = options.session;
+    if (options.maxTokens !== undefined) payload.max_tokens = options.maxTokens;
+    if (options.minRelevance !== undefined) payload.min_relevance = options.minRelevance;
+    if (options.mode !== undefined) payload.mode = options.mode;
+    const [body, rid] = await this.request<AgentContextResult>({
+      method: 'POST',
+      path: `/api/v1/agents/${encodeURIComponent(agentId)}/context`,
+      body: payload,
+      requestId: options.requestId,
+    });
+    return { ...body, request_id: rid };
   }
 }
 

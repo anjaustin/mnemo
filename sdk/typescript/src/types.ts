@@ -561,3 +561,109 @@ export interface CreateSessionOptions {
   name?: string;
   requestId?: string;
 }
+
+// ─── Agent Identity ────────────────────────────────────────────────
+
+export interface AgentIdentityResult {
+  agent_id: string;
+  version: number;
+  /** Opaque JSON identity blob (mission, style, boundaries, etc.) */
+  core: Record<string, unknown>;
+  updated_at: string;
+  request_id?: string;
+}
+
+export interface ExperienceEventResult {
+  id: string;
+  agent_id: string;
+  user_id: string;
+  session_id: string;
+  category: string;
+  signal: string;
+  confidence: number;
+  weight: number;
+  decay_half_life_days: number;
+  evidence_episode_ids: string[];
+  created_at: string;
+  request_id?: string;
+}
+
+export interface AgentIdentityAuditResult {
+  id: string;
+  agent_id: string;
+  /** One of: created, updated, rolled_back */
+  action: string;
+  from_version?: number;
+  to_version?: number;
+  rollback_to_version?: number;
+  reason?: string;
+  created_at: string;
+  request_id?: string;
+}
+
+export interface PromotionProposalResult {
+  id: string;
+  agent_id: string;
+  proposal: string;
+  candidate_core: Record<string, unknown>;
+  reason: string;
+  risk_level: string;
+  /** One of: pending, approved, rejected */
+  status: string;
+  source_event_ids: string[];
+  created_at: string;
+  approved_at?: string;
+  rejected_at?: string;
+  request_id?: string;
+}
+
+export interface AgentContextResult {
+  /** Flattened context block (entities, facts, episodes, token_count) */
+  context: Record<string, unknown>;
+  identity: AgentIdentityResult;
+  identity_version: number;
+  experience_events_used: number;
+  experience_weight_sum: number;
+  user_memory_items_used: number;
+  attribution_guards: Record<string, boolean>;
+  request_id?: string;
+}
+
+export interface AddExperienceOptions {
+  userId: string;
+  sessionId: string;
+  category: string;
+  signal: string;
+  confidence?: number;
+  weight?: number;
+  decayHalfLifeDays?: number;
+  evidenceEpisodeIds?: string[];
+  requestId?: string;
+}
+
+export interface CreatePromotionOptions {
+  proposal: string;
+  candidateCore: Record<string, unknown>;
+  reason: string;
+  sourceEventIds: string[];
+  riskLevel?: string;
+  requestId?: string;
+}
+
+export interface AgentContextOptions {
+  session?: string;
+  maxTokens?: number;
+  minRelevance?: number;
+  mode?: string;
+  requestId?: string;
+}
+
+export interface AgentListOptions {
+  limit?: number;
+  requestId?: string;
+}
+
+export interface RollbackOptions {
+  reason?: string;
+  requestId?: string;
+}
