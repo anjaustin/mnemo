@@ -878,6 +878,11 @@ impl AgentStore for RedisStateStore {
         Ok(event)
     }
 
+    async fn get_experience_event(&self, event_id: Uuid) -> StorageResult<Option<ExperienceEvent>> {
+        let key = self.key(&["experience", &event_id.to_string()]);
+        self.get_json(&key).await
+    }
+
     async fn list_experience_events(
         &self,
         agent_id: &str,

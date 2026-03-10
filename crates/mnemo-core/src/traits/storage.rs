@@ -31,6 +31,7 @@ pub trait AgentStore: Send + Sync {
         agent_id: &str,
         req: CreateExperienceRequest,
     ) -> StorageResult<ExperienceEvent>;
+    async fn get_experience_event(&self, event_id: Uuid) -> StorageResult<Option<ExperienceEvent>>;
     async fn list_experience_events(
         &self,
         agent_id: &str,

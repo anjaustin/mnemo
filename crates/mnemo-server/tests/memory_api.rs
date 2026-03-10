@@ -2775,7 +2775,17 @@ async fn test_agent_promotion_gating_and_approval_flow() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(identity["version"], 1);
 
-    // insufficient evidence should be rejected
+    // insufficient evidence should be rejected (only 1 source event)
+    let (status, ev1) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/promo-agent/experience",
+        serde_json::json!({"category": "tone", "signal": "user liked direct tone", "confidence": 0.8}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let single_id = ev1["id"].as_str().unwrap().to_string();
+
     let (status, body) = json_request(
         &app,
         "POST",
@@ -2784,17 +2794,50 @@ async fn test_agent_promotion_gating_and_approval_flow() {
             "proposal": "increase directness",
             "candidate_core": {"mission": "new-mission"},
             "reason": "single anecdote",
-            "source_event_ids": [uuid::Uuid::now_v7()]
+            "source_event_ids": [single_id]
         }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "validation_error");
 
-    let source_ids = vec![
-        uuid::Uuid::now_v7(),
-        uuid::Uuid::now_v7(),
-        uuid::Uuid::now_v7(),
+    // non-existent source_event_ids should be rejected even with >= 3 IDs
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/promo-agent/promotions",
+        serde_json::json!({
+            "proposal": "increase directness",
+            "candidate_core": {"mission": "new-mission"},
+            "reason": "fabricated evidence",
+            "source_event_ids": [uuid::Uuid::now_v7(), uuid::Uuid::now_v7(), uuid::Uuid::now_v7()]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "fabricated event IDs must be rejected: {body:?}");
+
+    // Create 2 more real experience events so we have 3 total
+    let (status, ev2) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/promo-agent/experience",
+        serde_json::json!({"category": "tone", "signal": "user preferred concise answers", "confidence": 0.9}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, ev3) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/promo-agent/experience",
+        serde_json::json!({"category": "tone", "signal": "user disliked verbose explanations", "confidence": 0.7}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let source_ids: Vec<String> = vec![
+        ev1["id"].as_str().unwrap().to_string(),
+        ev2["id"].as_str().unwrap().to_string(),
+        ev3["id"].as_str().unwrap().to_string(),
     ];
 
     let (status, proposal) = json_request(
@@ -7764,12 +7807,25 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
     assert_eq!(identity_before["version"], 1);
     let core_before = identity_before["core"].clone();
 
-    // Step 2: Create a promotion proposal with a different candidate_core
-    let source_ids = vec![
-        uuid::Uuid::now_v7(),
-        uuid::Uuid::now_v7(),
-        uuid::Uuid::now_v7(),
-    ];
+    // Step 2: Create 3 real experience events to back the proposal
+    let mut source_ids = Vec::new();
+    for signal in &[
+        "user preferred terse responses",
+        "user asked for more directness",
+        "user praised aggressive style",
+    ] {
+        let (status, ev) = json_request(
+            &app,
+            "POST",
+            "/api/v1/agents/reject-promo-agent/experience",
+            serde_json::json!({"category": "style", "signal": signal, "confidence": 0.8}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        source_ids.push(ev["id"].as_str().unwrap().to_string());
+    }
+
+    // Step 3: Create a promotion proposal with a different candidate_core
     let (status, proposal) = json_request(
         &app,
         "POST",
@@ -7786,7 +7842,7 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
     assert_eq!(proposal["status"], "pending");
     let proposal_id = proposal["id"].as_str().unwrap().to_string();
 
-    // Step 3: Reject the proposal
+    // Step 4: Reject the proposal
     let (status, rejected) = json_request(
         &app,
         "POST",
@@ -7798,7 +7854,7 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
     assert_eq!(rejected["status"], "rejected");
     assert!(rejected["rejected_at"].is_string(), "rejected_at must be set");
 
-    // Step 4: Verify identity is completely unchanged
+    // Step 5: Verify identity is completely unchanged
     let (status, identity_after) = json_request(
         &app,
         "GET",
@@ -7810,7 +7866,7 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
     assert_eq!(identity_after["version"], 1, "version must stay at 1 after rejection");
     assert_eq!(identity_after["core"], core_before, "core must be identical after rejection");
 
-    // Step 5: Verify the proposal shows up as rejected in the list
+    // Step 6: Verify the proposal shows up as rejected in the list
     let (status, proposals) = json_request(
         &app,
         "GET",
@@ -7823,7 +7879,7 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["status"], "rejected");
 
-    // Step 6: Verify re-rejecting a rejected proposal fails
+    // Step 7: Verify re-rejecting a rejected proposal fails
     let (status, body) = json_request(
         &app,
         "POST",

@@ -6224,6 +6224,21 @@ async fn create_promotion_proposal(
         )));
     }
 
+    // Validate that all source_event_ids reference existing experience events
+    for event_id in &req.source_event_ids {
+        if state
+            .state_store
+            .get_experience_event(*event_id)
+            .await?
+            .is_none()
+        {
+            return Err(AppError(MnemoError::Validation(format!(
+                "source_event_id {} does not reference an existing experience event",
+                event_id
+            ))));
+        }
+    }
+
     let proposal = state
         .state_store
         .create_promotion_proposal(&agent_id, req)
