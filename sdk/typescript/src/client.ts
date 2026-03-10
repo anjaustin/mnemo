@@ -564,6 +564,31 @@ export class MnemoClient {
     return { ...body, request_id: rid };
   }
 
+  /** Update a webhook subscription (partial update). */
+  async updateWebhook(
+    webhookId: string,
+    updates: {
+      targetUrl?: string;
+      events?: string[];
+      enabled?: boolean;
+      signingSecret?: string;
+    },
+    requestId?: string,
+  ): Promise<WebhookResult> {
+    const body: Record<string, unknown> = {};
+    if (updates.targetUrl !== undefined) body.target_url = updates.targetUrl;
+    if (updates.events !== undefined) body.events = updates.events;
+    if (updates.enabled !== undefined) body.enabled = updates.enabled;
+    if (updates.signingSecret !== undefined) body.signing_secret = updates.signingSecret;
+    const [resp, rid] = await this.request<{ webhook: WebhookResult }>({
+      method: 'PATCH',
+      path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}`,
+      body,
+      requestId,
+    });
+    return { ...resp.webhook, request_id: rid };
+  }
+
   /** Delete a webhook. */
   async deleteWebhook(webhookId: string, requestId?: string): Promise<DeleteResult> {
     const [body, rid] = await this.request<DeleteResult>({

@@ -719,6 +719,41 @@ Get webhook delivery telemetry counters (pending, delivered, dead-letter, recent
 
 Fetch webhook configuration by ID.
 
+### `PATCH /api/v1/memory/webhooks/:id`
+
+Partially update a webhook subscription. Only the provided fields are changed.
+
+```json
+// Request (all fields optional)
+{
+  "target_url": "https://updated.example/hook",
+  "events": ["fact_added", "fact_superseded"],
+  "enabled": false,
+  "signing_secret": "new-secret"
+}
+```
+
+If `target_url` is changed, the same validation as registration applies:
+- Must be a valid `http://` or `https://` URL
+- When `MNEMO_REQUIRE_TLS=true`, must use `https://`
+- Must pass the user's `webhook_domain_allowlist` policy (if set)
+
+**Response** `200 OK`:
+```json
+{
+  "ok": true,
+  "webhook": {
+    "id": "...",
+    "user_id": "...",
+    "target_url": "https://updated.example/hook",
+    "events": ["fact_added", "fact_superseded"],
+    "enabled": false,
+    "created_at": "...",
+    "updated_at": "..."
+  }
+}
+```
+
 ### `DELETE /api/v1/memory/webhooks/:id`
 
 Delete webhook configuration and retained in-memory event records.

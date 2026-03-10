@@ -694,6 +694,39 @@ class AsyncMnemo:
         )
         return _parse_webhook(body, rid)
 
+    async def update_webhook(
+        self,
+        webhook_id: str,
+        *,
+        target_url: str | None = None,
+        events: list[str] | None = None,
+        enabled: bool | None = None,
+        signing_secret: str | None = None,
+        request_id: str | None = None,
+    ) -> WebhookResult:
+        """Update a webhook subscription (partial update).
+
+        Only the fields provided will be changed. TLS enforcement and
+        domain allowlist policies are applied to ``target_url`` changes.
+        """
+        payload: dict[str, Any] = {}
+        if target_url is not None:
+            payload["target_url"] = target_url
+        if events is not None:
+            payload["events"] = events
+        if enabled is not None:
+            payload["enabled"] = enabled
+        if signing_secret is not None:
+            payload["signing_secret"] = signing_secret
+        body, rid = await self._req(
+            "PATCH",
+            f"/api/v1/memory/webhooks/{webhook_id}",
+            payload,
+            request_id=request_id,
+        )
+        webhook = body.get("webhook", body)
+        return _parse_webhook(webhook, rid)
+
     async def delete_webhook(
         self,
         webhook_id: str,

@@ -45,6 +45,34 @@ async fn build_test_app_with_prefilter(prefilter: MetadataPrefilterConfig) -> ax
     build_test_harness_with_prefilter(prefilter).await.0
 }
 
+/// Build a test app with `require_tls: true` for TLS enforcement tests.
+async fn build_test_app_require_tls() -> axum::Router {
+    let (_app, mut state, _store) = build_test_harness_with_state_and_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: false,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: false,
+            max_attempts: 3,
+            base_backoff_ms: 20,
+            request_timeout_ms: 150,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
+        },
+    )
+    .await;
+    state.require_tls = true;
+    build_router(state.clone()).layer(from_fn_with_state(
+        state,
+        request_context_middleware,
+    ))
+}
+
 async fn build_test_harness_with_prefilter(
     prefilter: MetadataPrefilterConfig,
 ) -> (axum::Router, Arc<RedisStateStore>) {
@@ -7373,4 +7401,280 @@ async fn test_spans_by_request_empty_returns_empty() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["count"].as_u64().unwrap(), 0);
     assert_eq!(body["spans"].as_array().unwrap().len(), 0);
+}
+
+// ─── PATCH /api/v1/memory/webhooks/:id ────────────────────────────
+
+/// Test: PATCH webhook updates target_url, events, and enabled fields.
+#[tokio::test]
+async fn test_patch_webhook_updates_fields() {
+    let app = build_test_app().await;
+
+    // Create user
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "patch-webhook-user",
+            "external_id": "patch-webhook-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Register a webhook
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "patch-webhook-user",
+            "target_url": "https://original.example/hook",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap();
+
+    // PATCH: update target_url and enabled
+    let (status, updated) = json_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/memory/webhooks/{webhook_id}"),
+        serde_json::json!({
+            "target_url": "https://updated.example/hook",
+            "enabled": false,
+            "events": ["fact_added", "fact_superseded"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "PATCH should succeed: {updated}");
+    assert_eq!(updated["ok"], true);
+    assert_eq!(
+        updated["webhook"]["target_url"],
+        "https://updated.example/hook"
+    );
+    assert_eq!(updated["webhook"]["enabled"], false);
+    let events = updated["webhook"]["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2);
+
+    // GET should return updated values
+    let (status, got) = get_request(
+        &app,
+        &format!("/api/v1/memory/webhooks/{webhook_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got["target_url"], "https://updated.example/hook");
+    assert_eq!(got["enabled"], false);
+}
+
+/// Test: PATCH webhook with non-existent ID returns 404.
+#[tokio::test]
+async fn test_patch_webhook_not_found() {
+    let app = build_test_app().await;
+    let fake_id = Uuid::now_v7();
+
+    let (status, _) = json_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/memory/webhooks/{fake_id}"),
+        serde_json::json!({
+            "enabled": false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Test: PATCH webhook rejects non-HTTPS target_url when require_tls is enabled.
+#[tokio::test]
+async fn test_patch_webhook_rejects_http_when_require_tls() {
+    let app = build_test_app_require_tls().await;
+
+    // Create user
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "tls-patch-user",
+            "external_id": "tls-patch-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Register webhook with HTTPS (allowed)
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "tls-patch-user",
+            "target_url": "https://secure.example/hook",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap();
+
+    // PATCH: try to downgrade to HTTP — should be rejected
+    let (status, body) = json_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/memory/webhooks/{webhook_id}"),
+        serde_json::json!({
+            "target_url": "http://insecure.example/hook"
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "PATCH with HTTP URL should fail when require_tls is enabled: {body}"
+    );
+}
+
+/// Test: PATCH webhook rejects target_url not on domain allowlist.
+#[tokio::test]
+async fn test_patch_webhook_enforces_domain_allowlist() {
+    let app = build_test_app().await;
+
+    // Create user
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "patch-allowlist-user",
+            "external_id": "patch-allowlist-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Set domain allowlist policy
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/policies/patch-allowlist-user",
+        serde_json::json!({
+            "webhook_domain_allowlist": ["allowed.example"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Register webhook with allowed domain
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "patch-allowlist-user",
+            "target_url": "https://allowed.example/hook",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap();
+
+    // PATCH: try to change to disallowed domain
+    let (status, body) = json_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/memory/webhooks/{webhook_id}"),
+        serde_json::json!({
+            "target_url": "https://evil.example/hook"
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "PATCH with disallowed domain should fail: {body}"
+    );
+
+    // PATCH: change to allowed subdomain — should succeed
+    let (status, updated) = json_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/memory/webhooks/{webhook_id}"),
+        serde_json::json!({
+            "target_url": "https://sub.allowed.example/hook"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "PATCH with allowed subdomain should succeed: {updated}");
+    assert_eq!(
+        updated["webhook"]["target_url"],
+        "https://sub.allowed.example/hook"
+    );
+}
+
+/// Test: PATCH webhook generates audit trail.
+#[tokio::test]
+async fn test_patch_webhook_creates_audit_entry() {
+    let app = build_test_app().await;
+
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "patch-audit-user",
+            "external_id": "patch-audit-user",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, registered) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/webhooks",
+        serde_json::json!({
+            "user": "patch-audit-user",
+            "target_url": "https://audit.example/hook",
+            "events": ["head_advanced"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let webhook_id = registered["webhook"]["id"].as_str().unwrap();
+
+    // PATCH the webhook
+    let (status, _) = json_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/memory/webhooks/{webhook_id}"),
+        serde_json::json!({
+            "enabled": false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Check audit trail
+    let (status, audit_body) = get_request(
+        &app,
+        &format!("/api/v1/memory/webhooks/{webhook_id}/audit?limit=20"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = audit_body["audit"].as_array().unwrap();
+    assert!(
+        rows.iter().any(|row| row["action"] == "webhook_updated"),
+        "Audit trail should contain 'webhook_updated' entry, got: {:?}",
+        rows
+    );
 }

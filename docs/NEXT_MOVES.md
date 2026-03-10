@@ -158,8 +158,14 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
 ## Tier 3: Future capabilities
 
 24. ~~**Redis-backed span persistence with TTL**~~ — **DONE.** (See item 14 above.)
-25. **Webhook TLS enforcement for updates** — Currently only checked at
-    registration; should also check on `PATCH` webhook updates.
+25. ~~**Webhook TLS enforcement for updates**~~ — **DONE.** Added
+    `PATCH /api/v1/memory/webhooks/:id` endpoint with full TLS enforcement,
+    domain allowlist policy check, and audit trail. Previously only POST
+    (register) existed — now updates apply the same three validation gates:
+    `is_http_url()`, `require_tls` HTTPS enforcement, `is_target_url_allowed()`
+    domain allowlist. SDK support added: TS `updateWebhook()`, Python sync
+    `update_webhook()`, Python async `update_webhook()`. 5 integration tests:
+    field update, 404, TLS rejection, domain allowlist, audit trail.
 26. **Structured LLM output for digest** — Replace prompt parsing with
     tool/function calling to get reliable JSON output for topics.
 27. **Token counting in spans** — `summarize()` and `extract()` don't

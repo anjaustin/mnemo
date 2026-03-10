@@ -1113,7 +1113,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/memory/webhooks/:id",
-            get(get_memory_webhook).delete(delete_memory_webhook),
+            get(get_memory_webhook)
+                .patch(update_memory_webhook)
+                .delete(delete_memory_webhook),
         )
         .route(
             "/api/v1/memory/webhooks/:id/events",
@@ -2721,6 +2723,28 @@ struct RegisterMemoryWebhookRequest {
 
 #[derive(Debug, Serialize)]
 struct RegisterMemoryWebhookResponse {
+    ok: bool,
+    webhook: MemoryWebhookSubscription,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateMemoryWebhookRequest {
+    /// New target URL (optional; if provided, must pass TLS/domain checks).
+    #[serde(default)]
+    target_url: Option<String>,
+    /// Replace the signing secret (optional).
+    #[serde(default)]
+    signing_secret: Option<String>,
+    /// Replace subscribed event types (optional).
+    #[serde(default)]
+    events: Option<Vec<MemoryWebhookEventType>>,
+    /// Enable or disable the webhook (optional).
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateMemoryWebhookResponse {
     ok: bool,
     webhook: MemoryWebhookSubscription,
 }
@@ -5488,6 +5512,125 @@ async fn get_memory_webhook(
         })
     })?;
     Ok(Json(webhook))
+}
+
+async fn update_memory_webhook(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    ctx: Option<Extension<RequestContext>>,
+    Json(req): Json<UpdateMemoryWebhookRequest>,
+) -> Result<Json<UpdateMemoryWebhookResponse>, AppError> {
+    let request_id = request_id_from_extension(ctx);
+
+    // Look up the existing webhook
+    let mut webhook = {
+        let hooks = state.memory_webhooks.read().await;
+        hooks.get(&id).cloned().ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "MemoryWebhook".into(),
+                id: id.to_string(),
+            })
+        })?
+    };
+
+    // If target_url is being changed, apply the same validation as registration:
+    // 1. Must be a valid HTTP(S) URL
+    // 2. SOC 2 TLS enforcement (require_tls)
+    // 3. Domain allowlist policy check
+    if let Some(ref new_url) = req.target_url {
+        let trimmed = new_url.trim();
+        if trimmed.is_empty() {
+            return Err(AppError(MnemoError::Validation(
+                "target_url cannot be empty".into(),
+            )));
+        }
+        if !is_http_url(trimmed) {
+            return Err(AppError(MnemoError::Validation(
+                "target_url must start with http:// or https://".into(),
+            )));
+        }
+        // SOC 2 TLS enforcement: reject non-https targets when require_tls is enabled
+        if state.require_tls && !trimmed.starts_with("https://") {
+            return Err(AppError(MnemoError::Validation(
+                "require_tls is enabled; target_url must use https://".into(),
+            )));
+        }
+        // Domain allowlist policy check
+        let policy = get_or_create_user_policy(
+            &state,
+            webhook.user_id,
+            webhook.user_identifier.clone(),
+        )
+        .await;
+        if !is_target_url_allowed(&policy, trimmed) {
+            state
+                .metrics
+                .policy_violation_total
+                .fetch_add(1, Ordering::Relaxed);
+            append_governance_audit(
+                &state,
+                webhook.user_id,
+                "policy_violation_webhook_domain",
+                request_id.clone(),
+                serde_json::json!({
+                    "target_url": trimmed,
+                    "allowlist": policy.webhook_domain_allowlist,
+                    "action": "webhook_update",
+                }),
+            )
+            .await;
+            return Err(AppError(MnemoError::Validation(
+                "target_url host is not allowed by policy webhook_domain_allowlist".into(),
+            )));
+        }
+        webhook.target_url = trimmed.to_string();
+    }
+
+    // Apply optional field updates
+    if let Some(ref secret) = req.signing_secret {
+        let trimmed = secret.trim();
+        webhook.signing_secret = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+    }
+    if let Some(ref events) = req.events {
+        if !events.is_empty() {
+            webhook.events = events.clone();
+        }
+    }
+    if let Some(enabled) = req.enabled {
+        webhook.enabled = enabled;
+    }
+
+    webhook.updated_at = chrono::Utc::now();
+
+    // Persist update
+    {
+        let mut hooks = state.memory_webhooks.write().await;
+        hooks.insert(id, webhook.clone());
+    }
+    persist_webhook_state(&state).await;
+
+    // Audit trail
+    append_webhook_audit(
+        &state,
+        id,
+        "webhook_updated",
+        request_id,
+        serde_json::json!({
+            "target_url": webhook.target_url.clone(),
+            "events": webhook.events.clone(),
+            "enabled": webhook.enabled,
+        }),
+    )
+    .await;
+
+    Ok(Json(UpdateMemoryWebhookResponse {
+        ok: true,
+        webhook,
+    }))
 }
 
 async fn delete_memory_webhook(
