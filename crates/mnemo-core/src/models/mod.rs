@@ -7,3 +7,4 @@ pub mod episode;
 pub mod session;
 pub mod span;
 pub mod user;
+pub mod webhook_event;

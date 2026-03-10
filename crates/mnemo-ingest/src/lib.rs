@@ -21,6 +21,7 @@ use mnemo_core::models::edge::{Edge, EdgeFilter};
 use mnemo_core::models::entity::{Entity, ExtractedEntity};
 use mnemo_core::models::episode::Episode;
 use mnemo_core::models::session::UpdateSessionRequest;
+use mnemo_core::models::webhook_event::IngestWebhookEvent;
 use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
 use mnemo_core::traits::storage::{
     DigestStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, SpanStore, StorageResult,
@@ -172,6 +173,11 @@ where
     /// Users whose re-ranking has already been performed this idle window.
     /// Cleared when the user becomes active again.
     rerank_generated: RwLock<std::collections::HashSet<Uuid>>,
+    /// Channel for emitting webhook events to the server.
+    /// When set, the worker sends `IngestWebhookEvent` messages after
+    /// creating or invalidating edges, enabling proactive `fact_added`
+    /// and `fact_superseded` webhook delivery.
+    webhook_tx: Option<tokio::sync::mpsc::Sender<IngestWebhookEvent>>,
 }
 
 impl<S, V, L, E> IngestWorker<S, V, L, E>
@@ -199,6 +205,7 @@ where
             user_activity: RwLock::new(HashMap::new()),
             digest_generated: RwLock::new(std::collections::HashSet::new()),
             rerank_generated: RwLock::new(std::collections::HashSet::new()),
+            webhook_tx: None,
         }
     }
 
@@ -213,6 +220,13 @@ where
     /// route-time spans in `GET /api/v1/spans/*`.
     pub fn with_span_sink(mut self, sink: SpanSink) -> Self {
         self.span_sink = Some(sink);
+        self
+    }
+
+    /// Attach a webhook event channel so the worker can proactively emit
+    /// `fact_added` and `fact_superseded` events during ingestion.
+    pub fn with_webhook_sender(mut self, tx: tokio::sync::mpsc::Sender<IngestWebhookEvent>) -> Self {
+        self.webhook_tx = Some(tx);
         self
     }
 
@@ -750,13 +764,31 @@ where
                 _ => continue,
             };
 
+            let req_id = episode_request_id(episode).map(String::from);
+
             for mut c in self
                 .state_store
                 .find_conflicting_edges(episode.user_id, src, tgt, &rel.label)
                 .await?
             {
+                let old_fact = c.fact.clone();
+                let old_edge_id = c.id;
                 c.invalidate(episode.id);
                 self.state_store.update_edge(&c).await?;
+
+                // Proactive fact_superseded event
+                if let Some(ref tx) = self.webhook_tx {
+                    let _ = tx.try_send(IngestWebhookEvent::FactSuperseded {
+                        user_id: episode.user_id,
+                        old_edge_id,
+                        invalidated_by_episode_id: episode.id,
+                        source_entity: rel.source_name.clone(),
+                        target_entity: rel.target_name.clone(),
+                        label: rel.label.clone(),
+                        old_fact,
+                        request_id: req_id.clone(),
+                    });
+                }
             }
 
             let edge = Edge::from_extraction(
@@ -769,6 +801,21 @@ where
             );
             let created = self.state_store.create_edge(edge).await?;
             new_edge_ids.push(created.id);
+
+            // Proactive fact_added event
+            if let Some(ref tx) = self.webhook_tx {
+                let _ = tx.try_send(IngestWebhookEvent::FactAdded {
+                    user_id: episode.user_id,
+                    edge_id: created.id,
+                    source_entity: rel.source_name.clone(),
+                    target_entity: rel.target_name.clone(),
+                    label: created.label.clone(),
+                    fact: created.fact.clone(),
+                    episode_id: episode.id,
+                    request_id: req_id.clone(),
+                });
+            }
+
             let emb = self.embedder.embed(&created.fact).await?;
             self.vector_store
                 .upsert_edge_embedding(

@@ -894,3 +894,279 @@ async fn test_proactive_rerank_idempotent_per_idle_window() {
         "Second idle cycle should NOT re-trigger rerank (idempotent per idle window)"
     );
 }
+
+// ── F-09: Proactive fact_added webhook event ────────────────────────────────
+
+/// Verify that when the ingest worker creates an edge (fact), it sends a
+/// `FactAdded` event through the webhook channel — no client poll required.
+#[tokio::test]
+async fn test_proactive_fact_added_webhook_event() {
+    use mnemo_core::models::webhook_event::IngestWebhookEvent;
+
+    let store = Arc::new(test_store("webhook_fact_added").await);
+    let (user_id, session_id) = setup_user_session(&store).await;
+
+    // Add an episode that the MockLlm will extract "Kendra prefers Nike" from
+    store
+        .create_episode(
+            CreateEpisodeRequest {
+                id: None,
+                episode_type: EpisodeType::Message,
+                content: "I love Nike running shoes!".into(),
+                role: Some(MessageRole::User),
+                name: Some("Kendra".into()),
+                metadata: serde_json::json!({"request_id": "req-fact-added-001"}),
+                created_at: None,
+            },
+            session_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<IngestWebhookEvent>(64);
+
+    let worker = IngestWorker::new(
+        store.clone(),
+        Arc::new(NoopVectorStore),
+        Arc::new(MockLlm::new()),
+        Arc::new(MockEmbedder),
+        IngestConfig {
+            poll_interval_ms: 100,
+            batch_size: 10,
+            concurrency: 1,
+            max_retries: 3,
+            session_summary_threshold: 0,
+            sleep_enabled: false,
+            ..Default::default()
+        },
+    )
+    .with_webhook_sender(tx);
+
+    // Run one poll cycle
+    tokio::select! {
+        _ = worker.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(1500)) => {},
+    }
+
+    // Collect all events from the channel
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+
+    // MockLlm extracts 1 relationship ("Kendra prefers Nike"), so we expect
+    // exactly 1 FactAdded event.
+    let fact_added: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, IngestWebhookEvent::FactAdded { .. }))
+        .collect();
+
+    assert!(
+        !fact_added.is_empty(),
+        "Should have received at least one FactAdded event, got {} total events",
+        events.len()
+    );
+
+    if let IngestWebhookEvent::FactAdded {
+        user_id: evt_user,
+        source_entity,
+        target_entity,
+        label,
+        fact,
+        request_id,
+        ..
+    } = &fact_added[0]
+    {
+        assert_eq!(*evt_user, user_id, "event user_id must match");
+        assert_eq!(source_entity, "Kendra", "source entity must be Kendra");
+        assert_eq!(target_entity, "Nike", "target entity must be Nike");
+        assert_eq!(label, "prefers", "label must be 'prefers'");
+        assert!(
+            fact.contains("Nike"),
+            "fact text should mention Nike: {}",
+            fact
+        );
+        assert_eq!(
+            request_id.as_deref(),
+            Some("req-fact-added-001"),
+            "request_id from episode metadata should propagate"
+        );
+    } else {
+        panic!("expected FactAdded variant");
+    }
+}
+
+// ── F-09: Proactive fact_superseded webhook event ───────────────────────────
+
+/// Verify that when the ingest worker invalidates an existing edge because
+/// a newer episode introduces a conflicting fact with the same (source, target,
+/// label) triple, it sends a `FactSuperseded` event through the webhook channel.
+#[tokio::test]
+async fn test_proactive_fact_superseded_webhook_event() {
+    use mnemo_core::models::webhook_event::IngestWebhookEvent;
+
+    let store = Arc::new(test_store("webhook_fact_superseded").await);
+    let (user_id, session_id) = setup_user_session(&store).await;
+
+    // Phase 1: Create a first episode → extracts "Kendra prefers Nike"
+    store
+        .create_episode(
+            CreateEpisodeRequest {
+                id: None,
+                episode_type: EpisodeType::Message,
+                content: "I love Nike running shoes!".into(),
+                role: Some(MessageRole::User),
+                name: Some("Kendra".into()),
+                metadata: serde_json::json!({}),
+                created_at: None,
+            },
+            session_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+    // Process without webhook channel (we don't care about the first batch)
+    let worker_1 = IngestWorker::new(
+        store.clone(),
+        Arc::new(NoopVectorStore),
+        Arc::new(MockLlm::new()),
+        Arc::new(MockEmbedder),
+        IngestConfig {
+            poll_interval_ms: 100,
+            batch_size: 10,
+            concurrency: 1,
+            max_retries: 3,
+            session_summary_threshold: 0,
+            sleep_enabled: false,
+            ..Default::default()
+        },
+    );
+
+    tokio::select! {
+        _ = worker_1.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(1500)) => {},
+    }
+
+    // Verify the first edge exists
+    let edges_before = store
+        .query_edges(
+            user_id,
+            mnemo_core::models::edge::EdgeFilter {
+                label: Some("prefers".into()),
+                limit: 10,
+                include_invalidated: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        !edges_before.is_empty(),
+        "Phase 1 should have created at least one 'prefers' edge"
+    );
+
+    // Phase 2: Create a second episode → same extraction ("Kendra prefers Nike")
+    // The MockLlm returns the same entities and relationships, so
+    // find_conflicting_edges will find the existing edge (same source, target, label)
+    // and invalidate it before creating the new one.
+    store
+        .create_episode(
+            CreateEpisodeRequest {
+                id: None,
+                episode_type: EpisodeType::Message,
+                content: "Actually I still prefer Nike!".into(),
+                role: Some(MessageRole::User),
+                name: Some("Kendra".into()),
+                metadata: serde_json::json!({"request_id": "req-supersede-001"}),
+                created_at: None,
+            },
+            session_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<IngestWebhookEvent>(64);
+
+    let worker_2 = IngestWorker::new(
+        store.clone(),
+        Arc::new(NoopVectorStore),
+        Arc::new(MockLlm::new()),
+        Arc::new(MockEmbedder),
+        IngestConfig {
+            poll_interval_ms: 100,
+            batch_size: 10,
+            concurrency: 1,
+            max_retries: 3,
+            session_summary_threshold: 0,
+            sleep_enabled: false,
+            ..Default::default()
+        },
+    )
+    .with_webhook_sender(tx);
+
+    tokio::select! {
+        _ = worker_2.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(1500)) => {},
+    }
+
+    // Collect all events
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+
+    let superseded: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, IngestWebhookEvent::FactSuperseded { .. }))
+        .collect();
+
+    assert!(
+        !superseded.is_empty(),
+        "Should have received at least one FactSuperseded event, got events: {:?}",
+        events.iter().map(|e| match e {
+            IngestWebhookEvent::FactAdded { label, .. } => format!("FactAdded({})", label),
+            IngestWebhookEvent::FactSuperseded { label, .. } => format!("FactSuperseded({})", label),
+        }).collect::<Vec<_>>()
+    );
+
+    if let IngestWebhookEvent::FactSuperseded {
+        user_id: evt_user,
+        source_entity,
+        target_entity,
+        label,
+        old_fact,
+        request_id,
+        ..
+    } = &superseded[0]
+    {
+        assert_eq!(*evt_user, user_id);
+        assert_eq!(source_entity, "Kendra");
+        assert_eq!(target_entity, "Nike");
+        assert_eq!(label, "prefers");
+        assert!(
+            old_fact.contains("Nike"),
+            "old fact should mention Nike: {}",
+            old_fact
+        );
+        assert_eq!(
+            request_id.as_deref(),
+            Some("req-supersede-001"),
+            "request_id from episode metadata should propagate"
+        );
+    } else {
+        panic!("expected FactSuperseded variant");
+    }
+
+    // Also verify we got a FactAdded for the new replacement edge
+    let fact_added: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, IngestWebhookEvent::FactAdded { .. }))
+        .collect();
+    assert!(
+        !fact_added.is_empty(),
+        "Should also have a FactAdded for the replacement edge"
+    );
+}

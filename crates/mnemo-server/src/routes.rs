@@ -642,7 +642,13 @@ async fn record_webhook_delivery_failure(state: &AppState, webhook_id: Uuid) {
     }
 }
 
-async fn emit_memory_webhook_event(
+/// Emit a webhook event to all matching subscriptions for a user.
+///
+/// This is the core webhook delivery entry point. It records the event,
+/// persists state, and spawns async delivery tasks for each subscribed hook.
+/// Used by route handlers directly (for `HeadAdvanced`, `ConflictDetected`)
+/// and by the ingest webhook receiver task (for `FactAdded`, `FactSuperseded`).
+pub async fn emit_memory_webhook_event(
     state: &AppState,
     user_id: Uuid,
     event_type: MemoryWebhookEventType,

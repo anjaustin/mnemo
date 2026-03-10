@@ -141,6 +141,14 @@ async fn main() -> anyhow::Result<()> {
     // the server routes and the ingest worker record into the same VecDeque.
     let llm_spans = Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new()));
 
+    // Channel for proactive fact_added / fact_superseded webhook events.
+    // The ingest worker sends events after creating or invalidating edges;
+    // a receiver task (spawned after AppState is built) translates them
+    // into webhook deliveries.
+    let (webhook_tx, webhook_rx) = tokio::sync::mpsc::channel::<
+        mnemo_core::models::webhook_event::IngestWebhookEvent,
+    >(256);
+
     // Spawn ingestion worker with provider-specific LLM type
     // (generics require concrete types, so we branch here).
     // We also keep an LlmHandle in AppState for on-demand extraction
@@ -158,7 +166,8 @@ async fn main() -> anyhow::Result<()> {
                 ingest_config,
             )
             .with_digest_cache(digest_cache.clone())
-            .with_span_sink(llm_spans.clone());
+            .with_span_sink(llm_spans.clone())
+            .with_webhook_sender(webhook_tx);
             tokio::spawn(async move { worker.run().await });
             Some(handle)
         }
@@ -174,7 +183,8 @@ async fn main() -> anyhow::Result<()> {
                 ingest_config,
             )
             .with_digest_cache(digest_cache.clone())
-            .with_span_sink(llm_spans.clone());
+            .with_span_sink(llm_spans.clone())
+            .with_webhook_sender(webhook_tx);
             tokio::spawn(async move { worker.run().await });
             Some(handle)
         }
@@ -278,6 +288,75 @@ async fn main() -> anyhow::Result<()> {
 
     if let Err(err) = restore_webhook_state(&app_state).await {
         tracing::warn!(error = %err, "failed to restore persisted webhook state");
+    }
+
+    // Spawn receiver task that translates ingest webhook events into
+    // webhook deliveries via emit_memory_webhook_event.
+    {
+        use mnemo_core::models::webhook_event::IngestWebhookEvent;
+        use mnemo_server::routes::emit_memory_webhook_event;
+        use mnemo_server::state::MemoryWebhookEventType;
+
+        let state_for_rx = app_state.clone();
+        let mut rx = webhook_rx;
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    IngestWebhookEvent::FactAdded {
+                        user_id,
+                        edge_id,
+                        source_entity,
+                        target_entity,
+                        label,
+                        fact,
+                        episode_id,
+                        request_id,
+                    } => {
+                        emit_memory_webhook_event(
+                            &state_for_rx,
+                            user_id,
+                            MemoryWebhookEventType::FactAdded,
+                            request_id,
+                            serde_json::json!({
+                                "edge_id": edge_id,
+                                "source_entity": source_entity,
+                                "target_entity": target_entity,
+                                "label": label,
+                                "fact": fact,
+                                "episode_id": episode_id,
+                            }),
+                        )
+                        .await;
+                    }
+                    IngestWebhookEvent::FactSuperseded {
+                        user_id,
+                        old_edge_id,
+                        invalidated_by_episode_id,
+                        source_entity,
+                        target_entity,
+                        label,
+                        old_fact,
+                        request_id,
+                    } => {
+                        emit_memory_webhook_event(
+                            &state_for_rx,
+                            user_id,
+                            MemoryWebhookEventType::FactSuperseded,
+                            request_id,
+                            serde_json::json!({
+                                "old_edge_id": old_edge_id,
+                                "invalidated_by_episode_id": invalidated_by_episode_id,
+                                "source_entity": source_entity,
+                                "target_entity": target_entity,
+                                "label": label,
+                                "old_fact": old_fact,
+                            }),
+                        )
+                        .await;
+                    }
+                }
+            }
+        });
     }
 
     let app = build_router(app_state.clone())
