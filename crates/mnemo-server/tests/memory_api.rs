@@ -7747,3 +7747,89 @@ fn test_hmac_signature_format_correctness() {
         "Digest must be valid hex"
     );
 }
+
+#[tokio::test]
+async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
+    let app = build_test_app().await;
+
+    // Step 1: Auto-create identity at version 1
+    let (status, identity_before) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/reject-promo-agent/identity",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity_before["version"], 1);
+    let core_before = identity_before["core"].clone();
+
+    // Step 2: Create a promotion proposal with a different candidate_core
+    let source_ids = vec![
+        uuid::Uuid::now_v7(),
+        uuid::Uuid::now_v7(),
+        uuid::Uuid::now_v7(),
+    ];
+    let (status, proposal) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/reject-promo-agent/promotions",
+        serde_json::json!({
+            "proposal": "change mission to something else",
+            "candidate_core": {"mission": "totally-different-mission", "style": "aggressive"},
+            "reason": "three events suggest directness works better",
+            "source_event_ids": source_ids
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(proposal["status"], "pending");
+    let proposal_id = proposal["id"].as_str().unwrap().to_string();
+
+    // Step 3: Reject the proposal
+    let (status, rejected) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/agents/reject-promo-agent/promotions/{proposal_id}/reject"),
+        serde_json::json!({"reason": "insufficient evidence after human review"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rejected["status"], "rejected");
+    assert!(rejected["rejected_at"].is_string(), "rejected_at must be set");
+
+    // Step 4: Verify identity is completely unchanged
+    let (status, identity_after) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/reject-promo-agent/identity",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity_after["version"], 1, "version must stay at 1 after rejection");
+    assert_eq!(identity_after["core"], core_before, "core must be identical after rejection");
+
+    // Step 5: Verify the proposal shows up as rejected in the list
+    let (status, proposals) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/reject-promo-agent/promotions?limit=10",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let list = proposals.as_array().expect("proposals should be an array");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["status"], "rejected");
+
+    // Step 6: Verify re-rejecting a rejected proposal fails
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/agents/reject-promo-agent/promotions/{proposal_id}/reject"),
+        serde_json::json!({"reason": "double reject attempt"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "re-rejecting must fail: {body:?}");
+}
