@@ -10,7 +10,7 @@ Deploy Mnemo on a [Vultr](https://www.vultr.com) VPS instance using Terraform. T
 |---|---|
 | `vultr_instance` | Ubuntu 24.04 LTS, `vc2-2c-4gb` (2 vCPU / 4 GB RAM) |
 | `vultr_firewall_group` | Rules for SSH (22), Mnemo API (8080), HTTPS (443) |
-| Docker stack | `redis-stack-server:7.4.0-v1`, `qdrant:v1.12.4`, `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` |
+| Docker stack | `redis-stack-server:7.4.0-v1`, `qdrant:v1.12.4`, `ghcr.io/anjaustin/mnemo/mnemo-server:latest` |
 
 **Cost estimate:** ~$20/month for the `vc2-2c-4gb` plan.
 
@@ -33,7 +33,7 @@ cd deploy/vultr/terraform
 cat > terraform.tfvars <<EOF
 vultr_api_key       = "your-api-key"
 ssh_key_name        = "your-ssh-key-name"
- mnemo_image                     = "ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h"
+ mnemo_image                     = "ghcr.io/anjaustin/mnemo/mnemo-server:latest"
  mnemo_llm_provider              = "anthropic"
  mnemo_llm_api_key               = "sk-ant-..."
  mnemo_llm_model                 = "claude-haiku-4-20250514"

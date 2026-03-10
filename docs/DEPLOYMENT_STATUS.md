@@ -41,15 +41,13 @@ Each provider uses its own `MNEMO_QDRANT_PREFIX` to avoid vector-dimension or co
 
 ## Durable Image Plan
 
-The live fleet currently runs on a temporary `ttl.sh` image because the distroless local-embed image was validated live before durable GHCR semver tags were available.
-
-The intended steady state is:
+The live fleet was originally validated on a temporary `ttl.sh` image. All deploy guides and IaC templates have been updated to reference the durable GHCR images:
 
 - `ghcr.io/anjaustin/mnemo/mnemo-server:0.3.7`
 - `ghcr.io/anjaustin/mnemo/mnemo-server:0.3`
 - `ghcr.io/anjaustin/mnemo/mnemo-server:latest`
 
-Once the GHCR workflow has published semver tags, roll the fleet from `ttl.sh` to GHCR and keep the provider-specific `MNEMO_QDRANT_PREFIX` values unchanged.
+The fleet status table above reflects the image used at original validation time. New deployments should use the GHCR images above.
 
 ## Revalidation Commands
 

@@ -10,7 +10,7 @@
 |---|---|---|
 | `mnemo-redis` | `redis/redis-stack-server:7.4.0-v1` | 10 GB SSD volume at `/data`; uses `REDIS_ARGS` env var |
 | `mnemo-qdrant` | `qdrant/qdrant:v1.12.4` | 20 GB SSD volume at `/qdrant/storage` |
-| `mnemo-server` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | Public HTTP port 8080; local embeddings enabled |
+| `mnemo-server` | `ghcr.io/anjaustin/mnemo/mnemo-server:latest` | Public HTTP port 8080; local embeddings enabled |
 
 **Cost estimate:** ~$20–$40/month depending on compute plan.
 

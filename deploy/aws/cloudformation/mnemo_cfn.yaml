@@ -51,7 +51,7 @@ Parameters:
 
   MnemoImage:
     Type: String
-    Default: ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h
+    Default: ghcr.io/anjaustin/mnemo/mnemo-server:latest
     Description: Full Mnemo server image reference.
 
   MnemoLlmProvider:

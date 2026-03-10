@@ -63,7 +63,7 @@ aws cloudformation create-stack \
   --parameters \
     ParameterKey=KeyName,ParameterValue=YOUR_KEY_PAIR_NAME \
     ParameterKey=SSHCidr,ParameterValue=$(curl -s https://checkip.amazonaws.com)/32 \
-    ParameterKey=MnemoImage,ParameterValue=ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h \
+    ParameterKey=MnemoImage,ParameterValue=ghcr.io/anjaustin/mnemo/mnemo-server:latest \
     ParameterKey=MnemoLlmProvider,ParameterValue=anthropic \
     ParameterKey=MnemoLlmApiKey,ParameterValue=sk-YOUR_KEY \
     ParameterKey=MnemoLlmModel,ParameterValue=claude-haiku-4-20250514 \

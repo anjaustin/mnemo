@@ -46,7 +46,7 @@ region  = "us-central1"
 zone    = "us-central1-a"
 
 # Recommended image + local embedding config
-mnemo_image                     = "ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h"
+mnemo_image                     = "ghcr.io/anjaustin/mnemo/mnemo-server:latest"
 mnemo_llm_provider              = "anthropic"
 mnemo_llm_api_key               = "sk-ant-..."
 mnemo_llm_model                 = "claude-haiku-4-20250514"

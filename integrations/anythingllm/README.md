@@ -38,7 +38,7 @@ case "mnemo":
 ```bash
 VECTOR_DB=mnemo
 MNEMO_ENDPOINT=http://localhost:8080   # your Mnemo server
-MNEMO_API_KEY=                          # optional, if auth is enabled
+MNEMO_AUTH_API_KEYS=                    # optional, comma-separated keys when auth is enabled
 ```
 
 ## How It Works

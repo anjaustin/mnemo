@@ -48,7 +48,7 @@ If not using Blueprint:
    - Set env: `QDRANT__SERVICE__GRPC_PORT=6334`, `QDRANT__LOG_LEVEL=WARN`
 
 3. **Create Mnemo (web service)**:
-   - New → Web Service → Docker image `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h`
+   - New → Web Service → Docker image `ghcr.io/anjaustin/mnemo/mnemo-server:latest`
    - Health check path: `/health`
    - Set env vars (see below)
 

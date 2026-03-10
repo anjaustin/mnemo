@@ -8,7 +8,7 @@
 
 | Service | Image | Notes |
 |---|---|---|
-| `mnemo` | `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h` | Main API server; local embeddings enabled |
+| `mnemo` | `ghcr.io/anjaustin/mnemo/mnemo-server:latest` | Main API server; local embeddings enabled |
 | `redis` | `redis/redis-stack-server:7.4.0-v1` | Docker image service; Redis Stack modules required |
 | `qdrant` | `qdrant/qdrant:v1.12.4` | Self-hosted on Railway |
 
@@ -29,7 +29,7 @@
 1. Create a new Railway project
 2. Add a new service → **Docker Image** → `redis/redis-stack-server:7.4.0-v1`
 3. Add a new service → **Docker Image** → `qdrant/qdrant:v1.12.4`
-4. Add a new service → **Docker Image** → `ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h`
+4. Add a new service → **Docker Image** → `ghcr.io/anjaustin/mnemo/mnemo-server:latest`
 5. Wire env vars between services (see below)
 6. Generate a Railway domain for the `mnemo` service (`*.up.railway.app`)
 

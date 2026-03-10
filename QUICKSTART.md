@@ -14,13 +14,6 @@ docker compose up -d
 
 Then open **http://localhost:8080/_/** for the operator dashboard.
 
-Or use the bootstrap script:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/anomalyco/mnemo/main/scripts/quickstart.sh \
-  | MNEMO_LLM_API_KEY=sk-... bash
-```
-
 ---
 
 ## Quick smoke test
@@ -77,12 +70,14 @@ MNEMO_LLM_API_KEY=sk-... cargo run --bin mnemo-server
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MNEMO_LLM_API_KEY` | — | Required for entity extraction |
-| `MNEMO_LLM_PROVIDER` | `anthropic` | `anthropic` or `openai` |
-| `MNEMO_LLM_MODEL` | `claude-haiku-4-20250514` | Model name |
-| `MNEMO_EMBEDDING_PROVIDER` | `local` | `local` (fastembed) or `openai` |
-| `MNEMO_PORT` | `8080` | Host port to expose |
+| `MNEMO_LLM_PROVIDER` | `anthropic` | `anthropic`, `openai`, `ollama`, or `liquid` |
+| `MNEMO_LLM_MODEL` | `claude-sonnet-4-20250514` | Model name |
+| `MNEMO_EMBEDDING_PROVIDER` | `openai` | `openai`-compatible remote or `local` (fastembed) |
+| `MNEMO_SERVER_PORT` | `8080` | Server listen port |
 | `MNEMO_AUTH_ENABLED` | `false` | Enable API key auth |
-| `MNEMO_API_KEY` | — | API key(s) when auth enabled |
+| `MNEMO_AUTH_API_KEYS` | — | Comma-separated API keys when auth enabled |
+
+See [`config/default.toml`](config/default.toml) for the full configuration reference.
 
 ## Stop
 

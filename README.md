@@ -173,6 +173,9 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 - **Python SDK** - Zero-dependency sync client (`Mnemo`) and async client (`AsyncMnemo`) with full API coverage, typed results, and `x-mnemo-request-id` propagation.
   - **LangChain adapter** - Drop-in `MnemoChatMessageHistory` (`BaseChatMessageHistory`) via `mnemo.ext.langchain`.
   - **LlamaIndex adapter** - Drop-in `MnemoChatStore` (`BaseChatStore`, all 7 abstract methods) via `mnemo.ext.llamaindex`.
+- **TypeScript SDK** - Fetch-based client with full API parity. Works in Node.js, Deno, Bun, and modern browsers.
+  - **LangChain.js adapter** - Drop-in `MnemoChatMessageHistory` (`BaseListChatMessageHistory`) via `mnemo-client/langchain`.
+  - **Vercel AI SDK adapter** - `mnemoRemember`, `mnemoRecall`, `mnemoDigest` tools via `mnemo-client/vercel-ai`.
 - **Raw Vector API** - General-purpose vector database endpoints for external integrations (upsert, similarity search, delete, count, namespace lifecycle).
 - **AnythingLLM Integration** - Drop-in vector DB provider for [AnythingLLM](https://github.com/Mintplex-Labs/anything-llm) (55.5k stars). See `integrations/anythingllm/`.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
@@ -585,8 +588,12 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 | [Benchmarks](docs/BENCHMARKS.md) | Latency, throughput, and comparison benchmarks |
 | [Metadata Index Layer](docs/METADATA_INDEX_LAYER.md) | App-level metadata prefilter planner design |
 | [Configuration](config/default.toml) | All config options with inline comments |
+| [Tutorial](docs/TUTORIAL.md) | Build a support agent with Mnemo memory (20-min walkthrough) |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
 | [Contributing](CONTRIBUTING.md) | Dev setup, code style, PR process |
 | [Changelog](CHANGELOG.md) | Release notes |
+| [Security Policy](SECURITY.md) | Vulnerability reporting and disclosure |
+| [Code of Conduct](CODE_OF_CONDUCT.md) | Community standards |
 
 ## Configuration
 
@@ -595,8 +602,8 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | Env Var | Description | Default |
 |---------|-------------|---------|
 | `MNEMO_LLM_API_KEY` | API key for entity extraction | (none) |
-| `MNEMO_LLM_PROVIDER` | `openai`, `anthropic`, `ollama`, `liquid` | `openai` |
-| `MNEMO_LLM_MODEL` | Model for extraction | `gpt-4o-mini` |
+| `MNEMO_LLM_PROVIDER` | `anthropic`, `openai`, `ollama`, `liquid` | `anthropic` |
+| `MNEMO_LLM_MODEL` | Model for extraction | `claude-sonnet-4-20250514` |
 | `MNEMO_EMBEDDING_PROVIDER` | `openai`-compatible remote embeddings or `local` fastembed | `openai` |
 | `MNEMO_EMBEDDING_API_KEY` | Embedding API key | (none) |
 | `MNEMO_AUTH_ENABLED` | Require API key auth (`true`/`false`) | `false` |

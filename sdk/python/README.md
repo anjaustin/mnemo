@@ -1,6 +1,6 @@
 # mnemo-client
 
-Production-grade Python SDK for the [Mnemo](https://github.com/anomalyco/mnemo) memory API.
+Production-grade Python SDK for the [Mnemo](https://github.com/anjaustin/mnemo) memory API.
 
 Covers all memory, knowledge graph, LLM span tracing, memory digest, governance, webhooks, operator,
 import, and session-message endpoints. Zero runtime dependencies for the sync client.

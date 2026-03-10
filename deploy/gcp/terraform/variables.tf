@@ -36,7 +36,7 @@ variable "mnemo_version" {
 variable "mnemo_image" {
   description = "Full mnemo-server image reference"
   type        = string
-  default     = "ttl.sh/mnemo-local-embed-distroless-fixed-20260307:24h"
+  default     = "ghcr.io/anjaustin/mnemo/mnemo-server:latest"
 }
 
 variable "mnemo_llm_provider" {
