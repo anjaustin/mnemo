@@ -220,9 +220,60 @@ impl VectorStore for NoopVectorStore {
     ) -> StorageResult<Vec<(Uuid, f32)>> {
         Ok(Vec::new())
     }
+    async fn set_entity_payload(&self, _: Uuid, _: serde_json::Value) -> StorageResult<()> {
+        Ok(())
+    }
+    async fn set_edge_payload(&self, _: Uuid, _: serde_json::Value) -> StorageResult<()> {
+        Ok(())
+    }
     async fn delete_user_vectors(&self, _: Uuid) -> StorageResult<()> {
         Ok(())
     }
+}
+
+/// Mock vector store that tracks `set_*_payload` calls for testing proactive re-ranking.
+struct TrackingVectorStore {
+    entity_payloads: tokio::sync::RwLock<Vec<(Uuid, serde_json::Value)>>,
+    edge_payloads: tokio::sync::RwLock<Vec<(Uuid, serde_json::Value)>>,
+}
+
+impl TrackingVectorStore {
+    fn new() -> Self {
+        Self {
+            entity_payloads: tokio::sync::RwLock::new(Vec::new()),
+            edge_payloads: tokio::sync::RwLock::new(Vec::new()),
+        }
+    }
+}
+
+impl VectorStore for TrackingVectorStore {
+    async fn upsert_entity_embedding(
+        &self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value,
+    ) -> StorageResult<()> { Ok(()) }
+    async fn upsert_edge_embedding(
+        &self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value,
+    ) -> StorageResult<()> { Ok(()) }
+    async fn upsert_episode_embedding(
+        &self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value,
+    ) -> StorageResult<()> { Ok(()) }
+    async fn search_entities(
+        &self, _: Uuid, _: Vec<f32>, _: u32, _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> { Ok(Vec::new()) }
+    async fn search_edges(
+        &self, _: Uuid, _: Vec<f32>, _: u32, _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> { Ok(Vec::new()) }
+    async fn search_episodes(
+        &self, _: Uuid, _: Vec<f32>, _: u32, _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> { Ok(Vec::new()) }
+    async fn set_entity_payload(&self, id: Uuid, payload: serde_json::Value) -> StorageResult<()> {
+        self.entity_payloads.write().await.push((id, payload));
+        Ok(())
+    }
+    async fn set_edge_payload(&self, id: Uuid, payload: serde_json::Value) -> StorageResult<()> {
+        self.edge_payloads.write().await.push((id, payload));
+        Ok(())
+    }
+    async fn delete_user_vectors(&self, _: Uuid) -> StorageResult<()> { Ok(()) }
 }
 
 async fn setup_user_session(store: &RedisStateStore) -> (Uuid, Uuid) {
@@ -591,5 +642,255 @@ async fn test_progressive_summarization_disabled_when_threshold_zero() {
         session_after.summary.is_none(),
         "session.summary must stay None when threshold=0, got: {:?}",
         session_after.summary
+    );
+}
+
+/// Test: proactive re-ranking writes relevance scores to the vector store
+/// during idle windows, covering entity scores (mention_count, recency,
+/// edge density) and edge scores (confidence, corroboration, recency).
+///
+/// This test uses a single worker that:
+/// 1. Processes an episode (populates graph with entities & edges, records user activity)
+/// 2. Waits 31s for the 30s idle window to expire
+/// 3. Runs another poll cycle where sleep_time_consolidation detects the idle user
+///    and runs proactive_rerank, which writes relevance payloads to the TrackingVectorStore
+#[tokio::test]
+async fn test_proactive_rerank_writes_relevance_scores() {
+    let store = Arc::new(test_store("rerank").await);
+    let (user_id, session_id) = setup_user_session(&store).await;
+
+    // Create an episode for ingestion
+    store
+        .create_episode(
+            CreateEpisodeRequest {
+                id: None,
+                episode_type: EpisodeType::Message,
+                content: "Kendra switched to Nike running shoes.".into(),
+                role: Some(MessageRole::User),
+                name: Some("Kendra".into()),
+                metadata: serde_json::json!({}),
+                created_at: None,
+            },
+            session_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+    let tracking = Arc::new(TrackingVectorStore::new());
+    let worker = IngestWorker::new(
+        store.clone(),
+        tracking.clone(),
+        Arc::new(MockLlm::new()),
+        Arc::new(MockEmbedder),
+        IngestConfig {
+            poll_interval_ms: 50,
+            batch_size: 10,
+            concurrency: 1,
+            max_retries: 3,
+            session_summary_threshold: 0,
+            sleep_enabled: true, // enabled so sleep_time_consolidation runs
+            sleep_idle_window_seconds: 30, // minimum (clamped to 30s)
+        },
+    );
+
+    // Phase 1: Process the episode. This populates the graph AND records user activity.
+    // Sleep is enabled but user just had activity, so no idle consolidation runs yet.
+    tokio::select! {
+        _ = worker.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(600)) => {},
+    }
+
+    // Verify entities and edges were created in the state store.
+    let entities = store.list_entities(user_id, 100, None).await.unwrap();
+    assert!(
+        !entities.is_empty(),
+        "Should have created entities from ingest"
+    );
+    let edges = store
+        .query_edges(
+            user_id,
+            mnemo_core::models::edge::EdgeFilter {
+                include_invalidated: false,
+                limit: 100,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!edges.is_empty(), "Should have created edges from ingest");
+
+    // No reranking payloads yet (user is not idle)
+    assert!(
+        tracking.entity_payloads.read().await.is_empty(),
+        "No entity rerank payloads should exist before idle window expires"
+    );
+
+    // Phase 2: Wait for the idle window (30s) to expire.
+    tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+
+    // Phase 3: Run another poll cycle. sleep_time_consolidation will detect
+    // the idle user and run both digest generation and proactive re-ranking.
+    // The worker still has the same user_activity from Phase 1, now >30s old.
+    tokio::select! {
+        _ = worker.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(2000)) => {},
+    }
+
+    // Verify: entity payloads should have been updated
+    let ep = tracking.entity_payloads.read().await;
+    assert!(
+        !ep.is_empty(),
+        "Proactive re-ranking should have written entity relevance payloads, but got 0 updates. \
+         Entities in graph: {}",
+        entities.len()
+    );
+
+    // Verify each entity payload has the expected fields
+    for (eid, payload) in ep.iter() {
+        let score = payload.get("relevance_score").and_then(|v| v.as_f64());
+        assert!(
+            score.is_some(),
+            "Entity {:?} payload missing 'relevance_score': {:?}",
+            eid,
+            payload
+        );
+        let s = score.unwrap();
+        assert!(
+            (0.0..=1.0).contains(&s),
+            "Entity {:?} relevance_score out of range: {}",
+            eid,
+            s
+        );
+        assert!(
+            payload.get("mention_count").is_some(),
+            "Entity {:?} payload missing 'mention_count'",
+            eid
+        );
+        assert!(
+            payload.get("edge_density").is_some(),
+            "Entity {:?} payload missing 'edge_density'",
+            eid
+        );
+        assert!(
+            payload.get("reranked_at").is_some(),
+            "Entity {:?} payload missing 'reranked_at'",
+            eid
+        );
+    }
+
+    // Verify: edge payloads should have been updated
+    let edp = tracking.edge_payloads.read().await;
+    assert!(
+        !edp.is_empty(),
+        "Proactive re-ranking should have written edge relevance payloads, but got 0 updates. \
+         Edges in graph: {}",
+        edges.len()
+    );
+
+    for (eid, payload) in edp.iter() {
+        let score = payload.get("relevance_score").and_then(|v| v.as_f64());
+        assert!(
+            score.is_some(),
+            "Edge {:?} payload missing 'relevance_score': {:?}",
+            eid,
+            payload
+        );
+        let s = score.unwrap();
+        assert!(
+            (0.0..=1.0).contains(&s),
+            "Edge {:?} relevance_score out of range: {}",
+            eid,
+            s
+        );
+        assert!(
+            payload.get("confidence").is_some(),
+            "Edge {:?} payload missing 'confidence'",
+            eid
+        );
+        assert!(
+            payload.get("corroboration_count").is_some(),
+            "Edge {:?} payload missing 'corroboration_count'",
+            eid
+        );
+        assert!(
+            payload.get("reranked_at").is_some(),
+            "Edge {:?} payload missing 'reranked_at'",
+            eid
+        );
+    }
+}
+
+/// Test: proactive re-ranking is NOT triggered twice in the same idle window.
+/// After a successful rerank, the user is added to `rerank_generated` and
+/// should not be re-ranked again until they become active.
+#[tokio::test]
+async fn test_proactive_rerank_idempotent_per_idle_window() {
+    let store = Arc::new(test_store("rerank_idem").await);
+    let (user_id, session_id) = setup_user_session(&store).await;
+
+    // Ingest an episode
+    store
+        .create_episode(
+            CreateEpisodeRequest {
+                id: None,
+                episode_type: EpisodeType::Message,
+                content: "Kendra switched to Nike running shoes.".into(),
+                role: Some(MessageRole::User),
+                name: Some("Kendra".into()),
+                metadata: serde_json::json!({}),
+                created_at: None,
+            },
+            session_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+    let tracking = Arc::new(TrackingVectorStore::new());
+    let worker = IngestWorker::new(
+        store.clone(),
+        tracking.clone(),
+        Arc::new(MockLlm::new()),
+        Arc::new(MockEmbedder),
+        IngestConfig {
+            poll_interval_ms: 50,
+            batch_size: 10,
+            concurrency: 1,
+            max_retries: 3,
+            session_summary_threshold: 0,
+            sleep_enabled: true,
+            sleep_idle_window_seconds: 30,
+        },
+    );
+
+    // Process the episode (records user activity)
+    tokio::select! {
+        _ = worker.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(600)) => {},
+    }
+
+    // Wait for idle threshold
+    tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+
+    // First consolidation cycle — should trigger rerank
+    tokio::select! {
+        _ = worker.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(2000)) => {},
+    }
+
+    let count_after_first = tracking.entity_payloads.read().await.len();
+    assert!(count_after_first > 0, "First rerank should produce updates");
+
+    // Second consolidation cycle — should NOT trigger rerank again (already generated)
+    tokio::select! {
+        _ = worker.run() => {},
+        _ = tokio::time::sleep(std::time::Duration::from_millis(1000)) => {},
+    }
+
+    let count_after_second = tracking.entity_payloads.read().await.len();
+    assert_eq!(
+        count_after_first, count_after_second,
+        "Second idle cycle should NOT re-trigger rerank (idempotent per idle window)"
     );
 }

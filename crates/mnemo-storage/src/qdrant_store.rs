@@ -2,10 +2,10 @@ use qdrant_client::qdrant::r#match::MatchValue;
 use qdrant_client::qdrant::{
     value::Kind, CountPointsBuilder, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder,
     DeletePointsBuilder, Distance, FieldCondition, FieldType, Filter, Match, PointId, PointStruct,
-    PointsIdsList, SearchPointsBuilder, UpsertPointsBuilder, Value as QdrantValue,
-    VectorParamsBuilder,
+    PointsIdsList, SearchPointsBuilder, SetPayloadPointsBuilder, UpsertPointsBuilder,
+    Value as QdrantValue, VectorParamsBuilder,
 };
-use qdrant_client::Qdrant;
+use qdrant_client::{Payload, Qdrant};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -209,6 +209,35 @@ impl QdrantVectorStore {
         Ok(())
     }
 
+    /// Update payload fields on a single point without re-sending the embedding vector.
+    /// Uses Qdrant's `set_payload` API which merges fields (does not overwrite existing ones).
+    async fn set_point_payload(
+        &self,
+        collection: &str,
+        id: Uuid,
+        payload: serde_json::Value,
+    ) -> StorageResult<()> {
+        let coll_name = self.collection_name(collection);
+        let qdrant_payload: Payload = payload
+            .try_into()
+            .map_err(|e: <serde_json::Value as TryInto<Payload>>::Error| {
+                MnemoError::Qdrant(format!("Payload conversion failed: {}", e))
+            })?;
+
+        self.client
+            .set_payload(
+                SetPayloadPointsBuilder::new(&coll_name, qdrant_payload)
+                    .points_selector(PointsIdsList {
+                        ids: vec![Self::uuid_to_point_id(id)],
+                    })
+                    .wait(true),
+            )
+            .await
+            .map_err(|e| MnemoError::Qdrant(format!("Set payload failed: {}", e)))?;
+
+        Ok(())
+    }
+
     async fn search_collection(
         &self,
         collection: &str,
@@ -318,6 +347,22 @@ impl VectorStore for QdrantVectorStore {
     ) -> StorageResult<Vec<(Uuid, f32)>> {
         self.search_collection("episodes", user_id, query_embedding, limit, min_score)
             .await
+    }
+
+    async fn set_entity_payload(
+        &self,
+        entity_id: Uuid,
+        payload: Value,
+    ) -> StorageResult<()> {
+        self.set_point_payload("entities", entity_id, payload).await
+    }
+
+    async fn set_edge_payload(
+        &self,
+        edge_id: Uuid,
+        payload: Value,
+    ) -> StorageResult<()> {
+        self.set_point_payload("edges", edge_id, payload).await
     }
 
     async fn delete_user_vectors(&self, user_id: Uuid) -> StorageResult<()> {

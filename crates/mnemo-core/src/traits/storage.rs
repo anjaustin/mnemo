@@ -258,6 +258,22 @@ pub trait VectorStore: Send + Sync {
         min_score: f32,
     ) -> StorageResult<Vec<(Uuid, f32)>>;
 
+    /// Update payload fields on an entity point without re-sending the embedding vector.
+    /// Used by proactive re-ranking to write relevance scores to Qdrant.
+    async fn set_entity_payload(
+        &self,
+        entity_id: Uuid,
+        payload: serde_json::Value,
+    ) -> StorageResult<()>;
+
+    /// Update payload fields on an edge point without re-sending the embedding vector.
+    /// Used by proactive re-ranking to write relevance scores to Qdrant.
+    async fn set_edge_payload(
+        &self,
+        edge_id: Uuid,
+        payload: serde_json::Value,
+    ) -> StorageResult<()>;
+
     /// Delete all vectors for a user (GDPR hard delete).
     async fn delete_user_vectors(&self, user_id: Uuid) -> StorageResult<()>;
 }

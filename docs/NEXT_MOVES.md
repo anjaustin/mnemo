@@ -144,8 +144,16 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
 21. ~~**Align default limits**~~ — **DONE.** Both Python and TS SDK graph
     entity/edge methods aligned to server default of 20.
 22. ~~**Add `encodeURIComponent` to `spansByUser` userId**~~ — **DONE.**
-23. **Proactive re-ranking** — P0.2 from the sleep-time spec (re-score
-    entity/edge relevance during idle windows).
+23. ~~**Proactive re-ranking**~~ — **DONE.** P0.2 sleep-time re-scoring
+    implemented. During idle windows, `IngestWorker.proactive_rerank()` computes
+    composite relevance scores for entities (mention_count + recency decay +
+    edge density) and edges (confidence + corroboration_count + recency decay),
+    then writes scores to Qdrant payloads via `VectorStore.set_entity_payload()`
+    / `set_edge_payload()` (payload-only update, no embedding re-upload).
+    Tracked by `rerank_generated` set (cleared on user activity). Integration
+    tests: `test_proactive_rerank_writes_relevance_scores` (verifies payload
+    fields and score ranges) and `test_proactive_rerank_idempotent_per_idle_window`
+    (verifies no duplicate reranking in same idle window).
 
 ## Tier 3: Future capabilities
 

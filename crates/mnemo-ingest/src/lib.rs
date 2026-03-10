@@ -113,6 +113,9 @@ where
     /// Users whose digest has already been generated this idle window.
     /// Cleared when the user becomes active again.
     digest_generated: RwLock<std::collections::HashSet<Uuid>>,
+    /// Users whose re-ranking has already been performed this idle window.
+    /// Cleared when the user becomes active again.
+    rerank_generated: RwLock<std::collections::HashSet<Uuid>>,
 }
 
 impl<S, V, L, E> IngestWorker<S, V, L, E>
@@ -139,6 +142,7 @@ where
             span_sink: None,
             user_activity: RwLock::new(HashMap::new()),
             digest_generated: RwLock::new(std::collections::HashSet::new()),
+            rerank_generated: RwLock::new(std::collections::HashSet::new()),
         }
     }
 
@@ -204,14 +208,19 @@ where
             activity.insert(user_id, Instant::now());
         } // drop write lock before acquiring the next one
         {
-            // Clear the digest-generated flag so a new digest can be triggered
-            // after the next idle window.
+            // Clear the digest-generated and rerank-generated flags so new
+            // operations can be triggered after the next idle window.
             let mut generated = self.digest_generated.write().await;
             generated.remove(&user_id);
         }
+        {
+            let mut reranked = self.rerank_generated.write().await;
+            reranked.remove(&user_id);
+        }
     }
 
-    /// Check all tracked users for idle windows and generate digests.
+    /// Check all tracked users for idle windows and run sleep-time consolidation:
+    /// digest generation and proactive re-ranking.
     async fn sleep_time_consolidation(&self) {
         // Clamp minimum idle window to 30s to prevent runaway LLM calls
         let idle_secs = self.config.sleep_idle_window_seconds.max(30);
@@ -219,15 +228,27 @@ where
         // Evict entries older than 24h to prevent unbounded growth
         let eviction_threshold = Duration::from_secs(86400);
 
-        let idle_users: Vec<Uuid>;
+        // Find users who are idle and need either digest or rerank (or both).
+        let idle_users_for_digest: Vec<Uuid>;
+        let idle_users_for_rerank: Vec<Uuid>;
         {
             let activity = self.user_activity.read().await;
-            let generated = self.digest_generated.read().await;
-            idle_users = activity
+            let digest_done = self.digest_generated.read().await;
+            let rerank_done = self.rerank_generated.read().await;
+
+            let idle: Vec<(Uuid, bool, bool)> = activity
                 .iter()
-                .filter(|(uid, last)| last.elapsed() >= idle_threshold && !generated.contains(uid))
-                .map(|(uid, _)| *uid)
+                .filter(|(_, last)| last.elapsed() >= idle_threshold)
+                .map(|(uid, _)| {
+                    let needs_digest = !digest_done.contains(uid);
+                    let needs_rerank = !rerank_done.contains(uid);
+                    (*uid, needs_digest, needs_rerank)
+                })
+                .filter(|(_, d, r)| *d || *r)
                 .collect();
+
+            idle_users_for_digest = idle.iter().filter(|(_, d, _)| *d).map(|(u, _, _)| *u).collect();
+            idle_users_for_rerank = idle.iter().filter(|(_, _, r)| *r).map(|(u, _, _)| *u).collect();
         }
 
         // Evict stale entries (users inactive for >24h)
@@ -237,11 +258,14 @@ where
         }
         {
             let activity = self.user_activity.read().await;
-            let mut generated = self.digest_generated.write().await;
-            generated.retain(|uid| activity.contains_key(uid));
+            let mut digest_done = self.digest_generated.write().await;
+            digest_done.retain(|uid| activity.contains_key(uid));
+            let mut rerank_done = self.rerank_generated.write().await;
+            rerank_done.retain(|uid| activity.contains_key(uid));
         }
 
-        for user_id in idle_users {
+        // Run digest generation for idle users
+        for user_id in idle_users_for_digest {
             tracing::info!(user_id = %user_id, "Sleep-time compute: generating digest for idle user");
             match self.generate_digest(user_id).await {
                 Ok(digest) => {
@@ -270,6 +294,29 @@ where
                 }
                 Err(e) => {
                     tracing::warn!(user_id = %user_id, error = %e, "Sleep-time digest generation failed");
+                }
+            }
+        }
+
+        // Run proactive re-ranking for idle users
+        for user_id in idle_users_for_rerank {
+            tracing::info!(user_id = %user_id, "Sleep-time compute: proactive re-ranking for idle user");
+            match self.proactive_rerank(user_id).await {
+                Ok((entities, edges)) => {
+                    let mut gen = self.rerank_generated.write().await;
+                    gen.insert(user_id);
+                    tracing::info!(
+                        user_id = %user_id,
+                        entities, edges,
+                        "Sleep-time re-ranking complete"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        user_id = %user_id, error = %e,
+                        "Sleep-time re-ranking failed; will retry next cycle"
+                    );
+                    // Do NOT mark as generated — allows retry on next idle check.
                 }
             }
         }
@@ -377,6 +424,117 @@ where
             generated_at: chrono::Utc::now(),
             model: model_name,
         })
+    }
+
+    /// Proactively re-score entity and edge relevance during idle windows.
+    ///
+    /// Computes a composite relevance score for each entity and edge, then writes
+    /// the scores to Qdrant payloads via `set_payload` (no embedding re-upload).
+    /// This allows the retrieval engine to boost results based on pre-computed
+    /// relevance without expensive query-time computation.
+    ///
+    /// Entity score = weighted combination of:
+    ///   - mention_count (popularity)
+    ///   - recency (exponential decay, half-life ~83 days matching retrieval's 120-day scale)
+    ///   - edge_density (number of connected edges — well-connected entities are more important)
+    ///
+    /// Edge score = weighted combination of:
+    ///   - confidence (extraction model confidence)
+    ///   - corroboration_count (how many episodes confirm this fact)
+    ///   - recency (exponential decay)
+    async fn proactive_rerank(&self, user_id: Uuid) -> Result<(usize, usize), MnemoError> {
+        // 1. Fetch entities and edges for this user
+        let entities = self.state_store.list_entities(user_id, 500, None).await?;
+        let filter = EdgeFilter {
+            include_invalidated: false,
+            limit: 1000,
+            ..Default::default()
+        };
+        let edges = self.state_store.query_edges(user_id, filter).await?;
+
+        if entities.is_empty() && edges.is_empty() {
+            return Ok((0, 0));
+        }
+
+        let now = chrono::Utc::now();
+
+        // 2. Build edge-density map: entity_id → number of connected edges
+        let mut edge_density: HashMap<Uuid, u32> = HashMap::new();
+        for edge in &edges {
+            *edge_density.entry(edge.source_entity_id).or_insert(0) += 1;
+            *edge_density.entry(edge.target_entity_id).or_insert(0) += 1;
+        }
+
+        // 3. Score and update entities
+        let mut entity_updates = 0usize;
+        for entity in &entities {
+            let age_days = (now - entity.updated_at).num_seconds().max(0) as f64 / 86400.0;
+            let recency = (-age_days / 120.0_f64).exp(); // 0..1
+            let mention_score = (1.0 + entity.mention_count as f64).ln() / 6.0_f64; // ln(1+n)/6, caps ~1.0 at ~400 mentions
+            let density = *edge_density.get(&entity.id).unwrap_or(&0);
+            let density_score = (1.0 + density as f64).ln() / 4.0_f64; // ln(1+d)/4, caps ~1.0 at ~55 edges
+
+            // Weighted combination (weights sum to 1.0)
+            let score = (0.3 * mention_score + 0.4 * recency + 0.3 * density_score)
+                .clamp(0.0, 1.0);
+
+            let payload = serde_json::json!({
+                "relevance_score": score,
+                "mention_count": entity.mention_count,
+                "edge_density": density,
+                "reranked_at": now.to_rfc3339(),
+            });
+
+            match self.vector_store.set_entity_payload(entity.id, payload).await {
+                Ok(()) => entity_updates += 1,
+                Err(e) => {
+                    tracing::warn!(
+                        entity_id = %entity.id,
+                        error = %e,
+                        "Failed to update entity relevance payload"
+                    );
+                }
+            }
+        }
+
+        // 4. Score and update edges
+        let mut edge_updates = 0usize;
+        for edge in &edges {
+            let age_days = (now - edge.created_at).num_seconds().max(0) as f64 / 86400.0;
+            let recency = (-age_days / 120.0_f64).exp(); // 0..1
+            let confidence_score = edge.confidence as f64; // already 0..1
+            let corroboration_score = (1.0 + edge.corroboration_count as f64).ln() / 4.0_f64;
+
+            let score = (0.35 * confidence_score + 0.35 * recency + 0.3 * corroboration_score)
+                .clamp(0.0, 1.0);
+
+            let payload = serde_json::json!({
+                "relevance_score": score,
+                "confidence": edge.confidence,
+                "corroboration_count": edge.corroboration_count,
+                "reranked_at": now.to_rfc3339(),
+            });
+
+            match self.vector_store.set_edge_payload(edge.id, payload).await {
+                Ok(()) => edge_updates += 1,
+                Err(e) => {
+                    tracing::warn!(
+                        edge_id = %edge.id,
+                        error = %e,
+                        "Failed to update edge relevance payload"
+                    );
+                }
+            }
+        }
+
+        tracing::info!(
+            user_id = %user_id,
+            entity_updates,
+            edge_updates,
+            "Proactive re-ranking complete"
+        );
+
+        Ok((entity_updates, edge_updates))
     }
 
     /// Poll for pending episodes and process them.
