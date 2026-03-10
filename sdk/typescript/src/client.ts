@@ -220,7 +220,6 @@ export class MnemoClient {
         text,
         role: options.role ?? 'user',
         session: options.sessionId,
-        metadata: options.metadata,
       },
       requestId: options.requestId,
     });
@@ -259,7 +258,7 @@ export class MnemoClient {
     user: string,
     options: ChangesSinceOptions,
   ): Promise<ChangesSinceResult> {
-    const body: Record<string, unknown> = { from_dt: options.fromDt, to_dt: options.toDt };
+    const body: Record<string, unknown> = { from: options.fromDt, to: options.toDt };
     if (options.session) body['session'] = options.session;
     const [res, rid] = await this.request<ChangesSinceResult>({
       method: 'POST',
@@ -304,8 +303,8 @@ export class MnemoClient {
   ): Promise<TimeTravelTraceResult> {
     const body: Record<string, unknown> = {
       query,
-      from_dt: options.fromDt,
-      to_dt: options.toDt,
+      from: options.fromDt,
+      to: options.toDt,
     };
     if (options.session) body['session'] = options.session;
     if (options.contract) body['contract'] = options.contract;
@@ -329,8 +328,8 @@ export class MnemoClient {
   ): Promise<TimeTravelSummaryResult> {
     const body: Record<string, unknown> = {
       query,
-      from_dt: options.fromDt,
-      to_dt: options.toDt,
+      from: options.fromDt,
+      to: options.toDt,
     };
     if (options.session) body['session'] = options.session;
     const [res, rid] = await this.request<TimeTravelSummaryResult>({
@@ -339,7 +338,7 @@ export class MnemoClient {
       body,
       requestId: options.requestId,
     });
-    return { summary: res as unknown as Record<string, unknown>, request_id: rid };
+    return { ...res, request_id: rid };
   }
 
   // ─── Knowledge Graph API ─────────────────────────────────────────
@@ -529,12 +528,12 @@ export class MnemoClient {
     options: { limit?: number; requestId?: string } = {},
   ): Promise<AuditRecord[]> {
     const limit = options.limit ?? 50;
-    const [body] = await this.request<{ data: AuditRecord[] }>({
+    const [body] = await this.request<{ audit: AuditRecord[] }>({
       method: 'GET',
       path: `/api/v1/policies/${encodeURIComponent(user)}/audit?limit=${limit}`,
       requestId: options.requestId,
     });
-    return body.data ?? [];
+    return body.audit ?? [];
   }
 
   // ─── Webhooks ────────────────────────────────────────────────────
@@ -557,12 +556,12 @@ export class MnemoClient {
 
   /** Get a webhook by ID. */
   async getWebhook(webhookId: string, requestId?: string): Promise<WebhookResult> {
-    const [body, rid] = await this.request<{ webhook: WebhookResult }>({
+    const [body, rid] = await this.request<WebhookResult>({
       method: 'GET',
       path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}`,
       requestId,
     });
-    return { ...body.webhook, request_id: rid };
+    return { ...body, request_id: rid };
   }
 
   /** Delete a webhook. */
@@ -618,7 +617,7 @@ export class MnemoClient {
     const includeDelivered = options.includeDelivered ?? true;
     const includeDeadLetter = options.includeDeadLetter ?? true;
     let path = `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}/events/replay?limit=${limit}&include_delivered=${includeDelivered}&include_dead_letter=${includeDeadLetter}`;
-    if (options.afterEventId) path += `&after=${encodeURIComponent(options.afterEventId)}`;
+    if (options.afterEventId) path += `&after_event_id=${encodeURIComponent(options.afterEventId)}`;
     const [body, rid] = await this.request<ReplayResult>({
       method: 'GET',
       path,
@@ -662,12 +661,12 @@ export class MnemoClient {
     options: { limit?: number; requestId?: string } = {},
   ): Promise<AuditRecord[]> {
     const limit = options.limit ?? 20;
-    const [body] = await this.request<{ events: AuditRecord[] }>({
+    const [body] = await this.request<{ audit: AuditRecord[] }>({
       method: 'GET',
       path: `/api/v1/memory/webhooks/${encodeURIComponent(webhookId)}/audit?limit=${limit}`,
       requestId: options.requestId,
     });
-    return body.events ?? [];
+    return body.audit ?? [];
   }
 
   // ─── Operator ────────────────────────────────────────────────────
@@ -704,26 +703,34 @@ export class MnemoClient {
 
   // ─── Sessions ────────────────────────────────────────────────────
 
-  /** List sessions for a user. */
+  /**
+   * List sessions for a user.
+   *
+   * @param userId - The user's UUID (not a name — server requires a UUID path parameter).
+   */
   async listSessions(
-    user: string,
+    userId: string,
     options: ListSessionsOptions = {},
   ): Promise<SessionsResult> {
     const limit = options.limit ?? 20;
     const [body, rid] = await this.request<SessionsResult>({
       method: 'GET',
-      path: `/api/v1/sessions?user=${encodeURIComponent(user)}&limit=${limit}`,
+      path: `/api/v1/users/${encodeURIComponent(userId)}/sessions?limit=${limit}`,
       requestId: options.requestId,
     });
     return { ...body, request_id: rid };
   }
 
-  /** Create a new session. */
+  /**
+   * Create a new session.
+   *
+   * @param userId - The user's UUID.
+   */
   async createSession(
-    user: string,
+    userId: string,
     options: CreateSessionOptions = {},
   ): Promise<SessionInfo> {
-    const body: Record<string, unknown> = { user };
+    const body: Record<string, unknown> = { user_id: userId };
     if (options.name) body['name'] = options.name;
     const [res, rid] = await this.request<SessionInfo>({
       method: 'POST',
@@ -795,12 +802,12 @@ export class MnemoClient {
 
   /** Get status of an import job. */
   async getImportJob(jobId: string, requestId?: string): Promise<ImportJobResult> {
-    const [body, rid] = await this.request<{ job: ImportJobResult }>({
+    const [body, rid] = await this.request<ImportJobResult>({
       method: 'GET',
-      path: `/api/v1/import/jobs/${jobId}`,
+      path: `/api/v1/import/jobs/${encodeURIComponent(jobId)}`,
       requestId,
     });
-    return { ...body.job, request_id: rid };
+    return { ...body, request_id: rid };
   }
 }
 

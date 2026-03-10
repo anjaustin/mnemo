@@ -248,7 +248,6 @@ export interface MnemoClientOptions {
 export interface AddOptions {
   sessionId?: string;
   role?: 'user' | 'assistant' | 'system';
-  metadata?: Record<string, unknown>;
   requestId?: string;
 }
 
@@ -363,8 +362,9 @@ export interface TimeTravelSummaryOptions {
   requestId?: string;
 }
 
+/** Server returns a flat object; the SDK passes it through as-is. */
 export interface TimeTravelSummaryResult {
-  summary: Record<string, unknown>;
+  [key: string]: unknown;
   request_id?: string;
 }
 
@@ -388,8 +388,14 @@ export interface PolicyPreviewOptions {
 }
 
 export interface PolicyPreviewResult {
-  estimated_episodes_affected: number;
-  policy: Record<string, unknown>;
+  user_id: string;
+  current_policy: Record<string, unknown>;
+  preview_policy: Record<string, unknown>;
+  estimated_affected_episodes_total: number;
+  estimated_affected_message_episodes: number;
+  estimated_affected_text_episodes: number;
+  estimated_affected_json_episodes: number;
+  confidence: string;
   request_id?: string;
 }
 
@@ -406,22 +412,32 @@ export interface AuditRecord {
 
 export interface WebhookStats {
   webhook_id: string;
-  window_seconds: number;
-  delivered: number;
-  failed: number;
-  dead_letter: number;
+  total_events: number;
+  delivered_events: number;
+  pending_events: number;
+  dead_letter_events: number;
+  failed_events: number;
+  recent_failures: number;
+  circuit_open: boolean;
+  circuit_open_until?: string;
+  rate_limit_per_minute: number;
   request_id?: string;
 }
 
 export interface ReplayResult {
-  replayed: number;
+  webhook_id: string;
+  count: number;
+  next_after_event_id?: string;
   events: Record<string, unknown>[];
   request_id?: string;
 }
 
 export interface RetryResult {
-  ok: boolean;
+  webhook_id: string;
   event_id: string;
+  queued: boolean;
+  reason: string;
+  event?: Record<string, unknown>;
   request_id?: string;
 }
 
@@ -433,6 +449,7 @@ export interface OpsSummaryOptions {
 }
 
 export interface OpsSummaryResult {
+  window_seconds: number;
   http_requests_total: number;
   http_responses_2xx: number;
   http_responses_4xx: number;
@@ -442,7 +459,11 @@ export interface OpsSummaryResult {
   webhook_deliveries_success_total: number;
   webhook_deliveries_failure_total: number;
   webhook_dead_letter_total: number;
-  governance_audit_total: number;
+  active_webhooks: number;
+  dead_letter_backlog: number;
+  pending_webhook_events: number;
+  governance_audit_events_in_window: number;
+  webhook_audit_events_in_window: number;
   request_id?: string;
 }
 
@@ -457,10 +478,11 @@ export interface TraceLookupOptions {
 
 export interface TraceLookupResult {
   request_id: string;
-  episodes: Record<string, unknown>[];
-  webhook_events: Record<string, unknown>[];
-  webhook_audit: Record<string, unknown>[];
-  governance_audit: Record<string, unknown>[];
+  matched_episodes: Record<string, unknown>[];
+  matched_webhook_events: Record<string, unknown>[];
+  matched_webhook_audit: Record<string, unknown>[];
+  matched_governance_audit: Record<string, unknown>[];
+  summary: Record<string, unknown>;
 }
 
 // ─── Sessions ──────────────────────────────────────────────────────

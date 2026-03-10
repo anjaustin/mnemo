@@ -300,7 +300,7 @@ class AsyncMnemo:
         session: str | None = None,
         request_id: str | None = None,
     ) -> ChangesSinceResult:
-        payload: dict[str, Any] = {"from_dt": from_dt, "to_dt": to_dt}
+        payload: dict[str, Any] = {"from": from_dt, "to": to_dt}
         opt(payload, "session", session)
         body, rid = await self._req(
             "POST",
@@ -388,16 +388,29 @@ class AsyncMnemo:
             request_id=request_id,
         )
         return OpsSummaryResult(
+            window_seconds=int(body.get("window_seconds", window_seconds)),
             http_requests_total=int(body.get("http_requests_total", 0)),
             http_responses_2xx=int(body.get("http_responses_2xx", 0)),
             http_responses_4xx=int(body.get("http_responses_4xx", 0)),
             http_responses_5xx=int(body.get("http_responses_5xx", 0)),
-            policy_updates=int(body.get("policy_update_total", 0)),
-            policy_violations=int(body.get("policy_violation_total", 0)),
-            webhook_delivered=int(body.get("webhook_deliveries_success_total", 0)),
-            webhook_failed=int(body.get("webhook_deliveries_failure_total", 0)),
-            webhook_dead_letter=int(body.get("webhook_dead_letter_total", 0)),
-            governance_events=int(body.get("governance_audit_total", 0)),
+            policy_update_total=int(body.get("policy_update_total", 0)),
+            policy_violation_total=int(body.get("policy_violation_total", 0)),
+            webhook_deliveries_success_total=int(
+                body.get("webhook_deliveries_success_total", 0)
+            ),
+            webhook_deliveries_failure_total=int(
+                body.get("webhook_deliveries_failure_total", 0)
+            ),
+            webhook_dead_letter_total=int(body.get("webhook_dead_letter_total", 0)),
+            active_webhooks=int(body.get("active_webhooks", 0)),
+            dead_letter_backlog=int(body.get("dead_letter_backlog", 0)),
+            pending_webhook_events=int(body.get("pending_webhook_events", 0)),
+            governance_audit_events_in_window=int(
+                body.get("governance_audit_events_in_window", 0)
+            ),
+            webhook_audit_events_in_window=int(
+                body.get("webhook_audit_events_in_window", 0)
+            ),
             request_id=rid,
         )
 
@@ -522,8 +535,8 @@ class AsyncMnemo:
         """Diff memory snapshots over a time window."""
         payload: dict[str, Any] = {
             "query": query,
-            "from_dt": from_dt,
-            "to_dt": to_dt,
+            "from": from_dt,
+            "to": to_dt,
         }
         opt(payload, "session", session)
         opt(payload, "contract", contract)
@@ -563,8 +576,8 @@ class AsyncMnemo:
         """Lightweight snapshot delta counts for fast rendering."""
         payload: dict[str, Any] = {
             "query": query,
-            "from_dt": from_dt,
-            "to_dt": to_dt,
+            "from": from_dt,
+            "to": to_dt,
         }
         opt(payload, "session", session)
         body, rid = await self._req(
@@ -595,8 +608,22 @@ class AsyncMnemo:
             "POST", f"/api/v1/policies/{user}/preview", payload, request_id=request_id
         )
         return PolicyPreviewResult(
-            estimated_episodes_affected=int(body.get("estimated_episodes_affected", 0)),
-            policy=dict(body.get("policy", {})),
+            user_id=str(body.get("user_id", "")),
+            current_policy=dict(body.get("current_policy", {})),
+            preview_policy=dict(body.get("preview_policy", {})),
+            estimated_affected_episodes_total=int(
+                body.get("estimated_affected_episodes_total", 0)
+            ),
+            estimated_affected_message_episodes=int(
+                body.get("estimated_affected_message_episodes", 0)
+            ),
+            estimated_affected_text_episodes=int(
+                body.get("estimated_affected_text_episodes", 0)
+            ),
+            estimated_affected_json_episodes=int(
+                body.get("estimated_affected_json_episodes", 0)
+            ),
+            confidence=str(body.get("confidence", "")),
             request_id=rid,
         )
 
@@ -613,7 +640,7 @@ class AsyncMnemo:
             f"/api/v1/policies/{user}/audit?limit={limit}",
             request_id=request_id,
         )
-        return [_parse_audit(r, rid) for r in body.get("data", [])]
+        return [_parse_audit(r, rid) for r in body.get("audit", [])]
 
     async def get_policy_violations(
         self,
@@ -630,7 +657,7 @@ class AsyncMnemo:
             f"?from={from_dt}&to={to_dt}&limit={limit}"
         )
         body, rid = await self._req("GET", path, request_id=request_id)
-        return [_parse_audit(r, rid) for r in body.get("data", [])]
+        return [_parse_audit(r, rid) for r in body.get("audit", [])]
 
     # ── Webhooks ────────────────────────────────────────────────────
 
@@ -727,11 +754,13 @@ class AsyncMnemo:
             f"&include_dead_letter={str(include_dead_letter).lower()}"
         )
         if after_event_id:
-            path += f"&after={after_event_id}"
+            path += f"&after_event_id={after_event_id}"
         body, rid = await self._req("GET", path, request_id=request_id)
         return ReplayResult(
-            replayed=int(body.get("replayed", 0)),
+            webhook_id=str(body.get("webhook_id", webhook_id)),
+            count=int(body.get("count", 0)),
             events=list(body.get("events", [])),
+            next_after_event_id=body.get("next_after_event_id"),
             request_id=rid,
         )
 
@@ -749,8 +778,11 @@ class AsyncMnemo:
             "POST", path, {"force": force}, request_id=request_id
         )
         return RetryResult(
-            ok=bool(body.get("ok")),
+            webhook_id=str(body.get("webhook_id", webhook_id)),
             event_id=str(body.get("event_id", event_id)),
+            queued=bool(body.get("queued", False)),
+            reason=str(body.get("reason", "")),
+            event=body.get("event"),
             request_id=rid,
         )
 
@@ -769,10 +801,15 @@ class AsyncMnemo:
         )
         return WebhookStats(
             webhook_id=str(body.get("webhook_id", webhook_id)),
-            window_seconds=int(body.get("window_seconds", window_seconds)),
-            delivered=int(body.get("delivered", 0)),
-            failed=int(body.get("failed", 0)),
-            dead_letter=int(body.get("dead_letter", 0)),
+            total_events=int(body.get("total_events", 0)),
+            delivered_events=int(body.get("delivered_events", 0)),
+            pending_events=int(body.get("pending_events", 0)),
+            dead_letter_events=int(body.get("dead_letter_events", 0)),
+            failed_events=int(body.get("failed_events", 0)),
+            recent_failures=int(body.get("recent_failures", 0)),
+            circuit_open=bool(body.get("circuit_open", False)),
+            circuit_open_until=body.get("circuit_open_until"),
+            rate_limit_per_minute=int(body.get("rate_limit_per_minute", 0)),
             request_id=rid,
         )
 
@@ -789,7 +826,7 @@ class AsyncMnemo:
             f"/api/v1/memory/webhooks/{webhook_id}/audit?limit={limit}",
             request_id=request_id,
         )
-        return [_parse_audit(r, rid) for r in body.get("events", [])]
+        return [_parse_audit(r, rid) for r in body.get("audit", [])]
 
     # ── Operator ────────────────────────────────────────────────────
 
@@ -811,10 +848,11 @@ class AsyncMnemo:
         body, rid = await self._req("GET", path, request_id=request_id)
         return TraceLookupResult(
             request_id=request_id_to_find,
-            episodes=list(body.get("episodes", [])),
-            webhook_events=list(body.get("webhook_events", [])),
-            webhook_audit=list(body.get("webhook_audit", [])),
-            governance_audit=list(body.get("governance_audit", [])),
+            matched_episodes=list(body.get("matched_episodes", [])),
+            matched_webhook_events=list(body.get("matched_webhook_events", [])),
+            matched_webhook_audit=list(body.get("matched_webhook_audit", [])),
+            matched_governance_audit=list(body.get("matched_governance_audit", [])),
+            summary=dict(body.get("summary", {})),
             sdk_request_id=rid,
         )
 

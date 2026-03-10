@@ -127,8 +127,14 @@ class PolicyResult:
 
 @dataclass(slots=True)
 class PolicyPreviewResult:
-    estimated_episodes_affected: int
-    policy: dict[str, Any]
+    user_id: str
+    current_policy: dict[str, Any]
+    preview_policy: dict[str, Any]
+    estimated_affected_episodes_total: int
+    estimated_affected_message_episodes: int = 0
+    estimated_affected_text_episodes: int = 0
+    estimated_affected_json_episodes: int = 0
+    confidence: str = ""
     request_id: str | None = None
 
 
@@ -136,9 +142,9 @@ class PolicyPreviewResult:
 class AuditRecord:
     id: str
     user_id: str
-    action: str
+    event_type: str
     details: dict[str, Any]
-    at: str
+    created_at: str
     request_id: str | None = None
 
 
@@ -173,25 +179,35 @@ class WebhookEvent:
 
 @dataclass(slots=True)
 class ReplayResult:
-    replayed: int
+    webhook_id: str
+    count: int
     events: list[dict[str, Any]]
+    next_after_event_id: str | None = None
     request_id: str | None = None
 
 
 @dataclass(slots=True)
 class RetryResult:
-    ok: bool
+    webhook_id: str
     event_id: str
+    queued: bool
+    reason: str = ""
+    event: dict[str, Any] | None = None
     request_id: str | None = None
 
 
 @dataclass(slots=True)
 class WebhookStats:
     webhook_id: str
-    window_seconds: int
-    delivered: int
-    failed: int
-    dead_letter: int
+    total_events: int
+    delivered_events: int
+    pending_events: int
+    dead_letter_events: int
+    failed_events: int
+    recent_failures: int
+    circuit_open: bool = False
+    circuit_open_until: str | None = None
+    rate_limit_per_minute: int = 0
     request_id: str | None = None
 
 
@@ -200,26 +216,32 @@ class WebhookStats:
 
 @dataclass(slots=True)
 class OpsSummaryResult:
+    window_seconds: int
     http_requests_total: int
     http_responses_2xx: int
     http_responses_4xx: int
     http_responses_5xx: int
-    policy_updates: int
-    policy_violations: int
-    webhook_delivered: int
-    webhook_failed: int
-    webhook_dead_letter: int
-    governance_events: int
+    policy_update_total: int
+    policy_violation_total: int
+    webhook_deliveries_success_total: int
+    webhook_deliveries_failure_total: int
+    webhook_dead_letter_total: int
+    active_webhooks: int
+    dead_letter_backlog: int
+    pending_webhook_events: int
+    governance_audit_events_in_window: int
+    webhook_audit_events_in_window: int
     request_id: str | None = None
 
 
 @dataclass(slots=True)
 class TraceLookupResult:
     request_id: str
-    episodes: list[dict[str, Any]]
-    webhook_events: list[dict[str, Any]]
-    webhook_audit: list[dict[str, Any]]
-    governance_audit: list[dict[str, Any]]
+    matched_episodes: list[dict[str, Any]]
+    matched_webhook_events: list[dict[str, Any]]
+    matched_webhook_audit: list[dict[str, Any]]
+    matched_governance_audit: list[dict[str, Any]]
+    summary: dict[str, Any] = field(default_factory=dict)
     sdk_request_id: str | None = None
 
 
@@ -324,7 +346,19 @@ class GraphEntity:
 
 @dataclass(slots=True)
 class AdjacencyEdge:
-    """Simplified edge returned in entity detail (adjacency view)."""
+    """Simplified edge returned in entity detail (adjacency view).
+
+    Note on field population asymmetry:
+      - For **outgoing** edges (returned in ``GraphEntityDetail.outgoing_edges``),
+        the server populates ``target_entity_id`` and leaves ``source_entity_id``
+        as ``None`` (the source is implicitly the entity you queried).
+      - For **incoming** edges (returned in ``GraphEntityDetail.incoming_edges``),
+        the server populates ``source_entity_id`` and leaves ``target_entity_id``
+        as ``None`` (the target is implicitly the entity you queried).
+
+    This is by design: the queried entity is always the implicit "other side",
+    so the server omits the redundant ID to keep payloads compact.
+    """
 
     id: str
     label: str

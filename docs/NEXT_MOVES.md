@@ -92,15 +92,36 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
     59 unit tests (36 sync + 13 async + 10 edge cases).
 
 ### P0-6: TypeScript SDK
-18. ~~**Feature parity with Python SDK**~~ — **DONE.** Added 20+ methods:
-    `changesSince`, `conflictRadar`, `causalRecall`, `timeTravelTrace`,
-    `timeTravelSummary`, `setPolicy`, `previewPolicy`, `getPolicyAudit`,
-    `getWebhook`, `deleteWebhook`, `listDeadLetterEvents`, `replayEvents`,
-    `retryEvent`, `getWebhookStats`, `getWebhookAudit`, `opsSummary`,
-    `traceLookup`, `listSessions`, `createSession`, `getSession`, `deleteSession`.
-    Full type definitions added.
+18. ~~**Feature parity with Python SDK**~~ — **DONE + FALSIFIED.** Added 20+
+    methods with full type definitions. Falsification audit found **6 CRITICAL**
+    and **13 MAJOR** issues across both TS and Python SDKs — all sharing the
+    same root causes:
+    - Request payloads sent `from_dt`/`to_dt` but server expects `from`/`to`
+      (changesSince, timeTravelTrace, timeTravelSummary) — **FIXED** (both SDKs)
+    - Response unwrapping mismatches: getWebhook/getImportJob unwrapped
+      `.webhook`/`.job` but server returns bare objects — **FIXED** (TS SDK;
+      Python already had defensive fallback)
+    - Response field name mismatches in 8 endpoints: getPolicyAudit (`.data`→`.audit`),
+      getWebhookAudit (`.events`→`.audit`), replayEvents (`replayed`→`count`,
+      `after`→`after_event_id`), retryEvent (`ok`→`queued`), getWebhookStats
+      (all field names differ), previewPolicy (`estimated_episodes_affected`→
+      `estimated_affected_episodes_total`, `policy`→`current_policy`+`preview_policy`),
+      traceLookup (arrays need `matched_` prefix), opsSummary (wrong field name
+      `governance_audit_total`→`governance_audit_events_in_window`, missing 5 fields)
+      — **ALL FIXED** (both SDKs)
+    - listSessions wrong endpoint / createSession wrong field — **FIXED** (TS SDK;
+      Python already correct)
+    - add() sent `metadata` field server ignores — **FIXED** (removed from TS SDK)
+    - AuditRecord field names `action`/`at` vs server's `event_type`/`created_at` — **FIXED**
+    - AdjacencyEdge asymmetry documented in Python SDK — **DONE**
 19. **Build-validate locally** — `npm`/`node` not available on this machine;
     the TS SDK was written but not compiled. CI should catch type errors.
+
+### Backend hardening
+28. ~~**Clamp `query_edges` HTTP endpoint limit**~~ — **DONE.** The `query_edges`
+    route handler passed user-supplied `EdgeFilter.limit` unclamped to the
+    storage layer (DoS vector). Added `.clamp(1, 1000)` consistent with all
+    other paginated endpoints.
 
 ## Tier 2: Polish
 

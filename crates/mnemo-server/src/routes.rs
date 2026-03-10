@@ -2596,8 +2596,9 @@ async fn delete_entity(
 async fn query_edges(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
-    Query(filter): Query<EdgeFilter>,
+    Query(mut filter): Query<EdgeFilter>,
 ) -> Result<Json<ListResponse<Edge>>, AppError> {
+    filter.limit = filter.limit.clamp(1, 1000);
     let edges = state.state_store.query_edges(user_id, filter).await?;
     Ok(Json(ListResponse::new(edges)))
 }
