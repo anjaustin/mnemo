@@ -43,27 +43,34 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
    verification, `POST without LLM`).
 
 ### P0-2: Knowledge graph API
-7. **Implement `GET /graph/:user/path`** — Shortest path endpoint from the
-   P0 roadmap spec. Requires BFS/Dijkstra in `GraphEngine`.
-8. **Add entity type/name filters** — `?entity_type=...&name=...` query
-   params on `graph_list_entities`.
-9. **Add source/target entity filters** — Re-add `source_entity_id` and
-   `target_entity_id` to `graph_list_edges`.
-10. **Document graph API in API.md** — Five new routes are undocumented.
+7. ~~**Implement `GET /graph/:user/path`**~~ — **DONE.** BFS shortest path
+   in `GraphEngine::find_shortest_path()`. Route handler with from/to/max_depth/valid_only
+   params. Cross-user entity ownership check. 8 unit tests + 3 integration tests.
+8. ~~**Add entity type/name filters**~~ — **DONE.** `?entity_type=...&name=...`
+   query params on `graph_list_entities` with case-insensitive matching. Over-fetch
+   strategy (4x) when filters active. 2 integration tests.
+9. ~~**Add source/target entity filters**~~ — **DONE.** `source_entity_id` and
+   `target_entity_id` query params on `graph_list_edges`, passed through to
+   `EdgeFilter.matches()`. 1 integration test with both filter types.
+10. ~~**Document graph API in API.md**~~ — **DONE.** Full documentation for all
+    7 graph endpoints with query params, examples, and response schemas.
 11. **Batch edge loading for community detection** — Replace N individual
     `get_outgoing_edges` calls with a bulk query.
-12. **Integration tests for graph API** — All 5 routes, including auth
-    boundary tests.
+12. ~~**Integration tests for graph API**~~ — **DONE.** 12 integration tests
+    covering all 7 graph API endpoints + cross-user auth boundary tests.
 
 ### P0-3: LLM call tracing
-13. **Instrument all LLM call sites** — Currently only `extract_memory` and
-    `refresh_memory_digest` record spans. The `remember_memory` handler's
-    internal extraction path and any webhook-triggered LLM calls should also
-    record spans.
-14. **Persist spans to Redis** — In-memory ring buffer lost on restart.
-15. **Expose user-lookup in dashboard** — The `/spans/user/:user_id` endpoint
-    has no corresponding UI input field.
-16. **Integration tests for span endpoints**.
+13. ~~**Instrument all LLM call sites**~~ — **DONE.** Moved `LlmSpan` to
+    `mnemo-core::models::span` (shared type). Added `SpanSink` to `IngestWorker`
+    via `.with_span_sink()`. Instrumented 4 ingest worker LLM calls: `extract`,
+    `embed_episode`, `session_summarize`, `digest`. Shared ring buffer between
+    server routes and ingest worker.
+14. **Persist spans to Redis** — In-memory ring buffer lost on restart. Deferred (P1).
+15. ~~**Expose user-lookup in dashboard**~~ — **DONE.** Added User ID input
+    field + "Lookup by User" button to LLM Spans dashboard page. Added User column
+    to span results table. Refactored span rendering into `renderSpanTable()`.
+16. **Integration tests for span endpoints** — Deferred (span creation requires
+    running LLM calls or mocking the span sink).
 
 ### P0-5: Python SDK
 17. **Type `graph_entity()` return** — Currently returns raw `dict`; should
