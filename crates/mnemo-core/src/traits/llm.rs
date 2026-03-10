@@ -56,6 +56,14 @@ pub struct ExtractionResult {
     pub relationships: Vec<ExtractedRelationship>,
 }
 
+/// Token usage information from an LLM API call.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
 /// Trait for LLM-powered operations.
 ///
 /// Implementations exist for:
@@ -89,6 +97,32 @@ pub trait LlmProvider: Send + Sync {
         new_fact: &str,
         existing_facts: &[String],
     ) -> LlmResult<Vec<String>>;
+
+    /// Extract entities and relationships, also returning token usage.
+    /// Default implementation delegates to `extract_entities_and_relationships`
+    /// with zero usage. Providers that can capture token counts should override.
+    async fn extract_with_usage(
+        &self,
+        content: &str,
+        existing_entities: &[ExtractedEntity],
+    ) -> LlmResult<(ExtractionResult, TokenUsage)> {
+        let result = self
+            .extract_entities_and_relationships(content, existing_entities)
+            .await?;
+        Ok((result, TokenUsage::default()))
+    }
+
+    /// Generate a summary, also returning token usage.
+    /// Default implementation delegates to `summarize` with zero usage.
+    /// Providers that can capture token counts should override.
+    async fn summarize_with_usage(
+        &self,
+        content: &str,
+        max_tokens: u32,
+    ) -> LlmResult<(String, TokenUsage)> {
+        let result = self.summarize(content, max_tokens).await?;
+        Ok((result, TokenUsage::default()))
+    }
 
     /// Get the provider name for logging/metrics.
     fn provider_name(&self) -> &str;

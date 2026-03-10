@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use mnemo_core::models::entity::ExtractedEntity;
-use mnemo_core::traits::llm::{ExtractionResult, LlmProvider, LlmResult};
+use mnemo_core::traits::llm::{ExtractionResult, LlmProvider, LlmResult, TokenUsage};
 use mnemo_graph::GraphEngine;
 use mnemo_llm::{AnthropicProvider, EmbedderKind, OpenAiCompatibleProvider};
 use mnemo_retrieval::RetrievalEngine;
@@ -206,6 +206,17 @@ impl LlmHandle {
         match self {
             LlmHandle::Anthropic(llm) => llm.model_name(),
             LlmHandle::OpenAiCompat(llm) => llm.model_name(),
+        }
+    }
+
+    pub async fn summarize_with_usage(
+        &self,
+        content: &str,
+        max_tokens: u32,
+    ) -> LlmResult<(String, TokenUsage)> {
+        match self {
+            LlmHandle::Anthropic(llm) => llm.summarize_with_usage(content, max_tokens).await,
+            LlmHandle::OpenAiCompat(llm) => llm.summarize_with_usage(content, max_tokens).await,
         }
     }
 }

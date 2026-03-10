@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use mnemo_core::error::MnemoError;
 use mnemo_core::models::edge::ExtractedRelationship;
 use mnemo_core::models::entity::{EntityType, ExtractedEntity};
-use mnemo_core::traits::llm::{ExtractionResult, LlmConfig, LlmProvider, LlmResult};
+use mnemo_core::traits::llm::{ExtractionResult, LlmConfig, LlmProvider, LlmResult, TokenUsage};
 
 use crate::openai_compat::EXTRACTION_SYSTEM_PROMPT;
 
@@ -44,6 +44,16 @@ struct AnthropicMessage {
 #[derive(Deserialize)]
 struct AnthropicResponse {
     content: Vec<ContentBlock>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: u32,
+    #[serde(default)]
+    output_tokens: u32,
 }
 
 #[derive(Deserialize)]
@@ -98,7 +108,7 @@ impl AnthropicProvider {
         }
     }
 
-    async fn message(&self, system: &str, user_msg: &str) -> LlmResult<String> {
+    async fn message(&self, system: &str, user_msg: &str) -> LlmResult<(String, TokenUsage)> {
         let request = AnthropicRequest {
             model: self.config.model.clone(),
             max_tokens: self.config.max_tokens,
@@ -160,6 +170,15 @@ impl AnthropicProvider {
                 message: format!("Failed to parse response: {}", e),
             })?;
 
+        let usage = api_response
+            .usage
+            .map(|u| TokenUsage {
+                prompt_tokens: u.input_tokens,
+                completion_tokens: u.output_tokens,
+                total_tokens: u.input_tokens.saturating_add(u.output_tokens),
+            })
+            .unwrap_or_default();
+
         let text = api_response
             .content
             .iter()
@@ -175,7 +194,7 @@ impl AnthropicProvider {
             });
         }
 
-        Ok(text)
+        Ok((text, usage))
     }
 
     fn parse_extraction(raw: &str) -> LlmResult<ExtractionResponse> {
@@ -215,7 +234,7 @@ impl LlmProvider for AnthropicProvider {
             ));
         }
 
-        let raw = self.message(EXTRACTION_SYSTEM_PROMPT, &user_msg).await?;
+        let (raw, _usage) = self.message(EXTRACTION_SYSTEM_PROMPT, &user_msg).await?;
         let parsed = Self::parse_extraction(&raw)?;
 
         Ok(ExtractionResult {
@@ -248,7 +267,8 @@ impl LlmProvider for AnthropicProvider {
             "Summarize the following content concisely in {} tokens or fewer. Focus on key facts.",
             max_tokens
         );
-        self.message(&system, content).await
+        let (text, _usage) = self.message(&system, content).await?;
+        Ok(text)
     }
 
     async fn detect_contradictions(
@@ -270,7 +290,7 @@ impl LlmProvider for AnthropicProvider {
             "New fact: {}\n\nExisting facts:\n{}\n\nList contradictions as JSON array.",
             new_fact, existing
         );
-        let raw = self.message(system, &user_msg).await?;
+        let (raw, _usage) = self.message(system, &user_msg).await?;
         let cleaned = raw.trim();
         let cleaned = if cleaned.starts_with("```") {
             let s = cleaned.find('\n').map(|i| i + 1).unwrap_or(0);
@@ -280,6 +300,64 @@ impl LlmProvider for AnthropicProvider {
             cleaned
         };
         Ok(serde_json::from_str(cleaned).unwrap_or_else(|_| Vec::new()))
+    }
+
+    async fn extract_with_usage(
+        &self,
+        content: &str,
+        existing_entities: &[ExtractedEntity],
+    ) -> LlmResult<(ExtractionResult, TokenUsage)> {
+        let mut user_msg = format!(
+            "Extract entities and relationships from this text:\n\n{}",
+            content
+        );
+        if !existing_entities.is_empty() {
+            let names: Vec<&str> = existing_entities.iter().map(|e| e.name.as_str()).collect();
+            user_msg.push_str(&format!(
+                "\n\nExisting entities (reuse these names if they appear): {}",
+                names.join(", ")
+            ));
+        }
+        let (raw, usage) = self.message(EXTRACTION_SYSTEM_PROMPT, &user_msg).await?;
+        let parsed = Self::parse_extraction(&raw)?;
+        Ok((
+            ExtractionResult {
+                entities: parsed
+                    .entities
+                    .into_iter()
+                    .map(|e| ExtractedEntity {
+                        name: e.name,
+                        entity_type: EntityType::from_str_flexible(&e.entity_type),
+                        summary: e.summary,
+                    })
+                    .collect(),
+                relationships: parsed
+                    .relationships
+                    .into_iter()
+                    .map(|r| ExtractedRelationship {
+                        source_name: r.source,
+                        target_name: r.target,
+                        label: r.label,
+                        fact: r.fact,
+                        confidence: r.confidence,
+                        valid_at: None,
+                    })
+                    .collect(),
+            },
+            usage,
+        ))
+    }
+
+    async fn summarize_with_usage(
+        &self,
+        content: &str,
+        max_tokens: u32,
+    ) -> LlmResult<(String, TokenUsage)> {
+        let system = format!(
+            "Summarize the following content concisely in {} tokens or fewer. Focus on key facts.",
+            max_tokens
+        );
+        self.message(&system, content).await
     }
 
     fn provider_name(&self) -> &str {

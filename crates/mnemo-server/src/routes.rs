@@ -8499,18 +8499,16 @@ async fn refresh_memory_digest(
 
     let model_name = llm.model_name().to_string();
 
-    use mnemo_core::traits::llm::LlmProvider as _;
     let started = std::time::Instant::now();
-    let raw: String = match llm {
-        crate::state::LlmHandle::Anthropic(ref llm) => llm.summarize(&prompt, 512).await,
-        crate::state::LlmHandle::OpenAiCompat(ref llm) => llm.summarize(&prompt, 512).await,
-    }
-    .map_err(|e: mnemo_core::error::MnemoError| {
-        AppError(MnemoError::LlmProvider {
-            provider: "digest".into(),
-            message: e.to_string(),
-        })
-    })?;
+    let (raw, usage) = llm
+        .summarize_with_usage(&prompt, 512)
+        .await
+        .map_err(|e: mnemo_core::error::MnemoError| {
+            AppError(MnemoError::LlmProvider {
+                provider: "digest".into(),
+                message: e.to_string(),
+            })
+        })?;
     let latency_ms = started.elapsed().as_millis() as u64;
 
     // Record the LLM span for observability
@@ -8521,9 +8519,9 @@ async fn refresh_memory_digest(
         provider: llm.provider_name().to_string(),
         model: model_name.clone(),
         operation: "digest".to_string(),
-        prompt_tokens: 0, // token counts not available from summarize()
-        completion_tokens: 0,
-        total_tokens: 0,
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
         latency_ms,
         success: true,
         error: None,

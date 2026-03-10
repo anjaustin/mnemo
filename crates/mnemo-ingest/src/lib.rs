@@ -434,9 +434,13 @@ where
         let model_name = self.llm.model_name().to_string();
         let digest_start = chrono::Utc::now();
         let digest_t0 = Instant::now();
-        let digest_result = self.llm.summarize(&prompt, 512).await;
+        let digest_result = self.llm.summarize_with_usage(&prompt, 512).await;
         let digest_elapsed = digest_t0.elapsed();
         let digest_ok = digest_result.is_ok();
+        let digest_usage = digest_result
+            .as_ref()
+            .map(|(_, u)| *u)
+            .unwrap_or_default();
         self.record_span(LlmSpan {
             id: Uuid::now_v7(),
             request_id: None,
@@ -444,9 +448,9 @@ where
             provider: self.llm.provider_name().to_string(),
             model: model_name.clone(),
             operation: "digest".to_string(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
+            prompt_tokens: digest_usage.prompt_tokens,
+            completion_tokens: digest_usage.completion_tokens,
+            total_tokens: digest_usage.total_tokens,
             latency_ms: digest_elapsed.as_millis() as u64,
             success: digest_ok,
             error: if digest_ok {
@@ -458,7 +462,7 @@ where
             finished_at: chrono::Utc::now(),
         })
         .await;
-        let raw = digest_result?;
+        let (raw, _) = digest_result?;
 
         let (summary_text, dominant_topics) = parse_digest_response(&raw);
 
@@ -663,12 +667,16 @@ where
         // 2. Extract via LLM
         let extract_start = chrono::Utc::now();
         let extract_t0 = Instant::now();
-        let extraction = self
+        let extraction_result = self
             .llm
-            .extract_entities_and_relationships(&episode.content, &hints)
+            .extract_with_usage(&episode.content, &hints)
             .await;
         let extract_elapsed = extract_t0.elapsed();
-        let extract_ok = extraction.is_ok();
+        let extract_ok = extraction_result.is_ok();
+        let extract_usage = extraction_result
+            .as_ref()
+            .map(|(_, u)| *u)
+            .unwrap_or_default();
         self.record_span(LlmSpan {
             id: Uuid::now_v7(),
             request_id: episode_request_id(episode).map(String::from),
@@ -676,21 +684,21 @@ where
             provider: self.llm.provider_name().to_string(),
             model: self.llm.model_name().to_string(),
             operation: "extract".to_string(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
+            prompt_tokens: extract_usage.prompt_tokens,
+            completion_tokens: extract_usage.completion_tokens,
+            total_tokens: extract_usage.total_tokens,
             latency_ms: extract_elapsed.as_millis() as u64,
             success: extract_ok,
             error: if extract_ok {
                 None
             } else {
-                Some(extraction.as_ref().err().unwrap().to_string())
+                Some(extraction_result.as_ref().err().unwrap().to_string())
             },
             started_at: extract_start,
             finished_at: chrono::Utc::now(),
         })
         .await;
-        let extraction = extraction?;
+        let (extraction, _) = extraction_result?;
 
         // 3. Resolve entities (dedup against existing graph)
         let mut name_to_id: std::collections::HashMap<String, Uuid> =
@@ -829,9 +837,16 @@ where
                     );
                     let sum_start = chrono::Utc::now();
                     let sum_t0 = Instant::now();
-                    let sum_result = self.llm.summarize(&episode.content, 256).await;
+                    let sum_result = self
+                        .llm
+                        .summarize_with_usage(&episode.content, 256)
+                        .await;
                     let sum_elapsed = sum_t0.elapsed();
                     let sum_ok = sum_result.is_ok();
+                    let sum_usage = sum_result
+                        .as_ref()
+                        .map(|(_, u)| *u)
+                        .unwrap_or_default();
                     self.record_span(LlmSpan {
                         id: Uuid::now_v7(),
                         request_id: episode_request_id(episode).map(String::from),
@@ -839,9 +854,9 @@ where
                         provider: self.llm.provider_name().to_string(),
                         model: self.llm.model_name().to_string(),
                         operation: "session_summarize".to_string(),
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
+                        prompt_tokens: sum_usage.prompt_tokens,
+                        completion_tokens: sum_usage.completion_tokens,
+                        total_tokens: sum_usage.total_tokens,
                         latency_ms: sum_elapsed.as_millis() as u64,
                         success: sum_ok,
                         error: if sum_ok {
@@ -854,7 +869,7 @@ where
                     })
                     .await;
                     match sum_result {
-                        Ok(summary_text) => {
+                        Ok((summary_text, _)) => {
                             // Rough token count: ~4 chars/token
                             let tokens = (summary_text.len() / 4).max(1) as u32;
                             let update = UpdateSessionRequest {

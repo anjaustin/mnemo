@@ -173,5 +173,14 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
     back to legacy `TOPICS:` format for backward compat. Shared between
     ingest worker and HTTP handler. 8 unit tests cover JSON, fenced JSON,
     legacy format, plain text, topic cap, empty summary fallback.
-27. **Token counting in spans** — `summarize()` and `extract()` don't
-    currently return token counts. Wrap the LLM calls to capture usage.
+27. ~~**Token counting in spans**~~ DONE — Added `TokenUsage` struct and
+    `extract_with_usage()` / `summarize_with_usage()` methods to the
+    `LlmProvider` trait (with default impls that delegate with zero usage).
+    Both `OpenAiCompatibleProvider` and `AnthropicProvider` override these
+    to parse real `usage` fields from API responses (OpenAI returns
+    `prompt_tokens`/`completion_tokens`/`total_tokens`; Anthropic returns
+    `input_tokens`/`output_tokens` — total computed). Updated all callers:
+    ingest worker (`process_episode`, `generate_digest`, session
+    summarization) and the server digest HTTP handler now capture and
+    record real token counts in `LlmSpan`. `LlmHandle` in `state.rs`
+    exposes `summarize_with_usage()` for the server route layer.

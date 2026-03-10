@@ -6,6 +6,7 @@ use mnemo_core::models::edge::ExtractedRelationship;
 use mnemo_core::models::entity::{EntityType, ExtractedEntity};
 use mnemo_core::traits::llm::{
     EmbeddingConfig, EmbeddingProvider, ExtractionResult, LlmConfig, LlmProvider, LlmResult,
+    TokenUsage,
 };
 
 /// OpenAI-compatible LLM provider.
@@ -47,11 +48,23 @@ struct ChatMessage {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
+    #[serde(default)]
+    usage: Option<ChatUsage>,
 }
 
 #[derive(Deserialize)]
 struct ChatChoice {
     message: ChatMessage,
+}
+
+#[derive(Deserialize)]
+struct ChatUsage {
+    #[serde(default)]
+    prompt_tokens: u32,
+    #[serde(default)]
+    completion_tokens: u32,
+    #[serde(default)]
+    total_tokens: u32,
 }
 
 // ─── Embedding types ───────────────────────────────────────────────
@@ -168,7 +181,11 @@ impl OpenAiCompatibleProvider {
         }
     }
 
-    async fn chat_completion(&self, system: &str, user_msg: &str) -> LlmResult<String> {
+    async fn chat_completion(
+        &self,
+        system: &str,
+        user_msg: &str,
+    ) -> LlmResult<(String, TokenUsage)> {
         let request = ChatRequest {
             model: self.config.model.clone(),
             messages: vec![
@@ -230,14 +247,25 @@ impl OpenAiCompatibleProvider {
                 message: format!("Failed to parse response: {}", e),
             })?;
 
-        chat_response
+        let usage = chat_response
+            .usage
+            .map(|u| TokenUsage {
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+                total_tokens: u.total_tokens,
+            })
+            .unwrap_or_default();
+
+        let content = chat_response
             .choices
             .first()
             .map(|c| c.message.content.clone())
             .ok_or_else(|| MnemoError::LlmProvider {
                 provider: self.config.provider.clone(),
                 message: "No choices in response".into(),
-            })
+            })?;
+
+        Ok((content, usage))
     }
 
     /// Parse the JSON extraction response, handling markdown code fences.
@@ -281,7 +309,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             ));
         }
 
-        let raw = self
+        let (raw, _usage) = self
             .chat_completion(EXTRACTION_SYSTEM_PROMPT, &user_msg)
             .await?;
         let parsed = Self::parse_extraction(&raw)?;
@@ -321,7 +349,8 @@ impl LlmProvider for OpenAiCompatibleProvider {
              Focus on key facts, entities, and relationships.",
             max_tokens
         );
-        self.chat_completion(&system, content).await
+        let (text, _usage) = self.chat_completion(&system, content).await?;
+        Ok(text)
     }
 
     async fn detect_contradictions(
@@ -348,7 +377,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             new_fact, existing
         );
 
-        let raw = self.chat_completion(system, &user_msg).await?;
+        let (raw, _usage) = self.chat_completion(system, &user_msg).await?;
         let cleaned = raw.trim();
         let cleaned = if cleaned.starts_with("```") {
             let start = cleaned.find('\n').map(|i| i + 1).unwrap_or(0);
@@ -359,6 +388,63 @@ impl LlmProvider for OpenAiCompatibleProvider {
         };
 
         Ok(serde_json::from_str(cleaned).unwrap_or_else(|_| Vec::new()))
+    }
+
+    async fn extract_with_usage(
+        &self,
+        content: &str,
+        existing_entities: &[ExtractedEntity],
+    ) -> LlmResult<(ExtractionResult, TokenUsage)> {
+        let mut user_msg = format!(
+            "Extract entities and relationships from this text:\n\n{}",
+            content
+        );
+        if !existing_entities.is_empty() {
+            let names: Vec<&str> = existing_entities.iter().map(|e| e.name.as_str()).collect();
+            user_msg.push_str(&format!(
+                "\n\nExisting entities in this user's graph (reuse these names if they appear): {}",
+                names.join(", ")
+            ));
+        }
+        let (raw, usage) = self
+            .chat_completion(EXTRACTION_SYSTEM_PROMPT, &user_msg)
+            .await?;
+        let parsed = Self::parse_extraction(&raw)?;
+        let entities = parsed
+            .entities
+            .into_iter()
+            .map(|e| ExtractedEntity {
+                name: e.name,
+                entity_type: EntityType::from_str_flexible(&e.entity_type),
+                summary: e.summary,
+            })
+            .collect();
+        let relationships = parsed
+            .relationships
+            .into_iter()
+            .map(|r| ExtractedRelationship {
+                source_name: r.source,
+                target_name: r.target,
+                label: r.label,
+                fact: r.fact,
+                confidence: r.confidence,
+                valid_at: None,
+            })
+            .collect();
+        Ok((ExtractionResult { entities, relationships }, usage))
+    }
+
+    async fn summarize_with_usage(
+        &self,
+        content: &str,
+        max_tokens: u32,
+    ) -> LlmResult<(String, TokenUsage)> {
+        let system = format!(
+            "Summarize the following content concisely in {} tokens or fewer. \
+             Focus on key facts, entities, and relationships.",
+            max_tokens
+        );
+        self.chat_completion(&system, content).await
     }
 
     fn provider_name(&self) -> &str {
