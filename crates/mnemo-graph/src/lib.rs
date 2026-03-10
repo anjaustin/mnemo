@@ -318,14 +318,15 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
         // Initialize: each entity is its own community
         let mut labels: HashMap<Uuid, Uuid> = entities.iter().map(|e| (e.id, e.id)).collect();
 
-        // Build adjacency from edges — single batch query instead of N individual calls
+        // Build adjacency from edges — single batch query instead of N individual calls.
+        // Use a high limit to fetch all edges; matches the entity cap of 10_000.
         let all_edges = self
             .store
             .query_edges(
                 user_id,
                 EdgeFilter {
                     include_invalidated: false,
-                    limit: u32::MAX,
+                    limit: 100_000,
                     ..Default::default()
                 },
             )

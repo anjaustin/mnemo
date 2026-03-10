@@ -763,8 +763,9 @@ impl EdgeStore for RedisStateStore {
         let prefix = self.key(&["edge:"]);
 
         // Fetch candidates (overfetch, then filter in-memory)
+        let fetch_limit = filter.limit.saturating_mul(3);
         let candidates: Vec<Edge> = self
-            .list_from_zset(&zset_key, &prefix, filter.limit * 3, None)
+            .list_from_zset(&zset_key, &prefix, fetch_limit, None)
             .await?;
 
         Ok(candidates
