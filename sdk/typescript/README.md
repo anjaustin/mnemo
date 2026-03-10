@@ -2,7 +2,7 @@
 
 Production-grade TypeScript/JavaScript client for the [Mnemo](https://github.com/anjaustin/mnemo) memory API.
 
-Covers: memory, knowledge graph, LLM span tracing, memory digest, governance, webhooks, operator, import, and session message endpoints.
+Covers: memory, knowledge graph, LLM span tracing, memory digest, agent identity, governance, webhooks, operator, import, and session message endpoints.
 Zero runtime dependencies. Works in Node.js, Deno, Bun, and modern browsers (fetch-based).
 Drop-in LangChain.js and Vercel AI SDK integrations included.
 
@@ -189,6 +189,59 @@ const whAudit = await mnemo.getWebhookAudit(wh.id, { limit: 20 });
 
 // Delete
 await mnemo.deleteWebhook(wh.id);
+```
+
+## Agent Identity
+
+```ts
+// Get or auto-create agent identity
+const identity = await mnemo.getAgentIdentity('my-agent');
+// { agent_id, version, core, created_at, updated_at }
+
+// Update identity core (contamination-guarded: no user/session/email keys allowed)
+const updated = await mnemo.updateAgentIdentity('my-agent', {
+  mission: 'Help users plan outdoor adventures',
+  style: { tone: 'friendly', verbosity: 'concise' },
+  boundaries: ['no medical advice'],
+});
+
+// Version history and audit trail
+const versions = await mnemo.listAgentIdentityVersions('my-agent', { limit: 10 });
+const audit = await mnemo.listAgentIdentityAudit('my-agent', { limit: 20 });
+
+// Rollback to a previous version
+const rolledBack = await mnemo.rollbackAgentIdentity('my-agent', 2, 'reverted experiment');
+
+// Record an experience event (behavioral signal from runtime)
+const exp = await mnemo.addAgentExperience('my-agent', {
+  category: 'tone',
+  signal: 'user preferred concise answers',
+  confidence: 0.85,
+  weight: 0.6,
+  decayHalfLifeDays: 30,
+});
+
+// Promotion proposals (evidence-gated identity evolution)
+const proposal = await mnemo.createPromotionProposal('my-agent', {
+  proposal: 'shift to concise style',
+  candidateCore: { mission: 'Help users plan adventures', style: { tone: 'direct' } },
+  reason: '3+ sessions showed preference for brevity',
+  sourceEventIds: [exp1.id, exp2.id, exp3.id],  // must reference real experience events
+});
+// { id, status: 'pending', ... }
+
+const proposals = await mnemo.listPromotionProposals('my-agent', { limit: 10 });
+const approved = await mnemo.approvePromotion('my-agent', proposal.id);    // applies candidate_core
+const rejected = await mnemo.rejectPromotion('my-agent', proposal.id, 'insufficient evidence');
+
+// Full agent context (identity + experience + user memory in one call)
+const ctx = await mnemo.agentContext('my-agent', {
+  query: 'What should I recommend?',
+  user: 'alice',
+  maxTokens: 500,
+});
+// { identity_version, experience_events_used, experience_weight_sum,
+//   user_memory_items_used, context, identity }
 ```
 
 ## Operator

@@ -2,8 +2,8 @@
 
 Production-grade Python SDK for the [Mnemo](https://github.com/anjaustin/mnemo) memory API.
 
-Covers all memory, knowledge graph, LLM span tracing, memory digest, governance, webhooks, operator,
-import, and session-message endpoints. Zero runtime dependencies for the sync client.
+Covers all memory, knowledge graph, LLM span tracing, memory digest, agent identity, governance,
+webhooks, operator, import, and session-message endpoints. Zero runtime dependencies for the sync client.
 Drop-in LangChain and LlamaIndex adapters included.
 
 ## Install
@@ -248,6 +248,60 @@ audit = client.get_webhook_audit(wh.id, limit=20)       # list[AuditRecord]
 
 # Delete
 client.delete_webhook(wh.id)
+```
+
+### Agent Identity
+
+```python
+# Get or auto-create agent identity
+identity = client.get_agent_identity("my-agent")
+# identity: AgentIdentityResult(agent_id, version, core, created_at, updated_at, request_id)
+
+# Update identity core (contamination-guarded: no user/session/email keys allowed)
+identity = client.update_agent_identity("my-agent", core={
+    "mission": "Help users plan outdoor adventures",
+    "style": {"tone": "friendly", "verbosity": "concise"},
+    "boundaries": ["no medical advice"],
+})
+
+# Version history and audit trail
+versions = client.list_agent_identity_versions("my-agent", limit=10)
+audit = client.list_agent_identity_audit("my-agent", limit=20)
+
+# Rollback to a previous version
+identity = client.rollback_agent_identity("my-agent", target_version=2, reason="reverted experiment")
+
+# Record an experience event (behavioral signal from runtime)
+exp = client.add_agent_experience("my-agent",
+    category="tone",
+    signal="user preferred concise answers",
+    confidence=0.85,
+    weight=0.6,
+    decay_half_life_days=30,
+)
+# exp: ExperienceEventResult(id, agent_id, category, signal, confidence, weight, ...)
+
+# Promotion proposals (evidence-gated identity evolution)
+proposal = client.create_promotion_proposal("my-agent",
+    proposal="shift to concise style",
+    candidate_core={"mission": "Help users plan adventures", "style": {"tone": "direct"}},
+    reason="3+ sessions showed preference for brevity",
+    source_event_ids=[exp1.id, exp2.id, exp3.id],  # must reference real experience events
+)
+# proposal: PromotionProposalResult(id, status="pending", ...)
+
+proposals = client.list_promotion_proposals("my-agent", limit=10)
+approved = client.approve_promotion("my-agent", proposal.id)    # applies candidate_core
+rejected = client.reject_promotion("my-agent", proposal.id, reason="insufficient evidence")
+
+# Full agent context (identity + experience + user memory in one call)
+ctx = client.agent_context("my-agent",
+    query="What should I recommend?",
+    user="alice",
+    max_tokens=500,
+)
+# ctx: AgentContextResult(identity_version, experience_events_used, experience_weight_sum,
+#                         user_memory_items_used, context, identity, request_id)
 ```
 
 ### Operator
