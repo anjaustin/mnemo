@@ -8483,15 +8483,18 @@ async fn refresh_memory_digest(
 
     let prompt = format!(
         "You are analyzing a user's long-term memory knowledge graph.\n\
-        Entities ({} total, showing up to 80):\n{}\n\n\
-        Key relationships ({} total, showing up to 60):\n{}\n\n\
-        Write a concise 2-4 sentence prose summary of what this person knows, \
-        their main areas of interest, and any dominant themes. \
-        Then on a new line write: TOPICS: topic1, topic2, topic3 (list 3-6 key topics).",
-        entity_count,
-        entity_lines.join("\n"),
-        edge_count,
-        edge_lines.join("\n"),
+        Entities ({entity_count} total, showing up to 80):\n{entities_block}\n\n\
+        Key relationships ({edge_count} total, showing up to 60):\n{edges_block}\n\n\
+        Respond with ONLY a JSON object (no markdown fences, no extra text) \
+        matching this exact schema:\n\
+        {{\n  \"summary\": \"<2-4 sentence prose summary of what this person knows, \
+        their main areas of interest, and dominant themes>\",\n  \
+        \"topics\": [\"topic1\", \"topic2\", \"topic3\"]\n}}\n\
+        List 3-6 key topics. Do not include any text outside the JSON object.",
+        entity_count = entity_count,
+        entities_block = entity_lines.join("\n"),
+        edge_count = edge_count,
+        edges_block = edge_lines.join("\n"),
     );
 
     let model_name = llm.model_name().to_string();
@@ -8529,20 +8532,8 @@ async fn refresh_memory_digest(
     };
     record_llm_span(&state, span).await;
 
-    // Parse topics from response
-    let (summary_text, dominant_topics) = if let Some(topics_idx) = raw.find("TOPICS:") {
-        let summary = raw[..topics_idx].trim().to_string();
-        let topics_raw = raw[topics_idx + 7..].trim();
-        let topics: Vec<String> = topics_raw
-            .split(',')
-            .map(|t: &str| t.trim().to_string())
-            .filter(|t: &String| !t.is_empty())
-            .take(6)
-            .collect();
-        (summary, topics)
-    } else {
-        (raw.trim().to_string(), Vec::new())
-    };
+    // Parse structured JSON response with fallback to legacy TOPICS: format
+    let (summary_text, dominant_topics) = mnemo_ingest::parse_digest_response(&raw);
 
     let digest = MemoryDigest {
         user_id: user_rec.id,

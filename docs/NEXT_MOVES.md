@@ -166,7 +166,12 @@ CI observations, and natural follow-ons. Ordered by priority within each tier.
     domain allowlist. SDK support added: TS `updateWebhook()`, Python sync
     `update_webhook()`, Python async `update_webhook()`. 5 integration tests:
     field update, 404, TLS rejection, domain allowlist, audit trail.
-26. **Structured LLM output for digest** — Replace prompt parsing with
-    tool/function calling to get reliable JSON output for topics.
+26. ~~**Structured LLM output for digest**~~ — **DONE.** Digest prompt now
+    requests JSON `{"summary": "...", "topics": [...]}` instead of fragile
+    `TOPICS:` line parsing. New `parse_digest_response()` function (pub in
+    `mnemo-ingest`) tries JSON parse first (handles markdown fences), falls
+    back to legacy `TOPICS:` format for backward compat. Shared between
+    ingest worker and HTTP handler. 8 unit tests cover JSON, fenced JSON,
+    legacy format, plain text, topic cap, empty summary fallback.
 27. **Token counting in spans** — `summarize()` and `extract()` don't
     currently return token counts. Wrap the LLM calls to capture usage.

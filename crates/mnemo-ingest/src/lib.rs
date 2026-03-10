@@ -83,6 +83,62 @@ impl Default for IngestConfig {
 /// Re-export from mnemo-core so downstream crates can use `mnemo_ingest::MemoryDigest`.
 pub use mnemo_core::models::digest::MemoryDigest;
 
+/// Parse a digest LLM response. Tries structured JSON first, then falls back to
+/// the legacy `TOPICS:` line format. Returns `(summary, topics)`.
+pub fn parse_digest_response(raw: &str) -> (String, Vec<String>) {
+    // 1. Try JSON parse (may be wrapped in markdown fences)
+    let trimmed = raw.trim();
+    let json_str = if trimmed.starts_with("```") {
+        // Strip markdown code fences: ```json\n{...}\n```
+        let inner = trimmed
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+        inner
+    } else {
+        trimmed
+    };
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+        let summary = parsed
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let topics: Vec<String> = parsed
+            .get("topics")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .take(6)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !summary.is_empty() {
+            return (summary, topics);
+        }
+    }
+
+    // 2. Fallback: legacy TOPICS: line format
+    if let Some(idx) = raw.find("TOPICS:") {
+        let summary = raw[..idx].trim().to_string();
+        let topics_raw = raw[idx + 7..].trim();
+        let topics: Vec<String> = topics_raw
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .take(6)
+            .collect();
+        (summary, topics)
+    } else {
+        (trimmed.to_string(), Vec::new())
+    }
+}
+
 /// Shared digest cache type. The server creates this and passes it to the worker.
 pub type DigestCache = Arc<RwLock<HashMap<Uuid, MemoryDigest>>>;
 
@@ -361,15 +417,18 @@ where
 
         let prompt = format!(
             "You are analyzing a user's long-term memory knowledge graph.\n\
-            Entities ({} total, showing up to 80):\n{}\n\n\
-            Key relationships ({} total, showing up to 60):\n{}\n\n\
-            Write a concise 2-4 sentence prose summary of what this person knows, \
-            their main areas of interest, and any dominant themes. \
-            Then on a new line write: TOPICS: topic1, topic2, topic3 (list 3-6 key topics).",
-            entity_count,
-            entity_lines.join("\n"),
-            edge_count,
-            edge_lines.join("\n"),
+            Entities ({entity_count} total, showing up to 80):\n{entities_block}\n\n\
+            Key relationships ({edge_count} total, showing up to 60):\n{edges_block}\n\n\
+            Respond with ONLY a JSON object (no markdown fences, no extra text) \
+            matching this exact schema:\n\
+            {{\n  \"summary\": \"<2-4 sentence prose summary of what this person knows, \
+            their main areas of interest, and dominant themes>\",\n  \
+            \"topics\": [\"topic1\", \"topic2\", \"topic3\"]\n}}\n\
+            List 3-6 key topics. Do not include any text outside the JSON object.",
+            entity_count = entity_count,
+            entities_block = entity_lines.join("\n"),
+            edge_count = edge_count,
+            edges_block = edge_lines.join("\n"),
         );
 
         let model_name = self.llm.model_name().to_string();
@@ -401,19 +460,7 @@ where
         .await;
         let raw = digest_result?;
 
-        let (summary_text, dominant_topics) = if let Some(idx) = raw.find("TOPICS:") {
-            let summary = raw[..idx].trim().to_string();
-            let topics_raw = raw[idx + 7..].trim();
-            let topics: Vec<String> = topics_raw
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .take(6)
-                .collect();
-            (summary, topics)
-        } else {
-            (raw.trim().to_string(), Vec::new())
-        };
+        let (summary_text, dominant_topics) = parse_digest_response(&raw);
 
         Ok(MemoryDigest {
             user_id,
@@ -886,5 +933,73 @@ mod tests {
         assert_eq!(delay, None);
         assert_eq!(ep.processing_status, ProcessingStatus::Failed);
         assert_eq!(ep.retry_count, 3); // doesn't increment past max
+    }
+
+    #[test]
+    fn test_parse_digest_response_json() {
+        let raw = r#"{"summary": "User knows a lot about running.", "topics": ["running", "fitness", "shoes"]}"#;
+        let (summary, topics) = parse_digest_response(raw);
+        assert_eq!(summary, "User knows a lot about running.");
+        assert_eq!(topics, vec!["running", "fitness", "shoes"]);
+    }
+
+    #[test]
+    fn test_parse_digest_response_json_with_markdown_fences() {
+        let raw = "```json\n{\"summary\": \"User is into tech.\", \"topics\": [\"tech\", \"AI\"]}\n```";
+        let (summary, topics) = parse_digest_response(raw);
+        assert_eq!(summary, "User is into tech.");
+        assert_eq!(topics, vec!["tech", "AI"]);
+    }
+
+    #[test]
+    fn test_parse_digest_response_json_with_plain_fences() {
+        let raw = "```\n{\"summary\": \"Knows cooking.\", \"topics\": [\"cooking\", \"recipes\"]}\n```";
+        let (summary, topics) = parse_digest_response(raw);
+        assert_eq!(summary, "Knows cooking.");
+        assert_eq!(topics, vec!["cooking", "recipes"]);
+    }
+
+    #[test]
+    fn test_parse_digest_response_legacy_topics_format() {
+        let raw = "This person is interested in running and fitness.\n\nTOPICS: running, fitness, shoes";
+        let (summary, topics) = parse_digest_response(raw);
+        assert_eq!(
+            summary,
+            "This person is interested in running and fitness."
+        );
+        assert_eq!(topics, vec!["running", "fitness", "shoes"]);
+    }
+
+    #[test]
+    fn test_parse_digest_response_plain_text_no_topics() {
+        let raw = "This person likes programming.";
+        let (summary, topics) = parse_digest_response(raw);
+        assert_eq!(summary, "This person likes programming.");
+        assert!(topics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_digest_response_json_caps_at_6_topics() {
+        let raw = r#"{"summary": "Broad interests.", "topics": ["a","b","c","d","e","f","g","h"]}"#;
+        let (_, topics) = parse_digest_response(raw);
+        assert_eq!(topics.len(), 6);
+    }
+
+    #[test]
+    fn test_parse_digest_response_json_empty_summary_falls_back() {
+        // JSON with empty summary should fall back to legacy parsing
+        let raw = r#"{"summary": "", "topics": ["tech"]}"#;
+        let (summary, topics) = parse_digest_response(raw);
+        // Falls through JSON (empty summary) to legacy, finds no TOPICS:, returns raw
+        assert_eq!(summary, raw.trim());
+        assert!(topics.is_empty());
+    }
+
+    #[test]
+    fn test_parse_digest_response_json_missing_topics_key() {
+        let raw = r#"{"summary": "Just a summary."}"#;
+        let (summary, topics) = parse_digest_response(raw);
+        assert_eq!(summary, "Just a summary.");
+        assert!(topics.is_empty());
     }
 }
