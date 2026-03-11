@@ -1285,6 +1285,67 @@ Returns `MergeResult` with the merged identity and version info.
 
 Delete a branch without merging. Returns `204 No Content`.
 
+### `POST /api/v1/agents/:agent_id/fork`
+
+Fork an agent to create a new independent agent with selective experience transfer.
+The new agent receives a copy of the parent's identity (optionally overridden) and
+a filtered subset of the parent's experience events. Lineage metadata is stored so
+the relationship between parent and child is always traceable.
+
+```json
+{
+  "new_agent_id": "support-bot-emea",
+  "core_override": {
+    "persona": "You are a multilingual EMEA support agent",
+    "tone": "formal"
+  },
+  "experience_filter": {
+    "categories": ["interaction_pattern", "domain_knowledge"],
+    "min_confidence": 0.7,
+    "min_weight": 0.5,
+    "max_events": 100
+  },
+  "description": "Regional fork for EMEA support"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `new_agent_id` | yes | Unique ID for the forked agent. 1-128 chars, alphanumeric + hyphens/underscores/dots. Must not contain `:`, `/`, or `..`. |
+| `core_override` | no | JSON object to replace the parent's identity core. If omitted, the parent's core is copied verbatim. |
+| `experience_filter` | no | Filter criteria for selecting which experience events to transfer. If omitted, all events are transferred. |
+| `experience_filter.categories` | no | Only transfer events in these categories. Empty array = all categories. |
+| `experience_filter.min_confidence` | no | Minimum confidence threshold (0.0–1.0). Events below are excluded. |
+| `experience_filter.min_weight` | no | Minimum effective weight. Events below are excluded. |
+| `experience_filter.max_events` | no | Maximum number of events to transfer. |
+| `description` | no | Human-readable reason for the fork. |
+
+Response (`ForkResult`):
+
+```json
+{
+  "new_agent": {
+    "agent_id": "support-bot-emea",
+    "version": 1,
+    "core": { "persona": "...", "tone": "formal" },
+    "created_at": "2026-03-11T...",
+    "updated_at": "2026-03-11T..."
+  },
+  "lineage": {
+    "parent_agent_id": "support-bot",
+    "parent_version": 5,
+    "forked_at": "2026-03-11T...",
+    "description": "Regional fork for EMEA support",
+    "experience_events_transferred": 42,
+    "experience_filter": { "categories": ["interaction_pattern", "domain_knowledge"], "min_confidence": 0.7, "min_weight": 0.5, "max_events": 100 }
+  }
+}
+```
+
+Errors:
+- `400` if `new_agent_id` fails validation or the source agent does not exist.
+- `409` if an agent with `new_agent_id` already exists.
+
 ### `POST /api/v1/agents/:agent_id/experience`
 
 Add an adaptive experience event. The server computes a `fisher_importance` score

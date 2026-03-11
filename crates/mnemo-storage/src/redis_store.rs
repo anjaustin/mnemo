@@ -11,7 +11,9 @@ use mnemo_core::models::{
         AgentIdentityAuditAction, AgentIdentityAuditEvent, AgentIdentityProfile,
         AuditChainVerification, BranchInfo, BranchMetadata, CreateBranchRequest,
         CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
+        ForkAgentRequest, ForkLineage, ForkResult,
         MergeResult, PromotionProposal, UpdateAgentIdentityRequest, validate_branch_name,
+        validate_fork_agent_id,
     },
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -1329,6 +1331,133 @@ impl AgentStore for RedisStateStore {
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
         Ok(())
+    }
+
+    async fn fork_agent(
+        &self,
+        source_agent_id: &str,
+        req: ForkAgentRequest,
+    ) -> StorageResult<ForkResult> {
+        // 1. Validate new agent ID
+        validate_fork_agent_id(&req.new_agent_id)
+            .map_err(|e| MnemoError::Validation(e))?;
+
+        // 2. Check new agent doesn't already exist
+        let new_identity_key = self.key(&["agent_identity", &req.new_agent_id]);
+        if self.get_json::<AgentIdentityProfile>(&new_identity_key).await?.is_some() {
+            return Err(MnemoError::Validation(format!(
+                "agent '{}' already exists; cannot fork to an existing agent_id",
+                req.new_agent_id
+            )));
+        }
+
+        // 3. Get source agent identity
+        let source = self.get_agent_identity(source_agent_id).await?;
+
+        // 4. Create new identity (use override or copy parent core)
+        let new_core = req.core_override.unwrap_or_else(|| source.core.clone());
+        let new_identity = AgentIdentityProfile {
+            agent_id: req.new_agent_id.clone(),
+            version: 1, // New agent starts at version 1
+            core: new_core,
+            updated_at: Utc::now(),
+        };
+
+        // 5. Persist new identity
+        self.set_json(&new_identity_key, &new_identity).await?;
+
+        // 6. Persist initial version snapshot for the new agent
+        self.persist_identity_snapshot(&req.new_agent_id, &new_identity).await?;
+
+        // 7. Transfer experience events (filtered)
+        let source_events = self.list_experience_events(source_agent_id, 10000).await?;
+        let filter = req.experience_filter.clone().unwrap_or_default();
+        let max_events = filter.max_events.unwrap_or(u32::MAX) as usize;
+
+        let mut transferred_count: u32 = 0;
+        for event in source_events.iter().filter(|e| filter.matches(e)) {
+            if transferred_count as usize >= max_events {
+                break;
+            }
+            // Create a copy under the new agent_id with a new UUID
+            let new_event = ExperienceEvent {
+                id: Uuid::now_v7(),
+                agent_id: req.new_agent_id.clone(),
+                user_id: event.user_id,
+                session_id: event.session_id,
+                category: event.category.clone(),
+                signal: event.signal.clone(),
+                confidence: event.confidence,
+                weight: event.weight,
+                decay_half_life_days: event.decay_half_life_days,
+                evidence_episode_ids: event.evidence_episode_ids.clone(),
+                fisher_importance: event.fisher_importance,
+                created_at: event.created_at,
+            };
+
+            let event_key = self.key(&["agent_experience", &req.new_agent_id, &new_event.id.to_string()]);
+            self.set_json(&event_key, &new_event).await?;
+
+            // Add to sorted-set index
+            let index_key = self.key(&["agent_experiences", &req.new_agent_id]);
+            let score = new_event.created_at.timestamp_millis() as f64;
+            let mut conn = self.conn.clone();
+            let _: () = redis::cmd("ZADD")
+                .arg(&index_key)
+                .arg(score)
+                .arg(new_event.id.to_string())
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+            transferred_count += 1;
+        }
+
+        // 8. Store lineage metadata on the new agent
+        let lineage = ForkLineage {
+            parent_agent_id: source_agent_id.to_string(),
+            parent_version: source.version,
+            forked_at: Utc::now(),
+            description: req.description.clone(),
+            experience_events_transferred: transferred_count,
+            experience_filter: req.experience_filter,
+        };
+
+        let lineage_key = self.key(&["agent_lineage", &req.new_agent_id]);
+        self.set_json(&lineage_key, &lineage).await?;
+
+        // 9. Create audit event for the new agent
+        let mut audit_event = AgentIdentityAuditEvent {
+            id: Uuid::now_v7(),
+            agent_id: req.new_agent_id.clone(),
+            action: AgentIdentityAuditAction::Created,
+            from_version: None,
+            to_version: 1,
+            rollback_to_version: None,
+            reason: req.description.clone(),
+            created_at: Utc::now(),
+            prev_hash: None,
+            event_hash: String::new(),
+        };
+        audit_event.event_hash = audit_event.compute_hash();
+        let audit_key = self.key(&["agent_audit", &req.new_agent_id, &audit_event.id.to_string()]);
+        self.set_json(&audit_key, &audit_event).await?;
+
+        let audit_index_key = self.key(&["agent_audit_events", &req.new_agent_id]);
+        let audit_score = audit_event.created_at.timestamp_millis() as f64;
+        let mut conn = self.conn.clone();
+        let _: () = redis::cmd("ZADD")
+            .arg(&audit_index_key)
+            .arg(audit_score)
+            .arg(audit_event.id.to_string())
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(ForkResult {
+            new_agent: new_identity,
+            lineage,
+        })
     }
 }
 

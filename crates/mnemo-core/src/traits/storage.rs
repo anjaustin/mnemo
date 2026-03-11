@@ -114,6 +114,13 @@ pub trait AgentStore: Send + Sync {
         agent_id: &str,
         branch_name: &str,
     ) -> StorageResult<()>;
+    /// Fork an agent: create a new independent agent from an existing one,
+    /// optionally transferring filtered experience events.
+    async fn fork_agent(
+        &self,
+        source_agent_id: &str,
+        req: crate::models::agent::ForkAgentRequest,
+    ) -> StorageResult<crate::models::agent::ForkResult>;
 }
 
 /// Result type for all storage operations.

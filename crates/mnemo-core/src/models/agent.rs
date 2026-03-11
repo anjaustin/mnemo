@@ -586,6 +586,116 @@ pub fn validate_branch_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Domain Expansion / Transfer Learning ─────────────────────────
+
+/// Filter criteria for selecting which experience events to transfer
+/// when forking an agent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExperienceFilter {
+    /// Only transfer events in these categories. Empty = all categories.
+    #[serde(default)]
+    pub categories: Vec<String>,
+    /// Minimum confidence threshold. Events below this are excluded.
+    #[serde(default)]
+    pub min_confidence: Option<f32>,
+    /// Minimum effective weight (after EWC decay). Events below this are excluded.
+    #[serde(default)]
+    pub min_weight: Option<f32>,
+    /// Maximum number of events to transfer.
+    #[serde(default)]
+    pub max_events: Option<u32>,
+}
+
+impl ExperienceFilter {
+    /// Check if an experience event passes this filter.
+    pub fn matches(&self, event: &ExperienceEvent) -> bool {
+        // Category filter
+        if !self.categories.is_empty() && !self.categories.iter().any(|c| c == &event.category) {
+            return false;
+        }
+        // Confidence threshold
+        if let Some(min_conf) = self.min_confidence {
+            if event.confidence < min_conf {
+                return false;
+            }
+        }
+        // Weight threshold
+        if let Some(min_w) = self.min_weight {
+            if event.weight < min_w {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Request body for `POST /api/v1/agents/:agent_id/fork`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkAgentRequest {
+    /// The agent ID for the new forked agent. Must be unique.
+    pub new_agent_id: String,
+    /// Optional identity core override for the new agent.
+    /// If None, the parent's core is copied verbatim.
+    #[serde(default)]
+    pub core_override: Option<serde_json::Value>,
+    /// Filter for selecting which experience events to transfer.
+    /// If None, all experience events are transferred.
+    #[serde(default)]
+    pub experience_filter: Option<ExperienceFilter>,
+    /// Optional description of why the fork was created.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Validate a new agent ID for forking (same rules as branch names, but allow dots).
+pub fn validate_fork_agent_id(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("new_agent_id must not be empty".into());
+    }
+    if id.len() > 128 {
+        return Err("new_agent_id must be <= 128 characters".into());
+    }
+    if id.contains(':') || id.contains('/') || id.contains("..") {
+        return Err("new_agent_id must not contain ':', '/', or '..'".into());
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(
+            "new_agent_id must contain only alphanumeric characters, hyphens, underscores, or dots"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Lineage metadata tracking the fork relationship.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkLineage {
+    /// The parent agent this was forked from.
+    pub parent_agent_id: String,
+    /// The parent's version at fork time.
+    pub parent_version: u64,
+    /// When the fork happened.
+    pub forked_at: DateTime<Utc>,
+    /// Description of the fork.
+    pub description: Option<String>,
+    /// Number of experience events transferred.
+    pub experience_events_transferred: u32,
+    /// The filter used during transfer (if any).
+    pub experience_filter: Option<ExperienceFilter>,
+}
+
+/// Result of a fork operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkResult {
+    /// The newly created agent identity.
+    pub new_agent: AgentIdentityProfile,
+    /// Fork lineage metadata.
+    pub lineage: ForkLineage,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1580,5 +1690,224 @@ mod tests {
         assert!(json.get("identity").is_some());
         assert_eq!(json["metadata"]["branch_name"], "test");
         assert_eq!(json["identity"]["agent_id"], "bot:branch:test");
+    }
+
+    // ─── Domain Expansion / Fork tests ────────────────────────────
+
+    #[test]
+    fn test_experience_filter_default_matches_all() {
+        let filter = ExperienceFilter::default();
+        let event = ExperienceEvent {
+            id: Uuid::from_u128(1),
+            agent_id: "bot".into(),
+            user_id: None,
+            session_id: None,
+            category: "greeting".into(),
+            signal: "user said hello".into(),
+            confidence: 0.8,
+            weight: 0.5,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.3,
+            created_at: Utc::now(),
+        };
+        assert!(filter.matches(&event));
+    }
+
+    #[test]
+    fn test_experience_filter_category_match() {
+        let filter = ExperienceFilter {
+            categories: vec!["billing".to_string(), "support".to_string()],
+            ..Default::default()
+        };
+        let mut event = ExperienceEvent {
+            id: Uuid::from_u128(1),
+            agent_id: "bot".into(),
+            user_id: None,
+            session_id: None,
+            category: "billing".into(),
+            signal: "test".into(),
+            confidence: 0.9,
+            weight: 0.5,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.3,
+            created_at: Utc::now(),
+        };
+        assert!(filter.matches(&event));
+
+        event.category = "greeting".into();
+        assert!(!filter.matches(&event));
+    }
+
+    #[test]
+    fn test_experience_filter_confidence_threshold() {
+        let filter = ExperienceFilter {
+            min_confidence: Some(0.7),
+            ..Default::default()
+        };
+        let mut event = ExperienceEvent {
+            id: Uuid::from_u128(1),
+            agent_id: "bot".into(),
+            user_id: None,
+            session_id: None,
+            category: "test".into(),
+            signal: "test".into(),
+            confidence: 0.9,
+            weight: 0.5,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.3,
+            created_at: Utc::now(),
+        };
+        assert!(filter.matches(&event));
+
+        event.confidence = 0.3;
+        assert!(!filter.matches(&event));
+    }
+
+    #[test]
+    fn test_experience_filter_weight_threshold() {
+        let filter = ExperienceFilter {
+            min_weight: Some(0.4),
+            ..Default::default()
+        };
+        let mut event = ExperienceEvent {
+            id: Uuid::from_u128(1),
+            agent_id: "bot".into(),
+            user_id: None,
+            session_id: None,
+            category: "test".into(),
+            signal: "test".into(),
+            confidence: 0.9,
+            weight: 0.5,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.3,
+            created_at: Utc::now(),
+        };
+        assert!(filter.matches(&event));
+
+        event.weight = 0.1;
+        assert!(!filter.matches(&event));
+    }
+
+    #[test]
+    fn test_experience_filter_combined() {
+        let filter = ExperienceFilter {
+            categories: vec!["billing".to_string()],
+            min_confidence: Some(0.5),
+            min_weight: Some(0.3),
+            max_events: Some(100),
+        };
+        let event = ExperienceEvent {
+            id: Uuid::from_u128(1),
+            agent_id: "bot".into(),
+            user_id: None,
+            session_id: None,
+            category: "billing".into(),
+            signal: "test".into(),
+            confidence: 0.8,
+            weight: 0.5,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.3,
+            created_at: Utc::now(),
+        };
+        assert!(filter.matches(&event));
+    }
+
+    #[test]
+    fn test_validate_fork_agent_id_valid() {
+        assert!(validate_fork_agent_id("new-bot-v2").is_ok());
+        assert!(validate_fork_agent_id("support.billing.v3").is_ok());
+        assert!(validate_fork_agent_id("a").is_ok());
+    }
+
+    #[test]
+    fn test_validate_fork_agent_id_empty() {
+        assert!(validate_fork_agent_id("").is_err());
+    }
+
+    #[test]
+    fn test_validate_fork_agent_id_too_long() {
+        let long_id = "a".repeat(129);
+        assert!(validate_fork_agent_id(&long_id).is_err());
+    }
+
+    #[test]
+    fn test_validate_fork_agent_id_colon_rejected() {
+        assert!(validate_fork_agent_id("bot:fork").is_err());
+    }
+
+    #[test]
+    fn test_validate_fork_agent_id_slash_rejected() {
+        assert!(validate_fork_agent_id("bot/fork").is_err());
+    }
+
+    #[test]
+    fn test_validate_fork_agent_id_path_traversal_rejected() {
+        assert!(validate_fork_agent_id("..bot").is_err());
+    }
+
+    #[test]
+    fn test_fork_agent_request_serializes() {
+        let req = ForkAgentRequest {
+            new_agent_id: "support-v2".into(),
+            core_override: Some(json!({"mission": "help with billing"})),
+            experience_filter: Some(ExperienceFilter {
+                categories: vec!["billing".into()],
+                min_confidence: Some(0.7),
+                ..Default::default()
+            }),
+            description: Some("Fork for billing domain".into()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["new_agent_id"], "support-v2");
+        assert!(json["core_override"].is_object());
+        assert!(json["experience_filter"].is_object());
+    }
+
+    #[test]
+    fn test_fork_result_serializes() {
+        let result = ForkResult {
+            new_agent: AgentIdentityProfile::new("support-v2".into()),
+            lineage: ForkLineage {
+                parent_agent_id: "support-v1".into(),
+                parent_version: 5,
+                forked_at: Utc::now(),
+                description: Some("billing fork".into()),
+                experience_events_transferred: 42,
+                experience_filter: None,
+            },
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert!(json.get("new_agent").is_some());
+        assert!(json.get("lineage").is_some());
+        assert_eq!(json["lineage"]["parent_agent_id"], "support-v1");
+        assert_eq!(json["lineage"]["parent_version"], 5);
+        assert_eq!(json["lineage"]["experience_events_transferred"], 42);
+    }
+
+    #[test]
+    fn test_fork_lineage_serde_roundtrip() {
+        let lineage = ForkLineage {
+            parent_agent_id: "bot-a".into(),
+            parent_version: 3,
+            forked_at: Utc::now(),
+            description: None,
+            experience_events_transferred: 10,
+            experience_filter: Some(ExperienceFilter {
+                categories: vec!["tech".into()],
+                min_confidence: Some(0.5),
+                min_weight: None,
+                max_events: Some(50),
+            }),
+        };
+        let json = serde_json::to_string(&lineage).unwrap();
+        let back: ForkLineage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.parent_agent_id, "bot-a");
+        assert_eq!(back.parent_version, 3);
+        assert_eq!(back.experience_events_transferred, 10);
     }
 }

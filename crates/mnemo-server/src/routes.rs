@@ -1218,6 +1218,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/agents/:agent_id/branches/:branch_name/merge",
             post(merge_agent_branch),
         )
+        // Domain expansion / transfer learning
+        .route("/api/v1/agents/:agent_id/fork", post(fork_agent))
         // Graph knowledge API
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
         .route("/api/v1/graph/:user/entities", get(graph_list_entities))
@@ -6690,6 +6692,16 @@ async fn create_agent_branch(
     let agent_id = normalize_agent_id(&agent_id)?;
     let info = state.state_store.create_agent_branch(&agent_id, req).await?;
     Ok(Json(info))
+}
+
+async fn fork_agent(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<mnemo_core::models::agent::ForkAgentRequest>,
+) -> Result<Json<mnemo_core::models::agent::ForkResult>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let result = state.state_store.fork_agent(&agent_id, req).await?;
+    Ok(Json(result))
 }
 
 async fn list_agent_branches(
