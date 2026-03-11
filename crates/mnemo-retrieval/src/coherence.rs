@@ -87,20 +87,25 @@ pub fn compute_entity_coherence(entities: &[Entity], edges: &[Edge]) -> f32 {
         let src = entity_map.get(&edge.source_entity_id);
         let tgt = entity_map.get(&edge.target_entity_id);
 
-        if let (Some(src_entity), Some(tgt_entity)) = (src, tgt) {
-            total_pairs += 1;
+        total_pairs += 1;
 
-            // Type compatibility heuristic:
-            // - Different entity types connecting = good (diverse, meaningful relations)
-            // - Same entity type connecting via high-confidence edge = good
-            // - Low confidence edges = lower coherence contribution
-            let type_diverse = src_entity.entity_type != tgt_entity.entity_type;
-            let high_confidence = edge.confidence >= 0.5;
-            let well_corroborated = edge.corroboration_count >= 2;
+        // Edges referencing entities not in the entity list are orphaned —
+        // count as incoherent rather than silently skipping them.
+        let (src_entity, tgt_entity) = match (src, tgt) {
+            (Some(s), Some(t)) => (s, t),
+            _ => continue, // incoherent: total_pairs incremented but coherent_pairs not
+        };
 
-            if (type_diverse && high_confidence) || well_corroborated || edge.confidence >= 0.7 {
-                coherent_pairs += 1;
-            }
+        // Type compatibility heuristic:
+        // - Different entity types connecting = good (diverse, meaningful relations)
+        // - Same entity type connecting via high-confidence edge = good
+        // - Low confidence edges = lower coherence contribution
+        let type_diverse = src_entity.entity_type != tgt_entity.entity_type;
+        let high_confidence = edge.confidence >= 0.5;
+        let well_corroborated = edge.corroboration_count >= 2;
+
+        if (type_diverse && high_confidence) || well_corroborated || edge.confidence >= 0.7 {
+            coherent_pairs += 1;
         }
     }
 
@@ -174,10 +179,13 @@ pub fn compute_temporal_coherence(edges: &[Edge], recent_window_days: i64) -> (f
 
     for edge in edges {
         // Count recent supersessions
-        if let Some(invalid_at) = edge.invalid_at {
-            if invalid_at >= window_start {
-                recent_supersessions += 1;
-            }
+        let was_recently_superseded = edge.invalid_at.map(|t| t >= window_start).unwrap_or(false);
+
+        if was_recently_superseded {
+            recent_supersessions += 1;
+            // Don't also count as a corroboration — once superseded, prior
+            // corroborations are moot.
+            continue;
         }
 
         // Count recent corroborations (edges created recently with corroboration > 1)
@@ -752,6 +760,228 @@ mod tests {
             (total - 1.0).abs() < f32::EPSILON,
             "weights must sum to 1.0: {}",
             total
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Falsification tests — adversarial / boundary cases
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn falsify_temporal_no_double_count_superseded_corroborated_edge() {
+        // Bug 6: An edge that was corroborated AND THEN superseded should count
+        // as a supersession only — not inflate both counters.
+        let src = Uuid::now_v7();
+        let tgt = Uuid::now_v7();
+
+        // Edge created 5 days ago, corroborated 3 times, then invalidated 2 days ago
+        let mut edge = make_edge(src, tgt, "works_at", 0.9, 3, 5, false);
+        edge.invalid_at = Some(Utc::now() - Duration::days(2));
+
+        let (score, sups, corrs) = compute_temporal_coherence(&[edge], 30);
+        // Must count as supersession only, not also corroboration
+        assert_eq!(sups, 1, "should be 1 supersession");
+        assert_eq!(corrs, 0, "should NOT also count as corroboration");
+        // Pure supersession => score should be low (0.2 + 0*0.8 = 0.2)
+        assert!(
+            (score - 0.2).abs() < 0.01,
+            "pure supersession score should be ~0.2: {}",
+            score
+        );
+    }
+
+    #[test]
+    fn falsify_entity_coherence_orphaned_edges_are_incoherent() {
+        // Bug 2: Active edges referencing entities NOT in the entity list
+        // should lower coherence, not be silently skipped.
+        let alice = make_entity("Alice", EntityType::Person, 5);
+        let ghost_id = Uuid::now_v7(); // not in entity list
+
+        // Edge from Alice to a ghost entity
+        let edge = make_edge(alice.id, ghost_id, "knows", 0.9, 3, 5, false);
+
+        let score = compute_entity_coherence(&[alice], &[edge]);
+        // Ghost entity means the edge is orphaned — should count as incoherent
+        assert!(
+            score < 1.0,
+            "orphaned edge should reduce coherence, got: {}",
+            score
+        );
+    }
+
+    #[test]
+    fn falsify_entity_coherence_all_orphaned_edges() {
+        // All edges reference entities not in the list — should be 0 coherence
+        let e1 = make_entity("Alice", EntityType::Person, 5);
+        let ghost1 = Uuid::now_v7();
+        let ghost2 = Uuid::now_v7();
+
+        let edges = vec![
+            make_edge(ghost1, ghost2, "knows", 0.9, 3, 5, false),
+            make_edge(ghost1, e1.id, "likes", 0.8, 2, 3, false),
+        ];
+
+        let score = compute_entity_coherence(&[e1], &edges);
+        // edge 1: both missing → orphaned, edge 2: source missing → orphaned
+        // total_pairs=2, coherent_pairs=0 → base_score=0.0
+        assert!(
+            score < 0.1,
+            "all orphaned edges should yield near-zero coherence: {}",
+            score
+        );
+    }
+
+    #[test]
+    fn falsify_structural_coherence_empty_community_map_with_entities() {
+        // If detect_communities returns empty map, structural coherence should
+        // still work and reflect that we can't determine community structure.
+        let entities: Vec<Entity> = (0..5)
+            .map(|i| make_entity(&format!("E{}", i), EntityType::Concept, 3))
+            .collect();
+        let edges = vec![make_edge(
+            entities[0].id,
+            entities[1].id,
+            "related",
+            0.8,
+            2,
+            5,
+            false,
+        )];
+
+        let (score, communities, isolated) =
+            compute_structural_coherence(&entities, &edges, &HashMap::new());
+        // Empty map → num_communities = max(0,1) = 1
+        // community_ratio = 1/5 = 0.2, connectivity_score = 1.0 - 0.16 = 0.84
+        // 3 isolated entities (E2, E3, E4), isolation_ratio = 3/5 = 0.6
+        // isolation_penalty = 0.6 * 0.4 = 0.24
+        // score = 0.84 - 0.24 = 0.60
+        assert!(
+            score >= 0.0 && score <= 1.0,
+            "score must be bounded: {}",
+            score
+        );
+        assert_eq!(communities, 1, "empty map should yield 1 pseudo-community");
+        assert_eq!(isolated, 3, "3 entities with no edges should be isolated");
+    }
+
+    #[test]
+    fn falsify_fact_coherence_all_invalidated_same_group() {
+        // Many invalidated edges in same group, zero active → should be clean (not conflicting)
+        let src = Uuid::now_v7();
+        let edges: Vec<Edge> = (0..10)
+            .map(|i| make_edge(src, Uuid::now_v7(), "works_at", 0.5, 1, i + 1, true))
+            .collect();
+
+        let (score, conflicts) = compute_fact_coherence(&edges);
+        assert_eq!(conflicts, 0, "all invalidated = no active conflict");
+        assert!(
+            (score - 1.0).abs() < f32::EPSILON,
+            "all invalidated should be clean: {}",
+            score
+        );
+    }
+
+    #[test]
+    fn falsify_composite_score_bounded_under_worst_case() {
+        // Construct the absolute worst case: all dimensions should be at minimum.
+        // Entity: all low-confidence same-type edges with weak entities
+        // Fact: all conflicting
+        // Temporal: all supersessions
+        // Structural: fully fragmented
+        let entities: Vec<Entity> = (0..10)
+            .map(|i| make_entity(&format!("E{}", i), EntityType::Concept, 1))
+            .collect();
+
+        // Each entity pair has same label → conflicts
+        let mut edges = Vec::new();
+        for i in 0..5 {
+            // Two active edges per (source, label) = conflict
+            edges.push(make_edge(
+                entities[0].id,
+                entities[i + 1].id,
+                "related",
+                0.2,
+                1,
+                2,
+                false,
+            ));
+        }
+        // Add superseded edges for temporal churn
+        for i in 0..5 {
+            let mut e = make_edge(
+                entities[0].id,
+                entities[i + 5].id,
+                "other",
+                0.3,
+                1,
+                3,
+                false,
+            );
+            e.invalid_at = Some(Utc::now() - Duration::days(1));
+            edges.push(e);
+        }
+
+        let mut community_map = HashMap::new();
+        for e in &entities {
+            community_map.insert(e.id, Uuid::now_v7()); // each entity is its own community
+        }
+
+        let report = compute_coherence_report(&entities, &edges, &community_map);
+        assert!(
+            report.score >= 0.0,
+            "composite must be >= 0.0: {}",
+            report.score
+        );
+        assert!(
+            report.score <= 1.0,
+            "composite must be <= 1.0: {}",
+            report.score
+        );
+        // Under worst case, score should be genuinely low (below 0.5)
+        assert!(
+            report.score < 0.5,
+            "worst-case graph should score low: {}",
+            report.score
+        );
+        // Should have recommendations
+        assert!(
+            !report.recommendations.is_empty(),
+            "should have recommendations for a bad graph"
+        );
+    }
+
+    #[test]
+    fn falsify_temporal_window_zero_days() {
+        // Edge case: window_days = 0 should mean "right now only"
+        let src = Uuid::now_v7();
+        let tgt = Uuid::now_v7();
+        let edges = vec![make_edge(src, tgt, "knows", 0.9, 3, 1, false)];
+
+        let (score, sups, corrs) = compute_temporal_coherence(&edges, 0);
+        // A 0-day window means window_start = now. Edge created 1 day ago is outside window.
+        assert_eq!(sups, 0);
+        assert_eq!(corrs, 0);
+        assert!(
+            (score - 0.9).abs() < f32::EPSILON,
+            "no recent activity should return 0.9: {}",
+            score
+        );
+    }
+
+    #[test]
+    fn falsify_entity_coherence_same_type_low_confidence() {
+        // Same entity type + low confidence (<0.5) + low corroboration (1) → incoherent
+        let e1 = make_entity("A", EntityType::Person, 5);
+        let e2 = make_entity("B", EntityType::Person, 5);
+        let edge = make_edge(e1.id, e2.id, "knows", 0.3, 1, 5, false);
+
+        let score = compute_entity_coherence(&[e1, e2], &[edge]);
+        // Same type (not diverse), low confidence (<0.5), low corroboration (<2),
+        // confidence < 0.7 → NOT coherent. Score = 0/1 = 0.0
+        assert!(
+            score < 0.1,
+            "same-type low-confidence should be incoherent: {}",
+            score
         );
     }
 }

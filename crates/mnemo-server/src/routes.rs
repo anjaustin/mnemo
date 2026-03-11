@@ -8894,26 +8894,23 @@ async fn get_user_coherence(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
 
-    // Fetch all entities and edges (including invalidated for full picture)
-    let entities = list_all_entities_for_user(&state, user.id).await?;
-    let edges = state
-        .state_store
-        .query_edges(
+    // Fetch entities, edges, and community structure in parallel
+    let (entities_result, edges_result, community_result) = tokio::join!(
+        list_all_entities_for_user(&state, user.id),
+        state.state_store.query_edges(
             user.id,
             EdgeFilter {
                 include_invalidated: true,
                 limit: 10_000,
                 ..EdgeFilter::default()
             },
-        )
-        .await?;
+        ),
+        state.graph.detect_communities(user.id, 10),
+    );
 
-    // Run community detection for structural coherence
-    let community_map = state
-        .graph
-        .detect_communities(user.id, 10)
-        .await
-        .unwrap_or_default();
+    let entities = entities_result?;
+    let edges = edges_result?;
+    let community_map = community_result.unwrap_or_default();
 
     // Compute the full coherence report
     let report =
