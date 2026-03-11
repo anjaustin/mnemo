@@ -1373,4 +1373,182 @@ mod tests {
             assert_eq!(rt, back);
         }
     }
+
+    // ─── Falsification / Adversarial Tests ────────────────────────
+
+    #[test]
+    fn test_falsify_gcounter_merge_associative() {
+        // (A merge B) merge C == A merge (B merge C)
+        let mut a = GCounter::new();
+        a.increment_by(&node("a"), 10);
+        let mut b = GCounter::new();
+        b.increment_by(&node("b"), 20);
+        let mut c = GCounter::new();
+        c.increment_by(&node("c"), 30);
+
+        let mut ab_c = a.clone();
+        ab_c.merge(&b);
+        ab_c.merge(&c);
+
+        let mut a_bc = a.clone();
+        let mut bc = b.clone();
+        bc.merge(&c);
+        a_bc.merge(&bc);
+
+        assert_eq!(ab_c.value(), a_bc.value());
+        assert_eq!(ab_c.value(), 60);
+    }
+
+    #[test]
+    fn test_falsify_lww_register_same_timestamp_tiebreak_by_node() {
+        // Same wall_ms, same counter — node_id breaks the tie deterministically.
+        let mut reg = LWWRegister::new("from_a".to_string(), ts(100, 0, "a"));
+        // "b" > "a" so ts(100,0,"b") > ts(100,0,"a") — b should win
+        reg.merge(&LWWRegister::new("from_b".to_string(), ts(100, 0, "b")));
+        assert_eq!(reg.get(), "from_b");
+
+        // Reverse: start with b, merge a → b still wins
+        let mut reg2 = LWWRegister::new("from_b".to_string(), ts(100, 0, "b"));
+        reg2.merge(&LWWRegister::new("from_a".to_string(), ts(100, 0, "a")));
+        assert_eq!(reg2.get(), "from_b");
+    }
+
+    #[test]
+    fn test_falsify_orset_three_node_convergence() {
+        // Node A adds "x", Node B adds "y", Node C removes "x" (from A's view)
+        // After all merges, both "x" and "y" should survive if C only saw A's tags
+        let mut set_a = ORSet::new();
+        set_a.add("x".to_string(), &node("a"));
+
+        let mut set_b = ORSet::new();
+        set_b.add("y".to_string(), &node("b"));
+
+        // C gets A's state, then removes "x"
+        let mut set_c = set_a.clone();
+        set_c.remove(&"x".to_string());
+
+        // A adds "x" again concurrently (new tag)
+        set_a.add("x".to_string(), &node("a"));
+
+        // Now merge all: A <- B <- C
+        set_a.merge(&set_b);
+        set_a.merge(&set_c);
+
+        // "x" survives (A's second add-tag was not in C's remove)
+        assert!(set_a.contains(&"x".to_string()));
+        // "y" present from B
+        assert!(set_a.contains(&"y".to_string()));
+    }
+
+    #[test]
+    fn test_falsify_lwwmap_tombstone_resurrection() {
+        // Set, remove, then set again with even higher timestamp → value resurrected
+        let mut map = LWWMap::new();
+        map.set("k".to_string(), "v1".to_string(), ts(100, 0, "a"));
+        map.remove(&"k".to_string(), ts(200, 0, "a"));
+        assert!(map.get(&"k".to_string()).is_none());
+
+        // Resurrect with timestamp > remove
+        map.set("k".to_string(), "v2".to_string(), ts(300, 0, "a"));
+        assert_eq!(map.get(&"k".to_string()), Some(&"v2".to_string()));
+    }
+
+    #[test]
+    fn test_falsify_vector_clock_100_nodes_no_panic() {
+        let mut vc1 = VectorClock::new();
+        let mut vc2 = VectorClock::new();
+        for i in 0..100 {
+            let n = node(&format!("node-{}", i));
+            vc1.increment(&n);
+            if i % 2 == 0 {
+                vc2.increment(&n);
+                vc2.increment(&n);
+            }
+        }
+        vc1.merge(&vc2);
+        assert_eq!(vc1.node_count(), 100);
+        // Even nodes: max(1, 2) = 2. Odd nodes: max(1, 0) = 1.
+        assert_eq!(vc1.get(&node("node-0")), 2);
+        assert_eq!(vc1.get(&node("node-1")), 1);
+    }
+
+    #[test]
+    fn test_falsify_hlc_clock_skew_recovery() {
+        // Local clock is way behind. Remote sends a timestamp far ahead.
+        // After receive, local should generate timestamps after the remote.
+        let mut clock = HybridClock::new(node("slow"));
+        let remote_far_future = ts(9_999_999_999_000, 0, "fast");
+        let local_after = clock.receive(&remote_far_future);
+        assert!(local_after > remote_far_future);
+        // Subsequent local timestamps should also be monotonic
+        let next = clock.now();
+        assert!(next > local_after);
+    }
+
+    #[test]
+    fn test_falsify_merkle_digest_duplicate_keys() {
+        // Same key appearing twice — should not panic
+        let items = vec![
+            ("same-key".to_string(), compute_sha256(b"data1")),
+            ("same-key".to_string(), compute_sha256(b"data2")),
+        ];
+        let digest = MerkleDigest::from_items(DeltaResourceType::Entity, None, &items);
+        assert_eq!(digest.total_items, 2);
+        assert!(!digest.root_hash.is_empty());
+    }
+
+    #[test]
+    fn test_falsify_delta_envelope_empty_deltas_valid() {
+        let env = DeltaEnvelope::new(node("n1"), VectorClock::new(), Vec::new());
+        assert_eq!(env.delta_count(), 0);
+        let json = serde_json::to_value(&env).unwrap();
+        let deltas = json["deltas"].as_array().unwrap();
+        assert!(deltas.is_empty());
+    }
+
+    #[test]
+    fn test_falsify_gcounter_increment_by_zero() {
+        let mut gc = GCounter::new();
+        gc.increment_by(&node("a"), 5);
+        gc.increment_by(&node("a"), 0);
+        assert_eq!(gc.value(), 5);
+        assert_eq!(gc.node_value(&node("a")), 5);
+    }
+
+    #[test]
+    fn test_falsify_orset_remove_nonexistent() {
+        let mut set: ORSet<String> = ORSet::new();
+        assert!(!set.remove(&"phantom".to_string()));
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn test_falsify_lwwmap_merge_tombstone_vs_live() {
+        // Node A has live value at t=200. Node B has tombstone at t=300.
+        // After merge, tombstone wins (newer).
+        let mut map_a = LWWMap::new();
+        map_a.set("k".to_string(), "alive".to_string(), ts(200, 0, "a"));
+
+        let mut map_b = LWWMap::new();
+        map_b.set("k".to_string(), "doomed".to_string(), ts(100, 0, "b"));
+        map_b.remove(&"k".to_string(), ts(300, 0, "b"));
+
+        map_a.merge(&map_b);
+        assert!(
+            map_a.get(&"k".to_string()).is_none(),
+            "tombstone at t=300 should win over live at t=200"
+        );
+    }
+
+    #[test]
+    fn test_falsify_vector_clock_not_concurrent_with_self() {
+        let mut vc = VectorClock::new();
+        vc.increment(&node("a"));
+        assert!(
+            !vc.is_concurrent_with(&vc),
+            "a clock should not be concurrent with itself"
+        );
+        assert!(vc.is_before_or_equal(&vc));
+        assert!(!vc.is_strictly_before(&vc));
+    }
 }
