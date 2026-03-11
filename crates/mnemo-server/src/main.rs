@@ -330,6 +330,23 @@ async fn main() -> anyhow::Result<()> {
             }
             hc
         },
+        pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::new({
+            let mut dc = mnemo_ingest::dag::DagConfig::default();
+            if let Ok(v) = std::env::var("MNEMO_PIPELINE_RETRY_MAX") {
+                if let Ok(n) = v.parse() {
+                    dc.max_retries = n;
+                }
+            }
+            if let Ok(v) = std::env::var("MNEMO_PIPELINE_DEAD_LETTER_ENABLED") {
+                dc.dead_letter_enabled = v == "true" || v == "1";
+            }
+            if let Ok(v) = std::env::var("MNEMO_PIPELINE_DEAD_LETTER_MAX_SIZE") {
+                if let Ok(n) = v.parse() {
+                    dc.dead_letter_max_size = n;
+                }
+            }
+            dc
+        })),
     };
 
     if let Err(err) = restore_webhook_state(&app_state).await {

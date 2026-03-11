@@ -114,6 +114,67 @@ for entity search results, along with curvature and blend parameters.
 }
 ```
 
+### `GET /api/v1/ops/pipeline`
+
+DAG pipeline status. Returns per-step metrics, DAG structure, dead-letter queue
+summary, and pipeline configuration.
+
+**Configuration** (environment variables):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MNEMO_PIPELINE_RETRY_MAX` | `3` | Maximum retries per step before dead-lettering |
+| `MNEMO_PIPELINE_DEAD_LETTER_ENABLED` | `true` | Enable the dead-letter queue for permanently failed items |
+| `MNEMO_PIPELINE_DEAD_LETTER_MAX_SIZE` | `1000` | Maximum items in the dead-letter queue (evicts oldest) |
+
+**Response shape**:
+```json
+{
+  "steps": [
+    {
+      "step": "ingest",
+      "executions": 150,
+      "successes": 148,
+      "failures": 2,
+      "retries": 3,
+      "error_rate": 0.0133,
+      "avg_duration_us": 1200
+    }
+  ],
+  "dag": [
+    {
+      "step": "ingest",
+      "description": "Claim episode from pending queue",
+      "dependencies": [],
+      "critical": true
+    },
+    {
+      "step": "extract",
+      "description": "LLM entity + relationship extraction",
+      "dependencies": ["ingest"],
+      "critical": true
+    }
+  ],
+  "dead_letter": {
+    "count": 0,
+    "max_size": 1000,
+    "recent_items": []
+  },
+  "config": {
+    "max_retries": 3,
+    "dead_letter_enabled": true,
+    "dead_letter_max_size": 1000,
+    "retry_base_delay_ms": 500
+  }
+}
+```
+
+The `steps` array contains metrics for all 7 pipeline steps: `ingest`, `extract`,
+`embed`, `graph_update`, `webhook_notify`, `digest_invalidate`, `session_summarize`.
+
+The `dag` array describes the directed acyclic graph structure: each step lists its
+dependencies and whether it is critical (failure triggers retry) or optional.
+
 ### `GET /api/v1/traces/:request_id`
 
 Cross-pipeline trace lookup by request correlation ID.

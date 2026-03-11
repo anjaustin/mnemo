@@ -276,4 +276,6 @@ pub struct AppState {
     pub embedding_dimensions: u32,
     /// Hyperbolic HNSW config for Poincare ball entity re-ranking.
     pub hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig,
+    /// DAG pipeline metrics — per-step execution counts, latency, dead-letter queue.
+    pub pipeline_metrics: Arc<mnemo_ingest::dag::PipelineMetrics>,
 }

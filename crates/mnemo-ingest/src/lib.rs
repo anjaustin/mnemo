@@ -9,6 +9,8 @@
 //! - Contradiction detection and edge invalidation
 //! - Exponential backoff retry on transient failures
 
+pub mod dag;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

@@ -184,6 +184,7 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         compression_stats: Arc::new(mnemo_retrieval::compression::CompressionStats::default()),
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
+        pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
     };
 
     let app = build_router(state.clone()).layer(from_fn_with_state(
@@ -5026,6 +5027,7 @@ async fn test_webhook_persistence_survives_restart() {
         compression_stats: Arc::new(mnemo_retrieval::compression::CompressionStats::default()),
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
+        pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
     };
 
     let app1 = build_router(state1.clone()).layer(from_fn_with_state(
@@ -5122,6 +5124,7 @@ async fn test_webhook_persistence_survives_restart() {
         compression_stats: Arc::new(mnemo_retrieval::compression::CompressionStats::default()),
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
+        pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
     };
 
     // Verify state2 starts empty
