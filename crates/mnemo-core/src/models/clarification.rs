@@ -423,4 +423,199 @@ mod tests {
         assert_eq!(req.min_severity, 0.6);
         assert_eq!(req.max_clarifications, 5);
     }
+
+    // ─── Self-Healing Memory Falsification ────────────────────────
+
+    #[test]
+    fn test_falsify_double_resolve() {
+        let mut req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            "question".into(),
+            vec![Uuid::from_u128(10)],
+            "entity".into(),
+            "label".into(),
+            vec!["fact A".into(), "fact B".into()],
+            0.8,
+            7,
+        );
+        req.resolve("first answer".into(), Some(Uuid::from_u128(10)), None);
+        assert_eq!(req.status, ClarificationStatus::Resolved);
+        let first_resolved = req.resolved_at;
+
+        // Second resolve should overwrite (idempotent)
+        req.resolve("second answer".into(), Some(Uuid::from_u128(11)), None);
+        assert_eq!(req.status, ClarificationStatus::Resolved);
+        assert_eq!(req.resolution_answer.as_deref(), Some("second answer"));
+        assert_eq!(req.winning_edge_id, Some(Uuid::from_u128(11)));
+        assert!(req.resolved_at >= first_resolved);
+    }
+
+    #[test]
+    fn test_falsify_dismiss_then_resolve() {
+        let mut req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            "question".into(),
+            vec![],
+            "entity".into(),
+            "label".into(),
+            vec![],
+            0.5,
+            7,
+        );
+        req.dismiss();
+        assert_eq!(req.status, ClarificationStatus::Dismissed);
+        // Resolve after dismiss should still work at the model level
+        // (server would reject, but model is permissive)
+        req.resolve("late answer".into(), None, None);
+        assert_eq!(req.status, ClarificationStatus::Resolved);
+    }
+
+    #[test]
+    fn test_falsify_expire_then_check_is_expired() {
+        let mut req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            "question".into(),
+            vec![],
+            "entity".into(),
+            "label".into(),
+            vec![],
+            0.5,
+            7,
+        );
+        req.expire();
+        // After explicit expire(), is_expired should return false
+        // because status is now Expired (not Pending)
+        assert!(
+            !req.is_expired(),
+            "Expired status should not report as is_expired (that's for pending-past-TTL)"
+        );
+    }
+
+    #[test]
+    fn test_falsify_zero_ttl_immediate_expiry() {
+        let mut req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            "question".into(),
+            vec![],
+            "entity".into(),
+            "label".into(),
+            vec![],
+            0.5,
+            0,
+        );
+        // Force past expiry
+        req.expires_at = Utc::now() - chrono::Duration::milliseconds(1);
+        assert!(
+            req.is_expired(),
+            "Zero TTL should result in immediate expiry"
+        );
+    }
+
+    #[test]
+    fn test_falsify_very_long_question() {
+        let long_question = "Q".repeat(10_000);
+        let req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            long_question.clone(),
+            vec![],
+            "entity".into(),
+            "label".into(),
+            vec![],
+            0.5,
+            7,
+        );
+        assert_eq!(req.question.len(), 10_000);
+        // Serialization should handle long strings
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ClarificationRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.question.len(), 10_000);
+    }
+
+    #[test]
+    fn test_falsify_empty_conflicting_facts() {
+        let req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            "question".into(),
+            vec![],
+            "entity".into(),
+            "label".into(),
+            vec![], // no conflicting facts
+            0.5,
+            7,
+        );
+        assert!(req.conflicting_facts.is_empty());
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ClarificationRequest = serde_json::from_str(&json).unwrap();
+        assert!(back.conflicting_facts.is_empty());
+    }
+
+    #[test]
+    fn test_falsify_unicode_in_question_and_facts() {
+        let req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            "ケンドラはアディダスが好きですか？".into(),
+            vec![Uuid::from_u128(10)],
+            "ケンドラ".into(),
+            "好き".into(),
+            vec!["アディダス靴".into(), "ナイキ靴".into()],
+            0.8,
+            7,
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ClarificationRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.source_entity, "ケンドラ");
+        assert_eq!(back.conflicting_facts.len(), 2);
+    }
+
+    #[test]
+    fn test_falsify_generate_question_special_characters() {
+        let q = generate_clarification_question(
+            "O'Malley & Co.",
+            "supplies",
+            &[
+                "supplies \"premium\" widgets".into(),
+                "supplies <basic> parts".into(),
+            ],
+        );
+        assert!(q.contains("O'Malley"));
+        assert!(q.contains("premium"));
+    }
+
+    #[test]
+    fn test_falsify_many_conflict_edge_ids() {
+        let edge_ids: Vec<Uuid> = (0..100).map(|i| Uuid::from_u128(i)).collect();
+        let req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            "question".into(),
+            edge_ids.clone(),
+            "entity".into(),
+            "label".into(),
+            vec![],
+            0.5,
+            7,
+        );
+        assert_eq!(req.conflict_edge_ids.len(), 100);
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ClarificationRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.conflict_edge_ids.len(), 100);
+    }
+
+    #[test]
+    fn test_falsify_resolve_with_no_winning_edge() {
+        let mut req = ClarificationRequest::new(
+            Uuid::from_u128(1),
+            "question".into(),
+            vec![Uuid::from_u128(10), Uuid::from_u128(11)],
+            "entity".into(),
+            "label".into(),
+            vec!["A".into(), "B".into()],
+            0.8,
+            7,
+        );
+        // Resolve without specifying a winner — just providing an answer
+        req.resolve("both are outdated".into(), None, None);
+        assert_eq!(req.status, ClarificationStatus::Resolved);
+        assert!(req.winning_edge_id.is_none());
+        assert_eq!(req.resolution_answer.as_deref(), Some("both are outdated"));
+    }
 }
