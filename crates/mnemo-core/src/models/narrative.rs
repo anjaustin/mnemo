@@ -503,4 +503,153 @@ mod tests {
         assert_eq!(de.session_id, input.session_id);
         assert_eq!(de.summary, input.summary);
     }
+
+    // ─── Falsification / Adversarial Tests ─────────────────────────
+
+    #[test]
+    fn test_falsify_evolve_overflow_version() {
+        // Version counter should not overflow or panic with many evolutions
+        let uid = make_user_id();
+        let mut n = UserNarrative::new(uid, "Start".into(), vec![]);
+        n.version = u64::MAX - 1;
+        let n2 = n.evolve("Next".into(), vec![], 1);
+        assert_eq!(n2.version, u64::MAX);
+        // One more evolution would overflow — this should be caught
+        // (currently wraps in release mode; the test documents this edge case)
+    }
+
+    #[test]
+    fn test_falsify_evolve_session_count_accumulates() {
+        // Ensure session_count is strictly additive, never decreasing
+        let uid = make_user_id();
+        let n1 = UserNarrative::new(uid, "V1".into(), vec![]);
+        let n2 = n1.evolve("V2".into(), vec![], 10);
+        let n3 = n2.evolve("V3".into(), vec![], 0);
+        assert_eq!(n3.session_count, 10); // 0 sessions added = no change
+        let n4 = n3.evolve("V4".into(), vec![], 5);
+        assert_eq!(n4.session_count, 15);
+    }
+
+    #[test]
+    fn test_falsify_empty_narrative_text_whitespace_variants() {
+        let uid = make_user_id();
+        // Various whitespace strings should all be considered empty
+        for ws in &["", " ", "  ", "\t", "\n", " \t\n "] {
+            let n = UserNarrative::new(uid, ws.to_string(), vec![]);
+            assert!(n.is_empty(), "Expected is_empty() for {:?}", ws);
+        }
+    }
+
+    #[test]
+    fn test_falsify_parse_narrative_output_nested_json() {
+        // JSON with nested braces should parse correctly
+        let raw = r#"{"narrative_text": "User said {\"hello\"}", "chapters": []}"#;
+        let output = parse_narrative_output(raw).unwrap();
+        assert!(output.narrative_text.contains("hello"));
+    }
+
+    #[test]
+    fn test_falsify_parse_narrative_output_multiple_json_objects() {
+        // If text contains multiple JSON objects, should extract the outermost one
+        let raw = "Prefix {\"narrative_text\": \"outer\", \"chapters\": []} suffix {\"junk\": 1}";
+        let output = parse_narrative_output(raw).unwrap();
+        // The outermost {...} includes everything from first { to last }
+        // This tests that the brace-matching heuristic works
+        assert!(!output.narrative_text.is_empty());
+    }
+
+    #[test]
+    fn test_falsify_parse_narrative_output_unicode() {
+        let json = r#"{"narrative_text": "User prefers \u00e9clair and caf\u00e9", "chapters": [{"period": "\u2603 Winter", "summary": "Cold season", "key_changes": ["\u2764 Love"]}]}"#;
+        let output = parse_narrative_output(json).unwrap();
+        assert!(output.narrative_text.contains("caf"));
+        assert_eq!(output.chapters.len(), 1);
+    }
+
+    #[test]
+    fn test_falsify_parse_narrative_output_only_whitespace() {
+        let result = parse_narrative_output("   \n\t  ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_falsify_chapter_with_empty_key_changes() {
+        let chapter = NarrativeChapter {
+            period: "Q1".into(),
+            summary: "Nothing changed".into(),
+            key_changes: vec![],
+            session_ids: vec![],
+        };
+        let json = serde_json::to_string(&chapter).unwrap();
+        let de: NarrativeChapter = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.key_changes.len(), 0);
+    }
+
+    #[test]
+    fn test_falsify_chapter_missing_optional_fields_deserialize() {
+        // Chapters in LLM output may omit session_ids and key_changes
+        let json = r#"{"period": "March", "summary": "Stuff happened"}"#;
+        let chapter: NarrativeChapter = serde_json::from_str(json).unwrap();
+        assert_eq!(chapter.period, "March");
+        assert!(chapter.key_changes.is_empty());
+        assert!(chapter.session_ids.is_empty());
+    }
+
+    #[test]
+    fn test_falsify_very_long_narrative_text() {
+        let uid = make_user_id();
+        let long_text = "x".repeat(100_000);
+        let n = UserNarrative::new(uid, long_text.clone(), vec![]);
+        assert_eq!(n.narrative_text.len(), 100_000);
+        // Serde roundtrip should handle large text
+        let json = serde_json::to_string(&n).unwrap();
+        let de: UserNarrative = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.narrative_text.len(), 100_000);
+    }
+
+    #[test]
+    fn test_falsify_many_chapters() {
+        let uid = make_user_id();
+        let chapters: Vec<NarrativeChapter> = (0..500)
+            .map(|i| NarrativeChapter {
+                period: format!("Week {i}"),
+                summary: format!("Summary for week {i}"),
+                key_changes: vec![format!("Change {i}")],
+                session_ids: vec![Uuid::from_u128(i as u128)],
+            })
+            .collect();
+        let n = UserNarrative::new(uid, "Narrative".into(), chapters);
+        assert_eq!(n.chapters.len(), 500);
+        assert_eq!(n.total_key_changes(), 500);
+        assert_eq!(n.total_referenced_sessions(), 500);
+    }
+
+    #[test]
+    fn test_falsify_build_prompt_special_characters_in_summaries() {
+        let summaries = vec![SessionSummaryInput {
+            session_id: Uuid::from_u128(1),
+            session_name: Some("Session with \"quotes\" & <html>".into()),
+            summary: "User said: 'I like {braces} and [brackets]'".into(),
+            created_at: Utc::now(),
+        }];
+        let prompt = build_narrative_prompt(None, &summaries, &[], 5);
+        // Should include special characters without panicking
+        assert!(prompt.contains("quotes"));
+        assert!(prompt.contains("{braces}"));
+    }
+
+    #[test]
+    fn test_falsify_narrative_created_at_preserved_across_evolve() {
+        // Regression test: created_at must be frozen at v1
+        let uid = make_user_id();
+        let n1 = UserNarrative::new(uid, "V1".into(), vec![]);
+        let original_created = n1.created_at;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let n2 = n1.evolve("V2".into(), vec![], 1);
+        assert_eq!(n2.created_at, original_created);
+        assert!(n2.updated_at >= original_created);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let n3 = n2.evolve("V3".into(), vec![], 1);
+        assert_eq!(n3.created_at, original_created);
+    }
 }
