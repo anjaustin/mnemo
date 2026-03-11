@@ -261,7 +261,7 @@ pub fn compute_edge_fisher_importance(
     let rarity_signal = 1.0 / (1.0 + total_edges_in_label as f32);
 
     // Connectivity signal: how central are the connected entities
-    let connectivity = ((outgoing_count + incoming_count) as f32).sqrt() / 10.0;
+    let connectivity = (outgoing_count as f32 + incoming_count as f32).sqrt() / 10.0;
     let connectivity_signal = connectivity.min(1.0);
 
     // Composite: weighted average
@@ -785,5 +785,188 @@ mod tests {
         let query: StaleFactsQuery = serde_json::from_str(json).unwrap();
         assert_eq!(query.threshold, DEFAULT_REVALIDATION_THRESHOLD);
         assert_eq!(query.half_life_days, DEFAULT_EDGE_DECAY_HALF_LIFE_DAYS);
+    }
+
+    // ─── Confidence Decay Falsification ───────────────────────────
+
+    #[test]
+    fn test_falsify_zero_half_life_no_panic() {
+        // half_life_days=0 is clamped to 1 internally — should not divide by zero
+        let edge = make_edge_with_age(30, 0.8, 1);
+        let eff = effective_edge_confidence(&edge, 0.5, 0);
+        assert!(
+            eff.is_finite(),
+            "Zero half-life must not produce NaN/Inf, got {}",
+            eff
+        );
+        assert!(eff >= 0.0 && eff <= 1.0);
+    }
+
+    #[test]
+    fn test_falsify_future_valid_at_no_negative_age() {
+        // Edge valid_at in the future — age should be clamped to 0
+        let future_edge = {
+            let valid_at = Utc::now() + chrono::Duration::days(30);
+            let mut edge = Edge::from_extraction(
+                &sample_relationship(),
+                Uuid::from_u128(1),
+                Uuid::from_u128(2),
+                Uuid::from_u128(3),
+                Uuid::from_u128(4),
+                valid_at,
+            );
+            edge.confidence = 0.8;
+            edge
+        };
+        let eff = effective_edge_confidence(&future_edge, 0.0, 90);
+        // age_days is clamped to 0, so decay_factor = 1.0
+        assert!(
+            (eff - 0.8).abs() < 0.05,
+            "Future edge should have no decay applied, got {}",
+            eff
+        );
+    }
+
+    #[test]
+    fn test_falsify_fisher_importance_above_one_clamped() {
+        let edge = make_edge_with_age(90, 0.8, 1);
+        let eff_1 = effective_edge_confidence(&edge, 1.0, 90);
+        let eff_5 = effective_edge_confidence(&edge, 5.0, 90); // way above 1.0
+        assert_eq!(
+            eff_1, eff_5,
+            "Fisher importance > 1.0 should be clamped to 1.0"
+        );
+    }
+
+    #[test]
+    fn test_falsify_fisher_importance_negative_clamped() {
+        let edge = make_edge_with_age(90, 0.8, 1);
+        let eff_0 = effective_edge_confidence(&edge, 0.0, 90);
+        let eff_neg = effective_edge_confidence(&edge, -5.0, 90);
+        assert_eq!(
+            eff_0, eff_neg,
+            "Negative Fisher importance should be clamped to 0.0"
+        );
+    }
+
+    #[test]
+    fn test_falsify_corroboration_count_max_no_overflow() {
+        let edge = make_edge_with_age(0, 0.5, u32::MAX);
+        let eff = effective_edge_confidence(&edge, 0.0, 90);
+        assert!(eff.is_finite(), "u32::MAX corroboration must not overflow");
+        assert!(
+            eff >= 0.0 && eff <= 1.0,
+            "Result must be clamped, got {}",
+            eff
+        );
+    }
+
+    #[test]
+    fn test_falsify_zero_confidence_stays_zero() {
+        let edge = make_edge_with_age(0, 0.0, 10);
+        let eff = effective_edge_confidence(&edge, 1.0, 90);
+        assert_eq!(
+            eff, 0.0,
+            "Zero confidence should stay zero regardless of boosts"
+        );
+    }
+
+    #[test]
+    fn test_falsify_decay_monotonically_decreasing() {
+        // Effective confidence should decrease as age increases (same edge otherwise)
+        let ages = [0, 30, 60, 90, 180, 365, 730];
+        let mut prev_eff = f32::MAX;
+        for age in ages {
+            let edge = make_edge_with_age(age, 0.8, 1);
+            let eff = effective_edge_confidence(&edge, 0.3, 90);
+            assert!(
+                eff <= prev_eff,
+                "Decay must be monotonically decreasing: age={} eff={} prev={}",
+                age,
+                eff,
+                prev_eff
+            );
+            prev_eff = eff;
+        }
+    }
+
+    #[test]
+    fn test_falsify_stale_query_zero_threshold() {
+        // threshold=0.0 means nothing is stale (all effective_confidence >= 0.0)
+        let query = StaleFactsQuery {
+            threshold: 0.0,
+            ..Default::default()
+        };
+        // An edge with any positive confidence should not be stale at threshold 0.0
+        let edge = make_edge_with_age(365, 0.1, 1);
+        let eff = effective_edge_confidence(&edge, 0.0, query.half_life_days);
+        // At 365 days with half_life=90: decay = 2^(-365/90) ≈ 0.057
+        // eff = 0.1 * 1.0 * 0.057 * 1.0 ≈ 0.006
+        // Still > 0.0, so not stale at threshold 0.0
+        assert!(
+            eff >= query.threshold,
+            "At threshold 0.0, positive-confidence edges should not be stale"
+        );
+    }
+
+    #[test]
+    fn test_falsify_stale_query_threshold_above_one() {
+        // threshold > 1.0 means everything is stale
+        let query = StaleFactsQuery {
+            threshold: 1.5,
+            ..Default::default()
+        };
+        let edge = make_edge_with_age(0, 1.0, 20);
+        let eff = effective_edge_confidence(&edge, 1.0, query.half_life_days);
+        assert!(
+            eff < query.threshold,
+            "At threshold 1.5, even max-boosted edges should be stale (eff={})",
+            eff
+        );
+    }
+
+    #[test]
+    fn test_falsify_revalidate_boundary_confidence() {
+        // Both 0.0 and 1.0 should be valid confidence values
+        let req_zero = RevalidateFactRequest {
+            edge_id: Uuid::from_u128(1),
+            new_confidence: 0.0,
+            evidence_episode_id: None,
+        };
+        let req_one = RevalidateFactRequest {
+            edge_id: Uuid::from_u128(1),
+            new_confidence: 1.0,
+            evidence_episode_id: None,
+        };
+        // These should serialize/deserialize without error
+        let json_zero = serde_json::to_string(&req_zero).unwrap();
+        let json_one = serde_json::to_string(&req_one).unwrap();
+        let back_zero: RevalidateFactRequest = serde_json::from_str(&json_zero).unwrap();
+        let back_one: RevalidateFactRequest = serde_json::from_str(&json_one).unwrap();
+        assert_eq!(back_zero.new_confidence, 0.0);
+        assert_eq!(back_one.new_confidence, 1.0);
+    }
+
+    #[test]
+    fn test_falsify_edge_fisher_importance_all_zeros() {
+        // All zeros should not panic and should return a valid importance
+        let fi = compute_edge_fisher_importance(0, 0, 0, 0);
+        assert!(fi.is_finite(), "All-zero inputs must not produce NaN");
+        assert!(
+            fi >= 0.0 && fi <= 1.0,
+            "Importance must be clamped, got {}",
+            fi
+        );
+    }
+
+    #[test]
+    fn test_falsify_edge_fisher_importance_u32_max_inputs() {
+        let fi = compute_edge_fisher_importance(u32::MAX, u32::MAX, u32::MAX, u32::MAX);
+        assert!(fi.is_finite(), "u32::MAX inputs must not overflow to Inf");
+        assert!(
+            fi >= 0.0 && fi <= 1.0,
+            "Importance must be clamped, got {}",
+            fi
+        );
     }
 }
