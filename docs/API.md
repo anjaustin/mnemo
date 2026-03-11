@@ -175,6 +175,58 @@ The `steps` array contains metrics for all 7 pipeline steps: `ingest`, `extract`
 The `dag` array describes the directed acyclic graph structure: each step lists its
 dependencies and whether it is critical (failure triggers retry) or optional.
 
+### `GET /api/v1/ops/sync`
+
+Delta consensus sync status. Reports node identity, vector clock state, known
+peers, and delta exchange counters.
+
+**Configuration** (environment variables):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MNEMO_SYNC_ENABLED` | `false` | Enable delta consensus sync |
+| `MNEMO_SYNC_NODE_ID` | `standalone` | Unique identifier for this node in the cluster |
+
+**Response shape** (disabled):
+```json
+{
+  "node_id": "standalone",
+  "vector_clock": { "entries": {} },
+  "known_peers": [],
+  "deltas_produced": 0,
+  "deltas_received": 0,
+  "conflicts_resolved": 0,
+  "last_sync": {},
+  "enabled": false
+}
+```
+
+**Response shape** (enabled):
+```json
+{
+  "node_id": "us-east-1",
+  "vector_clock": { "entries": { "us-east-1": 42, "eu-west-1": 38 } },
+  "known_peers": ["eu-west-1", "ap-south-1"],
+  "deltas_produced": 1523,
+  "deltas_received": 1487,
+  "conflicts_resolved": 12,
+  "last_sync": {
+    "eu-west-1": "2026-03-11T10:30:00Z",
+    "ap-south-1": "2026-03-11T10:29:45Z"
+  },
+  "enabled": true
+}
+```
+
+CRDT types available for field-level sync:
+- **GCounter** — grow-only counters (mention_count, episode_count)
+- **LWWRegister** — last-writer-wins registers (name, summary, status)
+- **ORSet** — observed-remove sets with add-wins semantics (aliases, tags)
+- **LWWMap** — last-writer-wins maps (metadata fields)
+
+Causal ordering is maintained via **Hybrid Logical Clocks (HLC)** and
+**Vector Clocks** to detect concurrent writes across nodes.
+
 ### `GET /api/v1/traces/:request_id`
 
 Cross-pipeline trace lookup by request correlation ID.

@@ -185,6 +185,7 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
         pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
+        sync_status: Arc::new(tokio::sync::RwLock::new(mnemo_core::sync::SyncStatus::disabled())),
     };
 
     let app = build_router(state.clone()).layer(from_fn_with_state(
@@ -5028,6 +5029,7 @@ async fn test_webhook_persistence_survives_restart() {
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
         pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
+        sync_status: Arc::new(tokio::sync::RwLock::new(mnemo_core::sync::SyncStatus::disabled())),
     };
 
     let app1 = build_router(state1.clone()).layer(from_fn_with_state(
@@ -5125,6 +5127,7 @@ async fn test_webhook_persistence_survives_restart() {
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
         pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
+        sync_status: Arc::new(tokio::sync::RwLock::new(mnemo_core::sync::SyncStatus::disabled())),
     };
 
     // Verify state2 starts empty

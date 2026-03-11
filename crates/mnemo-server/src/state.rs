@@ -278,4 +278,6 @@ pub struct AppState {
     pub hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig,
     /// DAG pipeline metrics — per-step execution counts, latency, dead-letter queue.
     pub pipeline_metrics: Arc<mnemo_ingest::dag::PipelineMetrics>,
+    /// Delta consensus sync status — node identity, vector clock, peer tracking.
+    pub sync_status: Arc<RwLock<mnemo_core::sync::SyncStatus>>,
 }

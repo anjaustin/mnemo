@@ -347,6 +347,27 @@ async fn main() -> anyhow::Result<()> {
             }
             dc
         })),
+        sync_status: Arc::new(tokio::sync::RwLock::new({
+            let node_id_str = std::env::var("MNEMO_SYNC_NODE_ID")
+                .unwrap_or_else(|_| "standalone".to_string());
+            let enabled = std::env::var("MNEMO_SYNC_ENABLED")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false);
+            if enabled {
+                mnemo_core::sync::SyncStatus {
+                    node_id: mnemo_core::sync::NodeId::new(node_id_str),
+                    vector_clock: mnemo_core::sync::VectorClock::new(),
+                    known_peers: Vec::new(),
+                    deltas_produced: 0,
+                    deltas_received: 0,
+                    conflicts_resolved: 0,
+                    last_sync: std::collections::BTreeMap::new(),
+                    enabled: true,
+                }
+            } else {
+                mnemo_core::sync::SyncStatus::disabled()
+            }
+        })),
     };
 
     if let Err(err) = restore_webhook_state(&app_state).await {
