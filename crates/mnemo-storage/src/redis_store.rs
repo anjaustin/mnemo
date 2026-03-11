@@ -1862,3 +1862,24 @@ impl ClarificationStore for RedisStateStore {
         Ok(())
     }
 }
+
+// ─── NarrativeStore ───────────────────────────────────────────────
+
+use mnemo_core::models::narrative::UserNarrative;
+
+impl NarrativeStore for RedisStateStore {
+    async fn save_narrative(&self, narrative: &UserNarrative) -> Result<(), MnemoError> {
+        let key = self.key(&["narrative", &narrative.user_id.to_string()]);
+        self.set_json(&key, narrative).await
+    }
+
+    async fn get_narrative(&self, user_id: Uuid) -> Result<Option<UserNarrative>, MnemoError> {
+        let key = self.key(&["narrative", &user_id.to_string()]);
+        self.get_json::<UserNarrative>(&key).await
+    }
+
+    async fn delete_narrative(&self, user_id: Uuid) -> Result<(), MnemoError> {
+        let key = self.key(&["narrative", &user_id.to_string()]);
+        self.del(&key).await
+    }
+}

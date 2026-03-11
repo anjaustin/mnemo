@@ -64,6 +64,7 @@ pub enum MemoryWebhookEventType {
     RevalidationNeeded,
     ClarificationGenerated,
     ClarificationResolved,
+    NarrativeRefreshed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

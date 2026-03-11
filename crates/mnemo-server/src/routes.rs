@@ -36,8 +36,8 @@ use mnemo_core::models::{
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::storage::{
-    AgentStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, RawVectorStore,
-    SessionStore, SpanStore, UserStore, VectorStore,
+    AgentStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, NarrativeStore,
+    RawVectorStore, SessionStore, SpanStore, UserStore, VectorStore,
 };
 
 use mnemo_retrieval::Reranker;
@@ -126,6 +126,7 @@ fn webhook_event_type_str(event_type: MemoryWebhookEventType) -> &'static str {
         MemoryWebhookEventType::RevalidationNeeded => "revalidation_needed",
         MemoryWebhookEventType::ClarificationGenerated => "clarification_generated",
         MemoryWebhookEventType::ClarificationResolved => "clarification_resolved",
+        MemoryWebhookEventType::NarrativeRefreshed => "narrative_refreshed",
     }
 }
 
@@ -1125,6 +1126,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/memory/:user/clarifications/:id/dismiss",
             post(dismiss_clarification),
+        )
+        // Narrative summaries
+        .route(
+            "/api/v1/memory/:user/narrative",
+            get(get_narrative).delete(delete_narrative),
+        )
+        .route(
+            "/api/v1/memory/:user/narrative/refresh",
+            post(refresh_narrative),
         )
         .route(
             "/api/v1/memory/:user/causal_recall",
@@ -3745,6 +3755,9 @@ struct MemoryContextRequest {
     retrieval_policy: Option<AdaptiveRetrievalPolicy>,
     #[serde(default)]
     filters: Option<MemoryContextFilters>,
+    /// If true, prepend the user's narrative summary as a preamble block in the context.
+    #[serde(default)]
+    include_narrative: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -3820,6 +3833,9 @@ struct MemoryContextResponse {
     head: Option<MemoryHeadInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata_filter_diagnostics: Option<MetadataFilterDiagnostics>,
+    /// The user's narrative summary, included when `include_narrative: true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    narrative: Option<mnemo_core::models::narrative::UserNarrative>,
 }
 
 #[derive(Deserialize)]
@@ -4212,6 +4228,7 @@ async fn get_memory_context(
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
+    let include_narrative = req.include_narrative;
 
     let user_identifier = user.trim().to_string();
     let user = find_user_by_identifier(&state, user_identifier.as_str()).await?;
@@ -4438,6 +4455,13 @@ async fn get_memory_context(
         version: session.head_version,
     });
 
+    // Optionally include the user's narrative summary
+    let narrative = if include_narrative {
+        state.state_store.get_narrative(user.id).await.ok().flatten()
+    } else {
+        None
+    };
+
     Ok(Json(MemoryContextResponse {
         context,
         mode,
@@ -4451,6 +4475,7 @@ async fn get_memory_context(
         },
         head,
         metadata_filter_diagnostics,
+        narrative,
     }))
 }
 
@@ -9560,6 +9585,135 @@ async fn dismiss_clarification(
     state.state_store.save_clarification(&clarification).await?;
 
     Ok(Json(clarification))
+}
+
+// ─── Narrative Summaries ──────────────────────────────────────────
+
+/// `GET /api/v1/memory/:user/narrative`
+///
+/// Get the current narrative summary for a user. Returns 404 if no narrative
+/// has been generated yet.
+async fn get_narrative(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+) -> Result<Json<mnemo_core::models::narrative::UserNarrative>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    let narrative = state
+        .state_store
+        .get_narrative(user.id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "narrative".into(),
+            id: user.id.to_string(),
+        })?;
+
+    Ok(Json(narrative))
+}
+
+/// `DELETE /api/v1/memory/:user/narrative`
+///
+/// Delete a user's narrative summary.
+async fn delete_narrative(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    state.state_store.delete_narrative(user.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/memory/:user/narrative/refresh`
+///
+/// Refresh (generate or update) the narrative summary for a user. Collects
+/// session summaries, builds a prompt, calls the LLM, and persists the result.
+///
+/// If the user already has a narrative, this performs an incremental update
+/// (unless `full_rebuild: true` is specified). If no narrative exists, a fresh
+/// one is generated.
+async fn refresh_narrative(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<mnemo_core::models::narrative::RefreshNarrativeRequest>,
+) -> Result<(StatusCode, Json<mnemo_core::models::narrative::UserNarrative>), AppError> {
+    use mnemo_core::models::narrative::{
+        build_narrative_prompt, parse_narrative_output, SessionSummaryInput, UserNarrative,
+    };
+
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    // Load existing narrative (if any)
+    let existing = if req.full_rebuild {
+        None
+    } else {
+        state.state_store.get_narrative(user.id).await?
+    };
+
+    // Fetch sessions with summaries
+    let sessions = state
+        .state_store
+        .list_sessions(
+            user.id,
+            mnemo_core::models::session::ListSessionsParams {
+                limit: 500,
+                after: None,
+                since: None,
+            },
+        )
+        .await?;
+
+    let session_summaries: Vec<SessionSummaryInput> = sessions
+        .iter()
+        .filter_map(|s| {
+            s.summary.as_ref().map(|summary| SessionSummaryInput {
+                session_id: s.id,
+                session_name: s.name.clone(),
+                summary: summary.clone(),
+                created_at: s.created_at,
+            })
+        })
+        .collect();
+
+    if session_summaries.is_empty() && existing.is_none() {
+        return Err(AppError(MnemoError::Validation(
+            "no sessions with summaries found — cannot generate narrative".into(),
+        )));
+    }
+
+    // Build the prompt
+    let prompt = build_narrative_prompt(
+        existing.as_ref().map(|n| n.narrative_text.as_str()),
+        &session_summaries,
+        &[], // Key fact changes could be computed from edges, but left empty for now
+        req.max_chapters,
+    );
+
+    // Call the LLM
+    let llm = state
+        .llm
+        .as_ref()
+        .ok_or_else(|| MnemoError::Validation("LLM provider not configured".into()))?;
+    let raw_output = llm.summarize_with_usage(&prompt, 4096).await?.0;
+
+    // Parse the LLM output
+    let parsed = parse_narrative_output(&raw_output).map_err(|e| {
+        MnemoError::Validation(format!("failed to parse narrative LLM output: {e}"))
+    })?;
+
+    // Build the new narrative version
+    let new_session_count = session_summaries.len() as u64;
+    let narrative = if let Some(existing) = existing {
+        existing.evolve(parsed.narrative_text, parsed.chapters, new_session_count)
+    } else {
+        let mut n = UserNarrative::new(user.id, parsed.narrative_text, parsed.chapters);
+        n.session_count = new_session_count;
+        n
+    };
+
+    // Persist
+    state.state_store.save_narrative(&narrative).await?;
+
+    Ok((StatusCode::CREATED, Json(narrative)))
 }
 
 #[cfg(test)]

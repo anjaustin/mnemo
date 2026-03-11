@@ -424,6 +424,7 @@ pub trait SpanStore: Send + Sync {
 }
 
 use crate::models::clarification::ClarificationRequest;
+use crate::models::narrative::UserNarrative;
 
 /// Persistence for self-healing memory clarification requests.
 #[allow(async_fn_in_trait)]
@@ -447,6 +448,24 @@ pub trait ClarificationStore: Send + Sync {
     async fn delete_clarification(&self, id: Uuid) -> StorageResult<()>;
 }
 
+// ─── Narrative Storage ─────────────────────────────────────────────
+
+/// Persistence for cross-session user narrative summaries.
+///
+/// Narratives are versioned — each update creates a new version keyed by user_id.
+/// The store keeps only the latest version (previous versions are overwritten).
+#[allow(async_fn_in_trait)]
+pub trait NarrativeStore: Send + Sync {
+    /// Save or update a user's narrative (overwrites previous version).
+    async fn save_narrative(&self, narrative: &UserNarrative) -> StorageResult<()>;
+
+    /// Get the current narrative for a user. Returns `None` if no narrative exists.
+    async fn get_narrative(&self, user_id: Uuid) -> StorageResult<Option<UserNarrative>>;
+
+    /// Delete a user's narrative.
+    async fn delete_narrative(&self, user_id: Uuid) -> StorageResult<()>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -461,6 +480,7 @@ pub trait StateStore:
     + DigestStore
     + SpanStore
     + ClarificationStore
+    + NarrativeStore
 {
 }
 
@@ -475,6 +495,7 @@ impl<T> StateStore for T where
         + DigestStore
         + SpanStore
         + ClarificationStore
+        + NarrativeStore
 {
 }
 

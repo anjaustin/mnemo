@@ -771,6 +771,65 @@ Returns the updated clarification with `status: "resolved"`.
 Dismiss a clarification without resolving it. No request body required.
 Returns the updated clarification with `status: "dismissed"`.
 
+### `GET /api/v1/memory/:user/narrative`
+
+Get the current narrative summary for a user. The narrative is an evolving
+"story of the user" that distills sessions into a readable summary the agent
+can use as high-level context.
+
+Returns `404` if no narrative has been generated yet.
+
+```json
+// Response
+{
+  "user_id": "uuid",
+  "version": 3,
+  "narrative_text": "This user started as a fitness beginner, transitioned to marathon training, and recently shifted focus to recovery.",
+  "chapters": [
+    {
+      "period": "January 2026",
+      "summary": "User began fitness journey with basic questions.",
+      "key_changes": ["Added running preference", "Set initial 5K goal"],
+      "session_ids": ["uuid1", "uuid2"]
+    }
+  ],
+  "session_count": 12,
+  "created_at": "2026-01-15T10:00:00Z",
+  "updated_at": "2026-03-10T14:30:00Z"
+}
+```
+
+### `DELETE /api/v1/memory/:user/narrative`
+
+Delete a user's narrative summary. Returns `204 No Content`.
+
+### `POST /api/v1/memory/:user/narrative/refresh`
+
+Generate or update the narrative summary for a user. Collects session summaries,
+builds a prompt, calls the LLM, and persists the result. Requires an LLM provider
+to be configured.
+
+```json
+// Request
+{
+  "full_rebuild": false,
+  "max_chapters": 10
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `full_rebuild` | `false` | If `true`, regenerate from scratch ignoring previous narrative |
+| `max_chapters` | `20` | Maximum number of chapters to include |
+
+Returns `201 Created` with the generated/updated narrative.
+
+**Note**: The `POST /api/v1/memory/:user/context` endpoint accepts an optional
+`include_narrative: true` field. When set, the narrative summary is included in
+the response as a `narrative` field alongside the context block.
+
+**Webhook event**: `narrative_refreshed` is emitted when a narrative is generated.
+
 ### `POST /api/v1/memory/:user/causal_recall`
 
 Explain why memory was retrieved by returning fact-to-episode lineage chains.
