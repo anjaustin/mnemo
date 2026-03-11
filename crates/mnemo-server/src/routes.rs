@@ -1092,6 +1092,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/edges/:id", delete(delete_edge))
         // Context & Search
         .route("/api/v1/users/:user_id/context", post(get_context))
+        .route("/api/v1/memory/feedback", post(memory_retrieval_feedback))
         // Memory API (high-level DX)
         .route("/api/v1/memory", post(remember_memory))
         .route("/api/v1/memory/extract", post(extract_memory))
@@ -6507,6 +6508,53 @@ async fn get_agent_context(
         .agent_identity_reads_total
         .fetch_add(1, Ordering::Relaxed);
     Ok(Json(response))
+}
+
+// ─── Memory Retrieval Feedback ─────────────────────────────────────
+
+#[derive(Deserialize)]
+struct RetrievalFeedbackRequest {
+    /// The entity IDs that were actually useful / cited by the agent.
+    positive_entity_ids: Vec<Uuid>,
+    /// All entity IDs that were returned by retrieval (for negative signal).
+    #[serde(default)]
+    all_entity_ids: Vec<Uuid>,
+}
+
+async fn memory_retrieval_feedback(
+    State(state): State<AppState>,
+    Json(req): Json<RetrievalFeedbackRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if req.positive_entity_ids.is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "positive_entity_ids is required".into(),
+        )));
+    }
+
+    // Build candidate list from all_entity_ids (or just positives if all not provided)
+    let candidates: Vec<(Uuid, f64)> = if req.all_entity_ids.is_empty() {
+        req.positive_entity_ids
+            .iter()
+            .map(|id| (*id, 1.0))
+            .collect()
+    } else {
+        req.all_entity_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, 1.0 - (i as f64 * 0.05)))
+            .collect()
+    };
+
+    let features_map = std::collections::HashMap::new();
+    state
+        .retrieval
+        .apply_gnn_feedback(&candidates, &[], &features_map, &req.positive_entity_ids, 16)
+        .await;
+
+    Ok(Json(serde_json::json!({
+        "accepted": true,
+        "positive_count": req.positive_entity_ids.len(),
+    })))
 }
 
 fn normalize_agent_id(agent_id: &str) -> Result<String, AppError> {

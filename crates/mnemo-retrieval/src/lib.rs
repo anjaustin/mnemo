@@ -15,6 +15,11 @@ use mnemo_core::traits::fulltext::FullTextStore;
 use mnemo_core::traits::llm::EmbeddingProvider;
 use mnemo_core::traits::storage::*;
 
+// Re-export GNN types for consumers
+pub use mnemo_gnn::{
+    build_local_subgraph, GatWeights, LocalSubgraph, RerankedCandidate,
+};
+
 /// Reciprocal Rank Fusion constant. Standard value from the RRF paper.
 const RRF_K: f64 = 60.0;
 
@@ -43,7 +48,11 @@ where
     state_store: Arc<S>,
     vector_store: Arc<V>,
     embedder: Arc<E>,
+    gnn_weights: Option<tokio::sync::RwLock<GatWeights>>,
 }
+
+/// Blend factor for GNN re-ranking. 0.6 = 60% fusion + 40% GNN.
+const GNN_ALPHA: f32 = 0.6;
 
 /// A scored result from a single retrieval source.
 /// `score` is in [0, 1] and represents cosine similarity or a normalised FTS
@@ -65,6 +74,53 @@ where
             state_store,
             vector_store,
             embedder,
+            gnn_weights: None,
+        }
+    }
+
+    /// Create a retrieval engine with GNN re-ranking enabled.
+    pub fn with_gnn(
+        state_store: Arc<S>,
+        vector_store: Arc<V>,
+        embedder: Arc<E>,
+        gnn_weights: GatWeights,
+    ) -> Self {
+        Self {
+            state_store,
+            vector_store,
+            embedder,
+            gnn_weights: Some(tokio::sync::RwLock::new(gnn_weights)),
+        }
+    }
+
+    /// Enable GNN re-ranking with existing or fresh weights.
+    pub async fn enable_gnn(&mut self, weights: GatWeights) {
+        self.gnn_weights = Some(tokio::sync::RwLock::new(weights));
+    }
+
+    /// Get a snapshot of the current GNN weights (for persistence).
+    pub async fn gnn_weights_snapshot(&self) -> Option<GatWeights> {
+        if let Some(ref lock) = self.gnn_weights {
+            Some(lock.read().await.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Apply feedback to the GNN model: which entity IDs were useful.
+    pub async fn apply_gnn_feedback(
+        &self,
+        entity_candidates: &[(Uuid, f64)],
+        graph_edges: &[(Uuid, Uuid, f32)],
+        features_map: &HashMap<Uuid, Vec<f32>>,
+        positive_ids: &[Uuid],
+        embedding_dim: usize,
+    ) {
+        if let Some(ref lock) = self.gnn_weights {
+            let subgraph =
+                build_local_subgraph(entity_candidates, graph_edges, features_map, embedding_dim);
+            let mut weights = lock.write().await;
+            weights.update_from_feedback(&subgraph, positive_ids);
         }
     }
 
@@ -150,13 +206,20 @@ where
             .unwrap_or_default();
 
         // ── Fusion for entities ────────────────────────────────
-        let entity_ids = merge_hits(
+        let entity_ids_fused = merge_hits(
             reranker,
             vec![
                 ranked_hits(&semantic_entity_hits),
                 ranked_hits(&ft_entity_hits),
             ],
         );
+
+        // ── GNN re-ranking for entities (optional) ────────────
+        let entity_ids = if self.gnn_weights.is_some() {
+            self.gnn_rerank_entities(user_id, &entity_ids_fused).await
+        } else {
+            entity_ids_fused
+        };
 
         for (entity_id, rrf_score) in entity_ids.iter().take(10) {
             if let Ok(entity) = self.state_store.get_entity(*entity_id).await {
@@ -311,6 +374,82 @@ where
         );
 
         Ok(block)
+    }
+
+    /// Apply GNN re-ranking to entity candidates using knowledge graph structure.
+    ///
+    /// Fetches outgoing edges between candidate entities to build a local subgraph,
+    /// then runs the GAT forward pass to re-score them. Falls back to original
+    /// scores if the GNN is not available or the subgraph is trivial.
+    async fn gnn_rerank_entities(
+        &self,
+        _user_id: Uuid,
+        fused: &[(Uuid, f64)],
+    ) -> Vec<(Uuid, f64)> {
+        let gnn_lock = match &self.gnn_weights {
+            Some(lock) => lock,
+            None => return fused.to_vec(),
+        };
+
+        if fused.len() < 2 {
+            return fused.to_vec();
+        }
+
+        // Collect graph edges between candidate entities
+        let candidate_set: std::collections::HashSet<Uuid> =
+            fused.iter().map(|(id, _)| *id).collect();
+        let mut graph_edges: Vec<(Uuid, Uuid, f32)> = Vec::new();
+
+        for (entity_id, _) in fused.iter().take(10) {
+            if let Ok(outgoing) = self.state_store.get_outgoing_edges(*entity_id).await {
+                for edge in outgoing {
+                    if candidate_set.contains(&edge.target_entity_id) && edge.is_valid() {
+                        graph_edges.push((
+                            edge.source_entity_id,
+                            edge.target_entity_id,
+                            edge.confidence,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Build features map from semantic search scores as simple feature vectors
+        // (we use fusion scores as a 1-d feature + zeros for remaining dimensions)
+        let embedding_dim = gnn_lock.read().await.input_dim;
+        let features_map: HashMap<Uuid, Vec<f32>> = fused
+            .iter()
+            .map(|(id, score)| {
+                let mut features = vec![0.0f32; embedding_dim];
+                if !features.is_empty() {
+                    features[0] = *score as f32;
+                }
+                (*id, features)
+            })
+            .collect();
+
+        let subgraph =
+            build_local_subgraph(fused, &graph_edges, &features_map, embedding_dim);
+
+        let weights = gnn_lock.read().await;
+        let reranked = weights.forward(&subgraph, GNN_ALPHA);
+
+        let result: Vec<(Uuid, f64)> = reranked
+            .iter()
+            .map(|r| (r.id, r.final_score))
+            .collect();
+
+        if result.is_empty() {
+            fused.to_vec()
+        } else {
+            tracing::debug!(
+                candidates = fused.len(),
+                graph_edges = graph_edges.len(),
+                gnn_updates = weights.update_count,
+                "GNN re-ranked entity candidates"
+            );
+            result
+        }
     }
 }
 

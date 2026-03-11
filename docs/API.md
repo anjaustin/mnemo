@@ -1012,6 +1012,36 @@ Reject a pending promotion without identity mutation.
 
 ---
 
+## GNN Retrieval Feedback
+
+The GNN (Graph Neural Network) re-ranking layer optionally enhances retrieval by learning from feedback. When enabled (`MNEMO_GNN_ENABLED=true`), retrieval results are re-ranked using graph attention over the knowledge graph. The feedback endpoint lets you train the GNN by reporting which retrieved entities were actually useful.
+
+### `POST /api/v1/memory/feedback`
+
+Report which retrieved entities were useful (positive signal for GNN training).
+
+```json
+// Request
+{
+  "positive_entity_ids": ["uuid-1", "uuid-2"],  // required: entities that were actually used
+  "all_entity_ids": ["uuid-1", "uuid-2", "uuid-3", "uuid-4"]  // optional: all entities returned by retrieval
+}
+
+// Response 200
+{
+  "accepted": true,
+  "positive_count": 2
+}
+```
+
+**Notes:**
+- `positive_entity_ids` is required and must be non-empty
+- `all_entity_ids` is optional; if omitted, only positive IDs are considered
+- Feedback is a no-op if GNN re-ranking is not enabled
+- The GNN model updates incrementally with each feedback call (<1ms)
+
+---
+
 ## Users
 
 Users represent end-users of your AI agent application. Each user has an isolated knowledge graph.

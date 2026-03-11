@@ -7889,3 +7889,40 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "re-rejecting must fail: {body:?}");
 }
+
+#[tokio::test]
+async fn test_gnn_retrieval_feedback_endpoint() {
+    let app = build_test_app().await;
+
+    // Feedback with positive IDs should succeed
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/feedback",
+        serde_json::json!({
+            "positive_entity_ids": [uuid::Uuid::now_v7(), uuid::Uuid::now_v7()],
+            "all_entity_ids": [
+                uuid::Uuid::now_v7(),
+                uuid::Uuid::now_v7(),
+                uuid::Uuid::now_v7(),
+                uuid::Uuid::now_v7(),
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "feedback should succeed: {body:?}");
+    assert_eq!(body["accepted"], true);
+    assert_eq!(body["positive_count"], 2);
+
+    // Feedback with empty positive_entity_ids should fail validation
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/memory/feedback",
+        serde_json::json!({
+            "positive_entity_ids": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "empty positives must fail: {body:?}");
+}
