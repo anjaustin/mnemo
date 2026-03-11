@@ -41,6 +41,7 @@ use mnemo_core::traits::storage::{
 };
 
 use mnemo_retrieval::Reranker;
+use mnemo_retrieval::router::{classify_query, RetrievalStrategy, RoutingSource};
 
 use crate::middleware::RequestContext;
 use crate::state::{
@@ -4164,7 +4165,33 @@ async fn get_memory_context(
         let trimmed = s.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     });
-    let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
+    // ─── Semantic routing: auto-classify query when mode is not explicit ───
+    let (mode, routing_decision_json) = if let Some(explicit_mode) = req.mode {
+        // Caller specified mode — honour it, record as explicit
+        let decision = mnemo_retrieval::router::RoutingDecision {
+            selected_strategy: match explicit_mode {
+                MemoryContextMode::Head => RetrievalStrategy::Head,
+                MemoryContextMode::Hybrid => RetrievalStrategy::Hybrid,
+                MemoryContextMode::Historical => RetrievalStrategy::Historical,
+            },
+            confidence: 1.0,
+            source: RoutingSource::ExplicitRequest,
+            alternatives: vec![],
+        };
+        (explicit_mode, Some(serde_json::to_value(&decision).ok()).flatten())
+    } else {
+        // Auto-classify the query
+        let decision = classify_query(&req.query);
+        let mode = match decision.selected_strategy {
+            RetrievalStrategy::Head => MemoryContextMode::Head,
+            RetrievalStrategy::Historical => MemoryContextMode::Historical,
+            RetrievalStrategy::GraphFocused => MemoryContextMode::Hybrid, // graph-focused still uses hybrid pipeline
+            RetrievalStrategy::EpisodeRecall => MemoryContextMode::Hybrid, // episode recall uses hybrid pipeline
+            RetrievalStrategy::Hybrid => MemoryContextMode::Hybrid,
+        };
+        (mode, Some(serde_json::to_value(&decision).ok()).flatten())
+    };
+
     let contract = req
         .contract
         .unwrap_or_else(|| parse_memory_contract_default(&policy.default_memory_contract));
@@ -4344,6 +4371,9 @@ async fn get_memory_context(
     context
         .episodes
         .retain(|episode| is_episode_summary_within_retention(&policy, episode));
+
+    // Attach semantic routing diagnostics to context block
+    context.routing_decision = routing_decision_json;
 
     let head = scoped_session.as_ref().map(|session| MemoryHeadInfo {
         session_id: session.id,
@@ -5415,7 +5445,14 @@ async fn causal_recall_chains(
     }
 
     let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
-    let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
+    let mode = req.mode.unwrap_or_else(|| {
+        let decision = classify_query(&req.query);
+        match decision.selected_strategy {
+            RetrievalStrategy::Head => MemoryContextMode::Head,
+            RetrievalStrategy::Historical => MemoryContextMode::Historical,
+            _ => MemoryContextMode::Hybrid,
+        }
+    });
     let requested_session_name = req.session.and_then(|s| {
         let trimmed = s.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
@@ -6620,7 +6657,14 @@ async fn get_agent_context(
         let trimmed = s.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     });
-    let mode = req.mode.unwrap_or(MemoryContextMode::Hybrid);
+    let mode = req.mode.unwrap_or_else(|| {
+        let decision = classify_query(&req.query);
+        match decision.selected_strategy {
+            RetrievalStrategy::Head => MemoryContextMode::Head,
+            RetrievalStrategy::Historical => MemoryContextMode::Historical,
+            _ => MemoryContextMode::Hybrid,
+        }
+    });
     let scoped_session =
         resolve_session_scope(&state, user.id, mode, requested_session_name).await?;
     let session_id = scoped_session.as_ref().map(|s| s.id);

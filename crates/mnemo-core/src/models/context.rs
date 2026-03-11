@@ -34,6 +34,11 @@ pub struct ContextBlock {
     /// Optional diagnostics for temporal scoring and intent resolution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal_diagnostics: Option<TemporalDiagnostics>,
+
+    /// Optional semantic routing diagnostics (strategy selection, confidence, alternatives).
+    /// Set by the server layer when the semantic router auto-classifies the query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_decision: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +272,7 @@ impl ContextBlock {
             latency_ms: 0,
             sources: Vec::new(),
             temporal_diagnostics: None,
+            routing_decision: None,
         }
     }
 

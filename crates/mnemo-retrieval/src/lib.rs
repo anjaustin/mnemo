@@ -6,6 +6,7 @@
 
 pub mod coherence;
 pub mod compression;
+pub mod router;
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;

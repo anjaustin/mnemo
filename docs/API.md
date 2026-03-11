@@ -263,13 +263,15 @@ Retrieve context for a user by identifier (`:user` can be UUID, external_id, or 
 
 `session`, `max_tokens`, `min_relevance`, `mode`, `contract`, `retrieval_policy`, `time_intent`, `as_of`, and `temporal_weight` are optional.
 
-- `mode`: `head | hybrid | historical`
+- `mode`: `head | hybrid | historical` — **when omitted, the semantic router auto-classifies the query** (e.g., "what did we just discuss?" routes to `head`, "remember when..." routes to `historical`)
 - `contract`: `default | support_safe | current_strict | historical_strict`
 - `retrieval_policy`: `balanced | precision | recall | stability`
 - `time_intent`: `auto | current | recent | historical`
 - `as_of`: point-in-time target for historical recall
 - `temporal_weight`: override temporal influence (0.0–1.0)
 - `filters`: optional metadata prefilter (`roles`, `tags_any`, `tags_all`, `created_after`, `created_before`, `processing_status`)
+
+**Semantic Routing**: When `mode` is omitted, the server's semantic router auto-classifies the query using keyword pattern matching. The routing decision (selected strategy, confidence, source, alternatives) is included in the response as `routing_decision`. The router recognises five strategies: `head`, `hybrid`, `historical`, `graph_focused`, and `episode_recall`. Graph-focused and episode-recall map to the hybrid pipeline with appropriate weighting.
 
 If semantic retrieval is unavailable or not yet warmed up, Mnemo falls back to recent episode recall so the returned context is still usable immediately after `remember`.
 
