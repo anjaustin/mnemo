@@ -1910,4 +1910,219 @@ mod tests {
         assert_eq!(back.parent_version, 3);
         assert_eq!(back.experience_events_transferred, 10);
     }
+
+    // ─── Domain Expansion Falsification ────────────────────────────
+
+    #[test]
+    fn test_falsify_fork_id_with_null_bytes() {
+        // Null bytes are non-alphanumeric; must be rejected
+        assert!(validate_fork_agent_id("agent\0hidden").is_err());
+        assert!(validate_fork_agent_id("\0").is_err());
+    }
+
+    #[test]
+    fn test_falsify_fork_id_with_spaces_and_tabs() {
+        assert!(validate_fork_agent_id("agent bot").is_err());
+        assert!(validate_fork_agent_id("agent\tbot").is_err());
+        assert!(validate_fork_agent_id(" ").is_err());
+    }
+
+    #[test]
+    fn test_falsify_fork_id_with_unicode() {
+        // Non-ASCII characters must be rejected (only ascii_alphanumeric + -_.)
+        assert!(validate_fork_agent_id("böt").is_err());
+        assert!(validate_fork_agent_id("エージェント").is_err());
+        assert!(validate_fork_agent_id("agent-🤖").is_err());
+    }
+
+    #[test]
+    fn test_falsify_fork_id_boundary_length() {
+        // Exactly 128 chars should pass
+        let at_limit = "a".repeat(128);
+        assert!(validate_fork_agent_id(&at_limit).is_ok());
+        // 129 should fail
+        let over_limit = "a".repeat(129);
+        assert!(validate_fork_agent_id(&over_limit).is_err());
+    }
+
+    #[test]
+    fn test_falsify_fork_id_double_dot_anywhere() {
+        assert!(validate_fork_agent_id("a..b").is_err());
+        assert!(validate_fork_agent_id("..start").is_err());
+        assert!(validate_fork_agent_id("end..").is_err());
+        // Single dots are fine
+        assert!(validate_fork_agent_id("a.b.c").is_ok());
+    }
+
+    #[test]
+    fn test_falsify_experience_filter_absurd_confidence() {
+        // min_confidence > 1.0 — filter should reject everything since confidence is 0..=1
+        let filter = ExperienceFilter {
+            categories: vec![],
+            min_confidence: Some(1.5),
+            min_weight: None,
+            max_events: None,
+        };
+        let event = ExperienceEvent {
+            id: uuid::Uuid::from_u128(99),
+            agent_id: "test".into(),
+            user_id: None,
+            session_id: None,
+            category: "general".into(),
+            signal: "test signal".into(),
+            confidence: 1.0, // max possible
+            weight: 1.0,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.0,
+            created_at: Utc::now(),
+        };
+        // Even max confidence (1.0) doesn't pass a 1.5 threshold
+        assert!(!filter.matches(&event));
+    }
+
+    #[test]
+    fn test_falsify_experience_filter_negative_thresholds() {
+        // Negative thresholds should let everything through (all confidences >= 0)
+        let filter = ExperienceFilter {
+            categories: vec![],
+            min_confidence: Some(-0.5),
+            min_weight: Some(-1.0),
+            max_events: None,
+        };
+        let event = ExperienceEvent {
+            id: uuid::Uuid::from_u128(100),
+            agent_id: "test".into(),
+            user_id: None,
+            session_id: None,
+            category: "any".into(),
+            signal: "anything".into(),
+            confidence: 0.0,
+            weight: 0.0,
+            decay_half_life_days: 1,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.0,
+            created_at: Utc::now(),
+        };
+        assert!(
+            filter.matches(&event),
+            "Negative thresholds should let zero-value events through"
+        );
+    }
+
+    #[test]
+    fn test_falsify_experience_filter_max_events_not_enforced_by_matches() {
+        // max_events is a storage-layer concern, not enforced by matches()
+        let filter = ExperienceFilter {
+            categories: vec![],
+            min_confidence: None,
+            min_weight: None,
+            max_events: Some(0), // zero max_events
+        };
+        let event = ExperienceEvent {
+            id: uuid::Uuid::from_u128(101),
+            agent_id: "test".into(),
+            user_id: None,
+            session_id: None,
+            category: "any".into(),
+            signal: "test".into(),
+            confidence: 0.9,
+            weight: 0.9,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.0,
+            created_at: Utc::now(),
+        };
+        // matches() should still return true — max_events is applied at the collection layer
+        assert!(
+            filter.matches(&event),
+            "max_events should not be enforced by matches()"
+        );
+    }
+
+    #[test]
+    fn test_falsify_fork_request_minimal_deserialization() {
+        // Only required field is new_agent_id — all optional fields should default
+        let json = r#"{"new_agent_id": "minimal-bot"}"#;
+        let req: ForkAgentRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.new_agent_id, "minimal-bot");
+        assert!(req.core_override.is_none());
+        assert!(req.experience_filter.is_none());
+        assert!(req.description.is_none());
+    }
+
+    #[test]
+    fn test_falsify_fork_lineage_all_optionals_none_roundtrip() {
+        let lineage = ForkLineage {
+            parent_agent_id: "parent".into(),
+            parent_version: 1,
+            forked_at: Utc::now(),
+            description: None,
+            experience_events_transferred: 0,
+            experience_filter: None,
+        };
+        let json = serde_json::to_string(&lineage).unwrap();
+        let back: ForkLineage = serde_json::from_str(&json).unwrap();
+        assert!(back.description.is_none());
+        assert!(back.experience_filter.is_none());
+        assert_eq!(back.experience_events_transferred, 0);
+    }
+
+    #[test]
+    fn test_falsify_fork_result_preserves_new_agent_version_one() {
+        // Fork should always produce version 1 in the result
+        let result = ForkResult {
+            new_agent: AgentIdentityProfile::new("child".into()),
+            lineage: ForkLineage {
+                parent_agent_id: "parent".into(),
+                parent_version: 99,
+                forked_at: Utc::now(),
+                description: Some("test".into()),
+                experience_events_transferred: 0,
+                experience_filter: None,
+            },
+        };
+        assert_eq!(
+            result.new_agent.version, 1,
+            "Forked agent must start at version 1"
+        );
+        assert_eq!(
+            result.lineage.parent_version, 99,
+            "Parent version must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_falsify_experience_filter_empty_vs_wildcard_categories() {
+        let event = ExperienceEvent {
+            id: uuid::Uuid::from_u128(102),
+            agent_id: "test".into(),
+            user_id: None,
+            session_id: None,
+            category: "niche_category".into(),
+            signal: "test".into(),
+            confidence: 0.5,
+            weight: 0.5,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.0,
+            created_at: Utc::now(),
+        };
+        // Empty categories = wildcard (match all)
+        let wildcard = ExperienceFilter::default();
+        assert!(
+            wildcard.matches(&event),
+            "Default filter should match any event"
+        );
+
+        // Non-matching category should exclude
+        let strict = ExperienceFilter {
+            categories: vec!["only_this".into()],
+            ..Default::default()
+        };
+        assert!(
+            !strict.matches(&event),
+            "Specific category should exclude non-matching events"
+        );
+    }
 }
