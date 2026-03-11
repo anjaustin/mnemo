@@ -2242,6 +2242,57 @@ Path params:
 
 ---
 
+## MCP Server (Model Context Protocol)
+
+Mnemo ships an MCP server binary (`mnemo-mcp-server`) that exposes memory tools
+to any MCP-compatible client (Claude Code, Cursor, etc.) over the stdio transport.
+
+### Configuration
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `MNEMO_MCP_BASE_URL` | `http://localhost:3000` | URL of the running Mnemo HTTP server |
+| `MNEMO_API_KEY` | *(none)* | API key for Mnemo auth (optional) |
+| `MNEMO_MCP_DEFAULT_USER` | *(none)* | Default user identifier for tools that need one |
+| `RUST_LOG` | `warn` | Log level (logs go to stderr) |
+
+### Claude Code integration
+
+```json
+{
+  "mcpServers": {
+    "mnemo": {
+      "command": "mnemo-mcp-server",
+      "env": {
+        "MNEMO_MCP_BASE_URL": "http://localhost:3000",
+        "MNEMO_MCP_DEFAULT_USER": "your-user-id"
+      }
+    }
+  }
+}
+```
+
+### Tools (7)
+
+| Tool | Description |
+|------|-------------|
+| `mnemo_remember` | Store a memory (text → extract → graph update) |
+| `mnemo_recall` | Retrieve context for a query (hybrid retrieval) |
+| `mnemo_graph_query` | Query knowledge graph (list entities/edges, communities) |
+| `mnemo_agent_identity` | Get or update an agent identity profile |
+| `mnemo_digest` | Get or generate a prose memory digest |
+| `mnemo_coherence` | Get coherence report for a user's knowledge graph |
+| `mnemo_health` | Health check on the Mnemo server |
+
+### Resources (2 templates)
+
+| URI Template | Description |
+|-------------|-------------|
+| `mnemo://users/{user}/memory` | User memory summary (coherence report) |
+| `mnemo://agents/{agent_id}/identity` | Agent identity profile |
+
+---
+
 ## Errors
 
 All errors follow a consistent format:
