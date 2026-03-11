@@ -265,10 +265,21 @@ impl AgentIdentityAuditEvent {
 }
 
 /// Verify the full audit chain (events must be in oldest-first order).
+///
+/// Legacy events (created before witness chain was added) have an empty
+/// `event_hash` and are treated as the "pre-chain" prefix: they are counted
+/// but not hash-verified. The chain verification starts from the first event
+/// that has a non-empty `event_hash`.
 pub fn verify_audit_chain(events: &[AgentIdentityAuditEvent]) -> AuditChainVerification {
     let mut breaks = Vec::new();
 
-    for (i, event) in events.iter().enumerate() {
+    // Find the first event with a non-empty event_hash (start of the witness chain).
+    let chain_start = events
+        .iter()
+        .position(|e| !e.event_hash.is_empty())
+        .unwrap_or(events.len());
+
+    for (i, event) in events.iter().enumerate().skip(chain_start) {
         // 1. Check that event_hash matches recomputation
         if !event.verify_hash() {
             breaks.push(AuditChainBreak {
@@ -284,9 +295,11 @@ pub fn verify_audit_chain(events: &[AgentIdentityAuditEvent]) -> AuditChainVerif
         }
 
         // 2. Check prev_hash linkage
-        if i == 0 {
-            // Genesis event must have prev_hash = None
-            if event.prev_hash.is_some() {
+        if i == chain_start {
+            // First witness-chain event: genesis of the chain.
+            // If it's also the first event overall, prev_hash must be None.
+            // If it follows legacy events, prev_hash should be None (no chain to link to).
+            if event.prev_hash.is_some() && i == 0 {
                 breaks.push(AuditChainBreak {
                     index: i,
                     event_id: event.id,
@@ -294,7 +307,7 @@ pub fn verify_audit_chain(events: &[AgentIdentityAuditEvent]) -> AuditChainVerif
                 });
             }
         } else {
-            // Non-genesis: prev_hash must equal the preceding event's event_hash
+            // Non-genesis chain event: prev_hash must equal the preceding event's event_hash
             let expected_prev = &events[i - 1].event_hash;
             match &event.prev_hash {
                 None => {
@@ -1145,5 +1158,162 @@ mod tests {
             "1000-event chain should verify in <100ms, took {}ms",
             elapsed.as_millis()
         );
+    }
+
+    // ─── Falsification: adversarial witness chain tests ───────────
+
+    #[test]
+    fn test_falsify_legacy_events_without_hashes_are_valid() {
+        // Pre-witness-chain events have empty event_hash and None prev_hash.
+        // The chain verifier should skip these gracefully.
+        let legacy = AgentIdentityAuditEvent {
+            id: Uuid::now_v7(),
+            agent_id: "legacy-bot".to_string(),
+            action: AgentIdentityAuditAction::Created,
+            from_version: None,
+            to_version: 1,
+            rollback_to_version: None,
+            reason: None,
+            created_at: Utc::now(),
+            prev_hash: None,
+            event_hash: String::new(), // legacy: no hash
+        };
+        let result = verify_audit_chain(&[legacy]);
+        assert!(
+            result.valid,
+            "Legacy events should pass: {:?}",
+            result.breaks
+        );
+        assert_eq!(result.chain_length, 1);
+    }
+
+    #[test]
+    fn test_falsify_legacy_then_witnessed_chain_valid() {
+        // 2 legacy events followed by 3 witnessed events
+        let legacy1 = AgentIdentityAuditEvent {
+            id: Uuid::now_v7(),
+            agent_id: "bot".to_string(),
+            action: AgentIdentityAuditAction::Created,
+            from_version: None,
+            to_version: 1,
+            rollback_to_version: None,
+            reason: None,
+            created_at: Utc::now(),
+            prev_hash: None,
+            event_hash: String::new(),
+        };
+        let legacy2 = AgentIdentityAuditEvent {
+            id: Uuid::now_v7(),
+            agent_id: "bot".to_string(),
+            action: AgentIdentityAuditAction::Updated,
+            from_version: Some(1),
+            to_version: 2,
+            rollback_to_version: None,
+            reason: None,
+            created_at: Utc::now(),
+            prev_hash: None,
+            event_hash: String::new(),
+        };
+
+        // First witnessed event has no predecessor in the chain (prev_hash = None)
+        let w1 = make_audit_event(AgentIdentityAuditAction::Updated, Some(2), 3, None);
+        let w2 = make_audit_event(
+            AgentIdentityAuditAction::Updated,
+            Some(3),
+            4,
+            Some(w1.event_hash.clone()),
+        );
+        let w3 = make_audit_event(
+            AgentIdentityAuditAction::Updated,
+            Some(4),
+            5,
+            Some(w2.event_hash.clone()),
+        );
+
+        let chain = vec![legacy1, legacy2, w1, w2, w3];
+        let result = verify_audit_chain(&chain);
+        assert!(
+            result.valid,
+            "Legacy + witnessed chain should be valid: {:?}",
+            result.breaks
+        );
+        assert_eq!(result.chain_length, 5);
+    }
+
+    #[test]
+    fn test_falsify_hash_input_contains_all_fields() {
+        // Changing any field should change the hash
+        let base = make_audit_event(AgentIdentityAuditAction::Created, None, 1, None);
+        let base_hash = base.event_hash.clone();
+
+        // Change from_version
+        let mut v = base.clone();
+        v.from_version = Some(99);
+        v.event_hash = v.compute_hash();
+        assert_ne!(v.event_hash, base_hash, "from_version must affect hash");
+
+        // Change to_version
+        let mut v = base.clone();
+        v.to_version = 42;
+        v.event_hash = v.compute_hash();
+        assert_ne!(v.event_hash, base_hash, "to_version must affect hash");
+
+        // Change timestamp
+        let mut v = base.clone();
+        v.created_at = Utc::now() + chrono::Duration::hours(1);
+        v.event_hash = v.compute_hash();
+        assert_ne!(v.event_hash, base_hash, "created_at must affect hash");
+    }
+
+    #[test]
+    fn test_falsify_reason_field_not_in_hash() {
+        // The `reason` field is NOT included in the hash (it's supplementary metadata).
+        // This is by design: operators may annotate events without breaking the chain.
+        let e1 = make_audit_event(AgentIdentityAuditAction::Updated, Some(1), 2, None);
+        let mut e2 = e1.clone();
+        e2.reason = Some("I changed my mind".to_string());
+        e2.event_hash = e2.compute_hash();
+        assert_eq!(
+            e1.event_hash, e2.event_hash,
+            "reason should not affect event_hash"
+        );
+    }
+
+    #[test]
+    fn test_falsify_rollback_to_version_not_in_hash() {
+        // Similarly, rollback_to_version is metadata — changing it shouldn't break hash
+        let e1 = make_audit_event(AgentIdentityAuditAction::RolledBack, Some(3), 4, None);
+        let mut e2 = e1.clone();
+        e2.rollback_to_version = Some(1);
+        e2.event_hash = e2.compute_hash();
+        assert_eq!(
+            e1.event_hash, e2.event_hash,
+            "rollback_to_version should not affect event_hash"
+        );
+    }
+
+    #[test]
+    fn test_falsify_concurrent_fork_detected() {
+        // Simulate two events with the same prev_hash (fork)
+        let genesis = make_audit_event(AgentIdentityAuditAction::Created, None, 1, None);
+        let fork_a = make_audit_event(
+            AgentIdentityAuditAction::Updated,
+            Some(1),
+            2,
+            Some(genesis.event_hash.clone()),
+        );
+        let fork_b = make_audit_event(
+            AgentIdentityAuditAction::Updated,
+            Some(1),
+            3,
+            Some(genesis.event_hash.clone()),
+        );
+
+        // If both appear in the chain, event 2 (fork_b) has prev_hash pointing to genesis,
+        // but the verifier expects it to point to fork_a (the event at index 1)
+        let chain = vec![genesis, fork_a.clone(), fork_b];
+        let result = verify_audit_chain(&chain);
+        assert!(!result.valid, "Forked chain should be detected as invalid");
+        assert!(result.breaks.iter().any(|b| b.index == 2));
     }
 }
