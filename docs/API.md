@@ -976,7 +976,10 @@ Rollback identity core to a prior version while preserving an append-only versio
 
 ### `POST /api/v1/agents/:agent_id/experience`
 
-Add an adaptive experience event.
+Add an adaptive experience event. The server computes a `fisher_importance` score
+(EWC++ — Elastic Weight Consolidation) measuring how structurally important this
+experience is to the agent's current identity. High-importance events resist
+temporal decay, keeping load-bearing experiences influential even when old.
 
 ```json
 {
@@ -989,6 +992,25 @@ Add an adaptive experience event.
   "decay_half_life_days": 30
 }
 ```
+
+Response includes `fisher_importance` (0.0–1.0) computed from novelty, confidence alignment, and weight signal relative to existing events in the same category.
+
+### `GET /api/v1/agents/:agent_id/experience/importance?limit=50`
+
+Returns experience events ranked by Fisher importance (descending). Each entry includes:
+
+| Field | Description |
+|---|---|
+| `id` | Event UUID |
+| `category` | Event category |
+| `signal` | The experience signal text |
+| `fisher_importance` | EWC++ importance score (0.0–1.0) |
+| `effective_weight` | EWC++-enhanced weight (resists decay for high-importance events) |
+| `raw_weight` | Original weight value |
+| `confidence` | Confidence score |
+| `created_at` | UTC timestamp |
+
+The `effective_weight` formula: `weight × confidence × decay × (1 + fisher_importance × λ)` where `λ = 2.0`.
 
 ### `POST /api/v1/agents/:agent_id/context`
 

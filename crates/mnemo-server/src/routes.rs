@@ -17,9 +17,10 @@ use tracing::warn;
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
     agent::{
-        AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest,
-        CreatePromotionProposalRequest, ExperienceEvent, IdentityRollbackRequest,
-        PromotionProposal, PromotionStatus, UpdateAgentIdentityRequest,
+        compute_fisher_importance, AgentIdentityAuditEvent, AgentIdentityProfile,
+        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
+        IdentityRollbackRequest, PromotionProposal, PromotionStatus,
+        UpdateAgentIdentityRequest,
     },
     context::{
         estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary, FactSummary,
@@ -1172,6 +1173,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/agents/:agent_id/experience",
             post(add_agent_experience),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/experience/importance",
+            get(list_experience_importance),
         )
         .route(
             "/api/v1/agents/:agent_id/promotions",
@@ -6260,15 +6265,70 @@ async fn add_agent_experience(
         )));
     }
 
-    let event = state
+    let category = req.category.clone();
+    let mut event = state
         .state_store
         .add_experience_event(&agent_id, req)
         .await?;
+
+    // EWC++: compute Fisher importance relative to existing events in the same category
+    let all_events = state
+        .state_store
+        .list_experience_events(&agent_id, 500)
+        .await?;
+    let category_events: Vec<ExperienceEvent> = all_events
+        .into_iter()
+        .filter(|e| e.category == category && e.id != event.id)
+        .collect();
+    let fisher = compute_fisher_importance(&event, &category_events);
+    event.fisher_importance = fisher;
+    state.state_store.update_experience_event(&event).await?;
+
     state
         .metrics
         .agent_experience_events_total
         .fetch_add(1, Ordering::Relaxed);
     Ok((StatusCode::CREATED, Json(event)))
+}
+
+/// Returns experience events ranked by Fisher importance (EWC++).
+/// High-importance events are structurally load-bearing for the agent's identity.
+async fn list_experience_importance(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Query(params): Query<ListLimitQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let limit = params.limit.unwrap_or(50).clamp(1, 500);
+    let mut events = state
+        .state_store
+        .list_experience_events(&agent_id, limit)
+        .await?;
+
+    // Sort by Fisher importance descending
+    events.sort_by(|a, b| {
+        b.fisher_importance
+            .partial_cmp(&a.fisher_importance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let ranked: Vec<serde_json::Value> = events
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "category": e.category,
+                "signal": e.signal,
+                "fisher_importance": e.fisher_importance,
+                "effective_weight": e.effective_weight(),
+                "raw_weight": e.weight,
+                "confidence": e.confidence,
+                "created_at": e.created_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(ranked))
 }
 
 async fn create_promotion_proposal(
@@ -6567,11 +6627,9 @@ fn normalize_agent_id(agent_id: &str) -> Result<String, AppError> {
     Ok(trimmed.to_string())
 }
 
+/// EWC++-enhanced effective weight: high-importance events resist decay.
 fn effective_experience_weight(event: &ExperienceEvent) -> f32 {
-    let age_days = (chrono::Utc::now() - event.created_at).num_days().max(0) as f32;
-    let half_life = event.decay_half_life_days.max(1) as f32;
-    let decay_factor = 2f32.powf(-age_days / half_life);
-    (event.weight * event.confidence * decay_factor).max(0.0)
+    event.effective_weight()
 }
 
 fn validate_identity_core(core: &serde_json::Value) -> Result<(), AppError> {

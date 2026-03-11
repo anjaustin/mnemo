@@ -883,6 +883,12 @@ impl AgentStore for RedisStateStore {
         self.get_json(&key).await
     }
 
+    async fn update_experience_event(&self, event: &ExperienceEvent) -> StorageResult<()> {
+        let event_key = self.key(&["experience", &event.id.to_string()]);
+        self.set_json(&event_key, event).await?;
+        Ok(())
+    }
+
     async fn list_experience_events(
         &self,
         agent_id: &str,

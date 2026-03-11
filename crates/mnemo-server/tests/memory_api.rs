@@ -7926,3 +7926,181 @@ async fn test_gnn_retrieval_feedback_endpoint() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "empty positives must fail: {body:?}");
 }
+
+// ─── EWC++ Experience Weight Consolidation ─────────────────────────
+
+#[tokio::test]
+async fn test_ewc_experience_fisher_importance_computed_on_create() {
+    let app = build_test_app().await;
+
+    // First event in a new category should get fisher_importance = 1.0
+    let (status, first) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/ewc-test-agent/experience",
+        serde_json::json!({
+            "category": "domain_skill",
+            "signal": "user praised billing knowledge",
+            "confidence": 0.9,
+            "weight": 0.8
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let fisher_first = first["fisher_importance"].as_f64().unwrap();
+    assert!(
+        (fisher_first - 1.0).abs() < 0.01,
+        "first event in category should have fisher ~1.0, got {}",
+        fisher_first
+    );
+
+    // Second event in same category should have lower fisher importance
+    let (status, second) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/ewc-test-agent/experience",
+        serde_json::json!({
+            "category": "domain_skill",
+            "signal": "user asked follow-up billing question",
+            "confidence": 0.85,
+            "weight": 0.7
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let fisher_second = second["fisher_importance"].as_f64().unwrap();
+    assert!(
+        fisher_second < fisher_first,
+        "second event fisher ({}) should be < first ({})",
+        fisher_second,
+        fisher_first
+    );
+    assert!(
+        fisher_second > 0.0,
+        "second event fisher should still be positive: {}",
+        fisher_second
+    );
+}
+
+#[tokio::test]
+async fn test_ewc_experience_importance_endpoint() {
+    let app = build_test_app().await;
+
+    // Create events in two categories
+    for (cat, sig) in &[
+        ("tone", "user prefers formal"),
+        ("tone", "user dislikes slang"),
+        ("domain", "user is a billing expert"),
+    ] {
+        let (status, _) = json_request(
+            &app,
+            "POST",
+            "/api/v1/agents/ewc-importance-agent/experience",
+            serde_json::json!({
+                "category": cat,
+                "signal": sig,
+                "confidence": 0.85,
+                "weight": 0.7
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    // Fetch importance ranking
+    let (status, ranked) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/ewc-importance-agent/experience/importance",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let list = ranked.as_array().expect("should be array");
+    assert_eq!(list.len(), 3);
+
+    // Should be sorted by fisher_importance descending
+    let fishers: Vec<f64> = list
+        .iter()
+        .map(|e| e["fisher_importance"].as_f64().unwrap())
+        .collect();
+    for i in 1..fishers.len() {
+        assert!(
+            fishers[i - 1] >= fishers[i],
+            "importance should be descending: {:?}",
+            fishers
+        );
+    }
+
+    // First event (domain, sole in category) should have highest fisher
+    assert_eq!(list[0]["category"], "domain");
+    assert!((fishers[0] - 1.0).abs() < 0.01, "sole-category event should have fisher ~1.0");
+
+    // Each entry should have the expected fields
+    for entry in list {
+        assert!(entry["id"].is_string());
+        assert!(entry["fisher_importance"].is_number());
+        assert!(entry["effective_weight"].is_number());
+        assert!(entry["raw_weight"].is_number());
+        assert!(entry["confidence"].is_number());
+    }
+}
+
+#[tokio::test]
+async fn test_ewc_high_fisher_events_resist_decay_in_context() {
+    let app = build_test_app().await;
+
+    // Setup: update identity with a mission
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/agents/ewc-decay-agent/identity",
+        serde_json::json!({"core": {"mission": "billing assistant"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Create an event — it gets fisher=1.0 (first in category)
+    let (status, event) = json_request(
+        &app,
+        "POST",
+        "/api/v1/agents/ewc-decay-agent/experience",
+        serde_json::json!({
+            "category": "core_skill",
+            "signal": "master of refund processing",
+            "confidence": 0.95,
+            "weight": 1.0
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let fisher = event["fisher_importance"].as_f64().unwrap();
+    assert!(
+        (fisher - 1.0).abs() < 0.01,
+        "first event should have fisher ~1.0"
+    );
+
+    // The effective_weight with fisher=1.0 should be > raw weight*confidence
+    // because protection = 1 + 1.0 * 2.0 = 3.0 (for fresh event, decay=1.0)
+    // effective = 1.0 * 0.95 * 1.0 * 3.0 = 2.85
+    let importance_resp = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/ewc-decay-agent/experience/importance",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(importance_resp.0, StatusCode::OK);
+    let list = importance_resp.1.as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    let ew = list[0]["effective_weight"].as_f64().unwrap();
+    let raw = list[0]["raw_weight"].as_f64().unwrap();
+    let conf = list[0]["confidence"].as_f64().unwrap();
+    // With fisher=1.0 and EWC_LAMBDA=2.0, effective should be ~3x the base
+    assert!(
+        ew > raw * conf * 2.5,
+        "effective_weight ({}) should be ~3x raw*conf ({})",
+        ew,
+        raw * conf
+    );
+}
