@@ -18,8 +18,8 @@ use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
     agent::{
         compute_fisher_importance, AgentIdentityAuditEvent, AgentIdentityProfile,
-        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
-        IdentityRollbackRequest, PromotionProposal, PromotionStatus,
+        AuditChainVerification, CreateExperienceRequest, CreatePromotionProposalRequest,
+        ExperienceEvent, IdentityRollbackRequest, PromotionProposal, PromotionStatus,
         UpdateAgentIdentityRequest,
     },
     context::{
@@ -1167,6 +1167,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/agents/:agent_id/identity/audit",
             get(list_agent_identity_audit),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/identity/audit/verify",
+            get(verify_agent_audit_chain),
         )
         .route(
             "/api/v1/agents/:agent_id/identity/rollback",
@@ -6340,6 +6344,21 @@ async fn list_agent_identity_audit(
         .list_agent_identity_audit(&agent_id, limit)
         .await?;
     Ok(Json(audit))
+}
+
+/// `GET /api/v1/agents/:agent_id/identity/audit/verify`
+///
+/// Walk the full witness chain and verify hash integrity.
+async fn verify_agent_audit_chain(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<AuditChainVerification>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let verification = state
+        .state_store
+        .verify_agent_audit_chain(&agent_id)
+        .await?;
+    Ok(Json(verification))
 }
 
 async fn rollback_agent_identity(

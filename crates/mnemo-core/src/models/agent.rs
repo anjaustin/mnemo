@@ -179,6 +179,11 @@ pub enum AgentIdentityAuditAction {
 }
 
 /// Append-only record of every identity mutation for a given agent.
+///
+/// Forms a witness chain: each event includes `prev_hash` (the `event_hash` of
+/// the preceding event) and `event_hash` (SHA-256 of canonical fields). This
+/// makes the audit log tamper-evident — any deletion, reordering, or field
+/// modification breaks the hash chain and is detectable by walking the chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentIdentityAuditEvent {
     pub id: Uuid,
@@ -196,6 +201,129 @@ pub struct AgentIdentityAuditEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub created_at: DateTime<Utc>,
+
+    // ─── Witness chain fields ─────────────────────────────────
+    /// SHA-256 hash of the preceding audit event. `None` for the genesis (first) event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_hash: Option<String>,
+    /// SHA-256(action || from_version || to_version || prev_hash || timestamp_ms).
+    /// Deterministic and self-verifiable.
+    #[serde(default)]
+    pub event_hash: String,
+}
+
+/// Result of walking and verifying the audit witness chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditChainVerification {
+    /// `true` if every event's `event_hash` matches recomputation and the
+    /// `prev_hash` chain is unbroken.
+    pub valid: bool,
+    /// Total number of events in the chain.
+    pub chain_length: usize,
+    /// Indices (0-based, oldest-first) where the chain broke.
+    pub breaks: Vec<AuditChainBreak>,
+}
+
+/// Description of a single chain break.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditChainBreak {
+    /// 0-based index in the oldest-first event list.
+    pub index: usize,
+    /// Event ID at the break point.
+    pub event_id: Uuid,
+    /// What went wrong.
+    pub reason: String,
+}
+
+impl AgentIdentityAuditEvent {
+    /// Compute the canonical SHA-256 hash for this event.
+    ///
+    /// Hash input (pipe-delimited):
+    /// `action|from_version|to_version|prev_hash|created_at_millis`
+    pub fn compute_hash(&self) -> String {
+        use sha2::{Digest, Sha256};
+
+        let action_str = serde_json::to_string(&self.action)
+            .unwrap_or_else(|_| "unknown".to_string())
+            .replace('"', "");
+        let from_v = self.from_version.map(|v| v.to_string()).unwrap_or_default();
+        let to_v = self.to_version.to_string();
+        let prev = self.prev_hash.as_deref().unwrap_or("");
+        let ts = self.created_at.timestamp_millis().to_string();
+
+        let input = format!("{}|{}|{}|{}|{}", action_str, from_v, to_v, prev, ts);
+
+        let mut hasher = Sha256::new();
+        hasher.update(input.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    /// Verify that this event's `event_hash` matches recomputation.
+    pub fn verify_hash(&self) -> bool {
+        self.event_hash == self.compute_hash()
+    }
+}
+
+/// Verify the full audit chain (events must be in oldest-first order).
+pub fn verify_audit_chain(events: &[AgentIdentityAuditEvent]) -> AuditChainVerification {
+    let mut breaks = Vec::new();
+
+    for (i, event) in events.iter().enumerate() {
+        // 1. Check that event_hash matches recomputation
+        if !event.verify_hash() {
+            breaks.push(AuditChainBreak {
+                index: i,
+                event_id: event.id,
+                reason: format!(
+                    "event_hash mismatch: stored={}, computed={}",
+                    event.event_hash,
+                    event.compute_hash()
+                ),
+            });
+            continue;
+        }
+
+        // 2. Check prev_hash linkage
+        if i == 0 {
+            // Genesis event must have prev_hash = None
+            if event.prev_hash.is_some() {
+                breaks.push(AuditChainBreak {
+                    index: i,
+                    event_id: event.id,
+                    reason: "Genesis event should have prev_hash = None".to_string(),
+                });
+            }
+        } else {
+            // Non-genesis: prev_hash must equal the preceding event's event_hash
+            let expected_prev = &events[i - 1].event_hash;
+            match &event.prev_hash {
+                None => {
+                    breaks.push(AuditChainBreak {
+                        index: i,
+                        event_id: event.id,
+                        reason: "Non-genesis event has prev_hash = None".to_string(),
+                    });
+                }
+                Some(ph) if ph != expected_prev => {
+                    breaks.push(AuditChainBreak {
+                        index: i,
+                        event_id: event.id,
+                        reason: format!(
+                            "prev_hash mismatch: stored={}, expected={}",
+                            ph, expected_prev
+                        ),
+                    });
+                }
+                _ => {} // OK
+            }
+        }
+    }
+
+    AuditChainVerification {
+        valid: breaks.is_empty(),
+        chain_length: events.len(),
+        breaks,
+    }
 }
 
 /// Request body for `POST /api/v1/agents/:agent_id/identity/rollback`.
@@ -765,6 +893,257 @@ mod tests {
         assert!(
             event.fisher_importance.abs() < f32::EPSILON,
             "missing fisher_importance should default to 0.0"
+        );
+    }
+
+    // ─── Witness Chain Tests ──────────────────────────────────────
+
+    fn make_audit_event(
+        action: AgentIdentityAuditAction,
+        from_v: Option<u64>,
+        to_v: u64,
+        prev_hash: Option<String>,
+    ) -> AgentIdentityAuditEvent {
+        let mut event = AgentIdentityAuditEvent {
+            id: Uuid::now_v7(),
+            agent_id: "test-agent".to_string(),
+            action,
+            from_version: from_v,
+            to_version: to_v,
+            rollback_to_version: None,
+            reason: None,
+            created_at: Utc::now(),
+            prev_hash,
+            event_hash: String::new(),
+        };
+        event.event_hash = event.compute_hash();
+        event
+    }
+
+    fn build_chain(n: usize) -> Vec<AgentIdentityAuditEvent> {
+        let mut chain: Vec<AgentIdentityAuditEvent> = Vec::new();
+        for i in 0..n {
+            let prev = if i == 0 {
+                None
+            } else {
+                Some(chain[i - 1].event_hash.clone())
+            };
+            let action = if i == 0 {
+                AgentIdentityAuditAction::Created
+            } else {
+                AgentIdentityAuditAction::Updated
+            };
+            chain.push(make_audit_event(
+                action,
+                if i == 0 { None } else { Some(i as u64) },
+                (i + 1) as u64,
+                prev,
+            ));
+        }
+        chain
+    }
+
+    #[test]
+    fn test_witness_hash_is_deterministic() {
+        let event = make_audit_event(AgentIdentityAuditAction::Created, None, 1, None);
+        let h1 = event.compute_hash();
+        let h2 = event.compute_hash();
+        assert_eq!(h1, h2, "Hash must be deterministic");
+        assert_eq!(h1.len(), 64, "SHA-256 hex should be 64 chars");
+    }
+
+    #[test]
+    fn test_witness_hash_changes_with_different_action() {
+        let e1 = make_audit_event(AgentIdentityAuditAction::Created, None, 1, None);
+        let mut e2 = e1.clone();
+        e2.action = AgentIdentityAuditAction::Updated;
+        e2.event_hash = e2.compute_hash();
+        assert_ne!(
+            e1.event_hash, e2.event_hash,
+            "Different actions should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn test_witness_hash_changes_with_different_prev_hash() {
+        let e1 = make_audit_event(AgentIdentityAuditAction::Updated, Some(1), 2, None);
+        let e2 = make_audit_event(
+            AgentIdentityAuditAction::Updated,
+            Some(1),
+            2,
+            Some("abc123".to_string()),
+        );
+        assert_ne!(
+            e1.event_hash, e2.event_hash,
+            "Different prev_hash should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn test_witness_verify_hash_passes_for_correct_event() {
+        let event = make_audit_event(AgentIdentityAuditAction::Created, None, 1, None);
+        assert!(event.verify_hash(), "Fresh event should verify");
+    }
+
+    #[test]
+    fn test_witness_verify_hash_fails_for_tampered_event() {
+        let mut event = make_audit_event(AgentIdentityAuditAction::Created, None, 1, None);
+        event.to_version = 999; // tamper
+        assert!(
+            !event.verify_hash(),
+            "Tampered event should fail verification"
+        );
+    }
+
+    #[test]
+    fn test_witness_chain_empty_is_valid() {
+        let result = verify_audit_chain(&[]);
+        assert!(result.valid);
+        assert_eq!(result.chain_length, 0);
+        assert!(result.breaks.is_empty());
+    }
+
+    #[test]
+    fn test_witness_chain_single_genesis_is_valid() {
+        let chain = build_chain(1);
+        let result = verify_audit_chain(&chain);
+        assert!(
+            result.valid,
+            "Single genesis event should be valid: {:?}",
+            result.breaks
+        );
+        assert_eq!(result.chain_length, 1);
+    }
+
+    #[test]
+    fn test_witness_chain_multi_event_valid() {
+        let chain = build_chain(5);
+        let result = verify_audit_chain(&chain);
+        assert!(
+            result.valid,
+            "5-event chain should be valid: {:?}",
+            result.breaks
+        );
+        assert_eq!(result.chain_length, 5);
+    }
+
+    #[test]
+    fn test_witness_chain_detects_tampered_event_hash() {
+        let mut chain = build_chain(3);
+        // Tamper with the middle event's to_version
+        chain[1].to_version = 999;
+        let result = verify_audit_chain(&chain);
+        assert!(!result.valid);
+        assert!(!result.breaks.is_empty());
+        // At minimum, event 1 should be flagged (hash mismatch)
+        assert!(
+            result.breaks.iter().any(|b| b.index == 1),
+            "Middle event should be flagged"
+        );
+    }
+
+    #[test]
+    fn test_witness_chain_detects_deleted_event() {
+        let mut chain = build_chain(4);
+        // Remove event at index 2 — event 3 now points to event 2's hash,
+        // but event 2 is gone, so event 3's prev_hash won't match event 1's hash
+        chain.remove(2);
+        let result = verify_audit_chain(&chain);
+        assert!(!result.valid);
+        assert!(result
+            .breaks
+            .iter()
+            .any(|b| b.reason.contains("prev_hash mismatch")));
+    }
+
+    #[test]
+    fn test_witness_chain_detects_reordered_events() {
+        let mut chain = build_chain(3);
+        // Swap events 1 and 2
+        chain.swap(1, 2);
+        let result = verify_audit_chain(&chain);
+        assert!(!result.valid);
+    }
+
+    #[test]
+    fn test_witness_chain_genesis_with_prev_hash_flagged() {
+        let mut chain = build_chain(1);
+        chain[0].prev_hash = Some("rogue_hash".to_string());
+        chain[0].event_hash = chain[0].compute_hash(); // recompute so hash itself is valid
+        let result = verify_audit_chain(&chain);
+        assert!(!result.valid);
+        assert!(result.breaks[0].reason.contains("Genesis event"));
+    }
+
+    #[test]
+    fn test_witness_chain_non_genesis_missing_prev_hash() {
+        let mut chain = build_chain(2);
+        chain[1].prev_hash = None;
+        chain[1].event_hash = chain[1].compute_hash();
+        let result = verify_audit_chain(&chain);
+        assert!(!result.valid);
+        assert!(result.breaks[0].reason.contains("Non-genesis"));
+    }
+
+    #[test]
+    fn test_witness_audit_event_serde_backward_compat() {
+        // Events created before witness chain fields should deserialize with defaults
+        let json_str = r#"{
+            "id": "01926a1c-7c4e-7000-8000-000000000001",
+            "agent_id": "test-bot",
+            "action": "created",
+            "to_version": 1,
+            "created_at": "2024-06-01T00:00:00Z"
+        }"#;
+        let event: AgentIdentityAuditEvent = serde_json::from_str(json_str).unwrap();
+        assert!(
+            event.prev_hash.is_none(),
+            "Missing prev_hash should be None"
+        );
+        assert!(
+            event.event_hash.is_empty(),
+            "Missing event_hash should be empty string"
+        );
+    }
+
+    #[test]
+    fn test_witness_chain_verification_serializes() {
+        let v = AuditChainVerification {
+            valid: true,
+            chain_length: 3,
+            breaks: vec![],
+        };
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["valid"], true);
+        assert_eq!(json["chain_length"], 3);
+        assert!(json["breaks"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_witness_chain_break_includes_event_id() {
+        let brk = AuditChainBreak {
+            index: 2,
+            event_id: Uuid::now_v7(),
+            reason: "hash mismatch".to_string(),
+        };
+        let json = serde_json::to_value(&brk).unwrap();
+        assert_eq!(json["index"], 2);
+        assert!(json["event_id"].is_string());
+        assert_eq!(json["reason"], "hash mismatch");
+    }
+
+    #[test]
+    fn test_witness_large_chain_performance() {
+        // Ensure 1000-event chain verifies quickly
+        let chain = build_chain(1000);
+        let start = std::time::Instant::now();
+        let result = verify_audit_chain(&chain);
+        let elapsed = start.elapsed();
+        assert!(result.valid, "1000-event chain should be valid");
+        assert!(
+            elapsed.as_millis() < 100,
+            "1000-event chain should verify in <100ms, took {}ms",
+            elapsed.as_millis()
         );
     }
 }

@@ -3,9 +3,9 @@ use uuid::Uuid;
 use crate::error::MnemoError;
 use crate::models::{
     agent::{
-        AgentIdentityAuditEvent, AgentIdentityProfile, CreateExperienceRequest,
-        CreatePromotionProposalRequest, ExperienceEvent, PromotionProposal,
-        UpdateAgentIdentityRequest,
+        AgentIdentityAuditEvent, AgentIdentityProfile, AuditChainVerification,
+        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
+        PromotionProposal, UpdateAgentIdentityRequest,
     },
     digest::MemoryDigest,
     edge::{Edge, EdgeFilter},
@@ -54,6 +54,11 @@ pub trait AgentStore: Send + Sync {
         agent_id: &str,
         limit: u32,
     ) -> StorageResult<Vec<AgentIdentityAuditEvent>>;
+    /// Walk the full audit chain and verify hash integrity.
+    async fn verify_agent_audit_chain(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<AuditChainVerification>;
     async fn create_promotion_proposal(
         &self,
         agent_id: &str,

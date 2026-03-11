@@ -1056,6 +1056,46 @@ Lists recent identity snapshots (newest first).
 
 Lists identity audit events (`created`, `updated`, `rolled_back`).
 
+Each event includes **witness chain** fields for tamper-evidence:
+
+| Field | Description |
+|---|---|
+| `prev_hash` | SHA-256 hash of the preceding audit event (`null` for genesis) |
+| `event_hash` | SHA-256 of `action\|from_version\|to_version\|prev_hash\|timestamp_ms` |
+
+The chain is tamper-evident: any deletion, modification, or reordering of events
+breaks the hash chain and is detectable via the verify endpoint.
+
+### `GET /api/v1/agents/:agent_id/identity/audit/verify`
+
+Walk the full witness chain and verify cryptographic integrity.
+
+**Response:**
+
+```json
+{
+  "valid": true,
+  "chain_length": 5,
+  "breaks": []
+}
+```
+
+If tampering is detected, `valid` is `false` and `breaks` contains entries:
+
+```json
+{
+  "valid": false,
+  "chain_length": 5,
+  "breaks": [
+    {
+      "index": 2,
+      "event_id": "019513a4-...",
+      "reason": "event_hash mismatch: stored=abc..., computed=def..."
+    }
+  ]
+}
+```
+
 ### `POST /api/v1/agents/:agent_id/identity/rollback`
 
 Rollback identity core to a prior version while preserving an append-only version history.

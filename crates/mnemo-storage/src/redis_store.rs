@@ -9,8 +9,8 @@ use mnemo_core::error::MnemoError;
 use mnemo_core::models::{
     agent::{
         AgentIdentityAuditAction, AgentIdentityAuditEvent, AgentIdentityProfile,
-        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
-        PromotionProposal, UpdateAgentIdentityRequest,
+        AuditChainVerification, CreateExperienceRequest, CreatePromotionProposalRequest,
+        ExperienceEvent, PromotionProposal, UpdateAgentIdentityRequest,
     },
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -1003,6 +1003,32 @@ impl AgentStore for RedisStateStore {
         Ok(out)
     }
 
+    async fn verify_agent_audit_chain(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<AuditChainVerification> {
+        // Fetch ALL audit events in chronological (oldest-first) order using ZRANGE
+        let zset_key = self.key(&["agent_identity_audit", agent_id]);
+        let mut conn = self.conn.clone();
+        let ids: Vec<String> = redis::cmd("ZRANGE")
+            .arg(&zset_key)
+            .arg(0)
+            .arg(-1) // all elements, oldest first
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut events = Vec::with_capacity(ids.len());
+        for id in ids {
+            let key = self.key(&["agent_identity_audit_event", &id]);
+            if let Some(event) = self.get_json::<AgentIdentityAuditEvent>(&key).await? {
+                events.push(event);
+            }
+        }
+
+        Ok(mnemo_core::models::agent::verify_audit_chain(&events))
+    }
+
     async fn create_promotion_proposal(
         &self,
         agent_id: &str,
@@ -1116,7 +1142,31 @@ impl RedisStateStore {
         rollback_to_version: Option<u64>,
         reason: Option<String>,
     ) -> StorageResult<()> {
-        let event = AgentIdentityAuditEvent {
+        // ─── Witness chain: fetch the latest event's hash ─────
+        let prev_hash = {
+            let zset_key = self.key(&["agent_identity_audit", agent_id]);
+            let mut conn = self.conn.clone();
+            let latest_ids: Vec<String> = redis::cmd("ZREVRANGE")
+                .arg(&zset_key)
+                .arg(0)
+                .arg(0) // just the most recent
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+            if let Some(latest_id) = latest_ids.first() {
+                let key = self.key(&["agent_identity_audit_event", latest_id]);
+                if let Some(latest_event) = self.get_json::<AgentIdentityAuditEvent>(&key).await? {
+                    Some(latest_event.event_hash)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        let mut event = AgentIdentityAuditEvent {
             id: Uuid::now_v7(),
             agent_id: agent_id.to_string(),
             action,
@@ -1125,7 +1175,10 @@ impl RedisStateStore {
             rollback_to_version,
             reason,
             created_at: Utc::now(),
+            prev_hash,
+            event_hash: String::new(), // computed below
         };
+        event.event_hash = event.compute_hash();
 
         let event_key = self.key(&["agent_identity_audit_event", &event.id.to_string()]);
         self.set_json(&event_key, &event).await?;
