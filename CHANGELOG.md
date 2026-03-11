@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-03-11
+
+### Added
+
+- **GNN-enhanced retrieval re-ranking** (`mnemo-gnn`): New crate implementing a 3-layer graph neural network for entity re-ranking. Takes entity candidates with graph topology signals (edge count, depth, connectivity) and produces attention-weighted relevance scores. Integrated into the retrieval pipeline for context assembly. 14 unit tests + falsification.
+- **SONA/EWC++ experience weight consolidation** (`mnemo-core`, `mnemo-server`): Elastic Weight Consolidation for agent experience events. `compute_fisher_importance()` scores each experience using novelty (inverse category saturation), corroboration (confidence-weight alignment), and weight magnitude. `effective_experience_weight_ewc()` applies the consolidation formula: `weight * confidence * decay * (1 + fisher_importance * EWC_LAMBDA)`. High-importance experiences resist temporal decay — synaptic consolidation for AI agents. 18 tests + falsification.
+- **Temporal tensor compression** (`mnemo-retrieval`): Tiered quantization for aging episode embeddings — f32 (hot), f16 (warm), int8 (cool), binary (cold). Configurable age thresholds, error-bounded lossy compression, compression statistics tracking via `GET /api/v1/ops/compression`. 18 tests + falsification.
+- **Coherence scoring endpoint** (`mnemo-retrieval`, `mnemo-server`): `POST /api/v1/memory/:user/coherence` computes a multi-signal coherence score for a user's knowledge graph — entity frequency variance, edge consistency, temporal coverage, structural connectedness. Returns a 0.0-1.0 score with per-signal breakdown. 25 tests + 8 adversarial falsification tests.
+- **MCP server** (`mnemo-mcp`): New crate implementing Model Context Protocol over stdio transport. 7 tools (`mnemo_remember`, `mnemo_recall`, `mnemo_graph_query`, `mnemo_agent_identity`, `mnemo_digest`, `mnemo_coherence`, `mnemo_health`), 2 resource templates (`mnemo://users/{user}/memory`, `mnemo://agents/{agent_id}/identity`). JSON-RPC 2.0 compliant, path traversal protection, Claude Code integration config. 38 tests + 30 adversarial falsification tests.
+- **Witness chain tamper-proof audit** (`mnemo-core`, `mnemo-server`): SHA-256 hash-chained audit trail for all agent identity mutations. Every `AgentIdentityAuditEvent` stores `prev_hash` and `event_hash` forming an append-only chain. `verify_audit_chain()` detects tampering, gaps, and forks. `GET /api/v1/agents/:agent_id/identity/audit/verify` endpoint. 17 tests + 6 adversarial falsification tests.
+- **Semantic routing** (`mnemo-retrieval`, `mnemo-server`): Keyword-based query classifier that routes retrieval queries to optimal strategies — `Head`, `Hybrid`, `Historical`, `GraphFocused`, `EpisodeRecall`. Applied in 3 context endpoints (`/context`, `/causal_recall`, agent context). `RoutingDecision` included in `ContextBlock` for observability. 21 tests + 10 adversarial falsification tests.
+- **Hyperbolic HNSW** (`mnemo-retrieval`): Poincare ball geometry for hierarchical entity re-ranking. `poincare_distance()`, `mobius_addition()`, `exp_map()`, `log_map()` operations. `HyperbolicHnswIndex` with insertion, k-nearest-neighbor search, and layer probability. Entities closer to the origin (more general) get boosted during retrieval. 29 tests + 11 adversarial falsification tests.
+- **COW branching for agent identity** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Copy-on-write branching for A/B testing agent personality changes. 6 endpoints: create/list/get/update/merge/delete branches. Branch agents use `{agent_id}:branch:{branch_name}` format. Merge brings validated changes back to main identity. 9 model tests + 8 adversarial falsification tests.
+- **DAG workflows** (`mnemo-ingest`, `mnemo-server`): Typed pipeline formalization with 7 steps (ingest, extract, embed, index, enrich, summarize, consolidate). Per-step latency/throughput metrics, dead-letter queue with configurable capacity and exponential backoff. `GET /api/v1/ops/pipeline` endpoint. 24 tests + 10 adversarial falsification tests.
+- **Delta consensus** (`mnemo-core`, `mnemo-server`): CRDT primitives for multi-node sync — `GCounter`, `LWWRegister`, `ORSet`, `LWWMap`. `VectorClock` for causal ordering, `HybridLogicalClock` for wall-clock + logical time, `MerkleDigest` for state fingerprinting, `DeltaEnvelope` for replication. `GET /api/v1/ops/sync` endpoint. `AgentIdentity` included as a `DeltaResourceType`. 54 tests + 12 adversarial falsification tests.
+- **Domain expansion / agent fork** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): `POST /api/v1/agents/:agent_id/fork` creates a new agent from an existing one with selective experience transfer. `ExperienceFilter` controls which events transfer (by category, min confidence, min weight, max count). `ForkLineage` preserves provenance. Identity core can be overridden at fork time. 14 model tests + 12 adversarial falsification tests.
+- **Verified/proof-carrying identity updates** (`mnemo-core`, `mnemo-server`): `POST /api/v1/agents/:agent_id/identity/verified` accepts Merkle proof-carrying writes. `AllowlistMerkleTree` built from canonical identity allowlist (6 keys). Proposer generates `AllowlistMembershipProof` per key; server verifies proof against canonical root + forbidden-substring deep scan before accepting write. Proof stored in response for auditability. 21 tests + 12 adversarial falsification tests.
+
+### Changed
+
+- `mnemo-core` test count: 62 -> 227 (+165 tests).
+- Total workspace test count: ~355 -> ~553 (+198 tests).
+- `AgentStore` trait: 14 -> 21 methods (added `fork_agent` + 6 branch methods).
+- `AppState` struct: added `compression_config`, `compression_stats`, `hyperbolic_config`, `pipeline_metrics`, `sync_status` fields.
+- `docs/API.md`: 13 new endpoint sections documenting all v0.5.0 features.
+
 ## [0.4.0] — 2026-03-10
 
 ### Added

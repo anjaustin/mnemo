@@ -201,7 +201,7 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release workflow expectation: bump `Cargo.toml` (`workspace.package.version`) and `sdk/python/pyproject.toml` together before tagging.
-- Current in-repo development version: `0.4.0`.
+- Current in-repo development version: `0.5.0`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
