@@ -602,6 +602,93 @@ temporal coherence, and structural coherence. No request body required.
 | Temporal coherence | 0.20 | Corroboration-to-supersession ratio (last 30 days) |
 | Structural coherence | 0.25 | Graph connectivity; penalizes fragmentation and isolation |
 
+### `GET /api/v1/memory/:user/stale`
+
+Returns facts whose effective confidence has decayed below the revalidation
+threshold, ranked by Fisher importance (most important stale facts first).
+Stale facts are valid edges that haven't been reinforced recently enough to
+maintain confidence above the threshold.
+
+Query parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `threshold` | `0.3` | Effective confidence below which a fact is stale |
+| `limit` | `50` | Maximum number of stale facts to return |
+| `half_life_days` | `90` | Decay half-life in days |
+
+Response:
+
+```json
+{
+  "user_id": "019513a4-...",
+  "threshold": 0.3,
+  "half_life_days": 90,
+  "stale_count": 3,
+  "stale_facts": [
+    {
+      "edge": {
+        "id": "...",
+        "label": "loves",
+        "fact": "Kendra loves Adidas shoes",
+        "confidence": 0.85,
+        "corroboration_count": 2,
+        "valid_at": "2025-06-15T..."
+      },
+      "effective_confidence": 0.22,
+      "fisher_importance": 0.74,
+      "age_days": 270,
+      "suggested_question": "Is it still true that Kendra loves Adidas shoes?"
+    }
+  ]
+}
+```
+
+Effective confidence formula:
+`confidence * corroboration_boost * decay_factor * importance_protection`
+
+- `corroboration_boost`: `min(1.0 + 0.1 * (corroboration_count - 1), 2.0)` — each corroboration adds 10%, capped at 2x.
+- `decay_factor`: `2^(-age_days / half_life)` — exponential decay.
+- `importance_protection`: `1 + clamp(fisher_importance, 0, 1) * 2.0` — structurally important edges resist decay (EWC++ principle).
+
+### `POST /api/v1/memory/:user/revalidate`
+
+Revalidate a stale fact by updating its confidence and resetting the decay clock.
+Call this when a user confirms that a previously-stale fact is still true.
+
+```json
+{
+  "edge_id": "019513a4-...",
+  "new_confidence": 0.9,
+  "evidence_episode_id": "019513a5-..."
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `edge_id` | yes | The edge ID to revalidate |
+| `new_confidence` | yes | New confidence value (0.0-1.0) |
+| `evidence_episode_id` | no | Episode providing evidence; if present, increments corroboration count |
+
+Response:
+
+```json
+{
+  "edge": { "...updated edge..." },
+  "previous_confidence": 0.85,
+  "new_effective_confidence": 0.9
+}
+```
+
+The edge's `valid_at` is reset to now, restarting the decay clock. If
+`evidence_episode_id` is provided, `corroboration_count` is incremented.
+
+Errors:
+- `400` if `new_confidence` is outside `[0.0, 1.0]`.
+- `400` if the edge is already invalidated (superseded facts cannot be revalidated).
+- `400` if the edge does not belong to the specified user.
+- `404` if the edge or user does not exist.
+
 ### `POST /api/v1/memory/:user/causal_recall`
 
 Explain why memory was retrieved by returning fact-to-episode lineage chains.

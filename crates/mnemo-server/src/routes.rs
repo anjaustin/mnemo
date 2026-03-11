@@ -123,6 +123,7 @@ fn webhook_event_type_str(event_type: MemoryWebhookEventType) -> &'static str {
         MemoryWebhookEventType::FactSuperseded => "fact_superseded",
         MemoryWebhookEventType::HeadAdvanced => "head_advanced",
         MemoryWebhookEventType::ConflictDetected => "conflict_detected",
+        MemoryWebhookEventType::RevalidationNeeded => "revalidation_needed",
     }
 }
 
@@ -1109,6 +1110,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/v1/memory/:user/conflict_radar", post(conflict_radar))
         .route("/api/v1/users/:user/coherence", get(get_user_coherence))
+        .route("/api/v1/memory/:user/stale", get(get_stale_facts))
+        .route("/api/v1/memory/:user/revalidate", post(revalidate_fact))
         .route(
             "/api/v1/memory/:user/causal_recall",
             post(causal_recall_chains),
@@ -9178,6 +9181,152 @@ async fn get_user_coherence(
         "recommendations": report.recommendations,
         "diagnostics": report.diagnostics,
     })))
+}
+
+/// `GET /api/v1/memory/:user/stale`
+///
+/// Returns facts whose effective confidence has decayed below the revalidation
+/// threshold, ranked by Fisher importance (most important stale facts first).
+async fn get_stale_facts(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Query(query): Query<mnemo_core::models::edge::StaleFactsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    // Fetch all valid edges for the user
+    let edges = state
+        .state_store
+        .query_edges(
+            user.id,
+            EdgeFilter {
+                include_invalidated: false,
+                limit: 10_000,
+                ..EdgeFilter::default()
+            },
+        )
+        .await?;
+
+    // For each edge, compute effective confidence and filter stale ones
+    let mut stale_facts: Vec<mnemo_core::models::edge::StaleFact> = Vec::new();
+
+    for edge in &edges {
+        // Compute edge Fisher importance using available signals
+        let outgoing = state
+            .state_store
+            .get_outgoing_edges(edge.source_entity_id)
+            .await
+            .unwrap_or_default();
+        let incoming = state
+            .state_store
+            .get_incoming_edges(edge.target_entity_id)
+            .await
+            .unwrap_or_default();
+        let same_label_count = edges
+            .iter()
+            .filter(|e| e.label == edge.label && e.is_valid())
+            .count() as u32;
+
+        let fisher = mnemo_core::models::edge::compute_edge_fisher_importance(
+            edge.corroboration_count,
+            same_label_count,
+            outgoing.len() as u32,
+            incoming.len() as u32,
+        );
+
+        let effective_conf = mnemo_core::models::edge::effective_edge_confidence(
+            edge,
+            fisher,
+            query.half_life_days,
+        );
+
+        if effective_conf < query.threshold {
+            let age_days = (chrono::Utc::now() - edge.valid_at).num_days().max(0) as u64;
+            stale_facts.push(mnemo_core::models::edge::StaleFact {
+                edge: edge.clone(),
+                effective_confidence: effective_conf,
+                fisher_importance: fisher,
+                age_days,
+                suggested_question: Some(format!(
+                    "Is it still true that {}?",
+                    edge.fact
+                )),
+            });
+        }
+    }
+
+    // Sort by Fisher importance descending (most important stale facts first)
+    stale_facts.sort_by(|a, b| {
+        b.fisher_importance
+            .partial_cmp(&a.fisher_importance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    stale_facts.truncate(query.limit as usize);
+
+    Ok(Json(serde_json::json!({
+        "user_id": user.id,
+        "threshold": query.threshold,
+        "half_life_days": query.half_life_days,
+        "stale_count": stale_facts.len(),
+        "stale_facts": stale_facts,
+    })))
+}
+
+/// `POST /api/v1/memory/:user/revalidate`
+///
+/// Revalidate a stale fact by updating its confidence and resetting the decay clock.
+/// The edge's `updated_at` is reset to now, effectively resetting the age for decay purposes.
+async fn revalidate_fact(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<mnemo_core::models::edge::RevalidateFactRequest>,
+) -> Result<Json<mnemo_core::models::edge::RevalidateFactResult>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    if req.new_confidence < 0.0 || req.new_confidence > 1.0 {
+        return Err(AppError(MnemoError::Validation(
+            "new_confidence must be between 0.0 and 1.0".into(),
+        )));
+    }
+
+    let mut edge = state.state_store.get_edge(req.edge_id).await?;
+
+    // Verify the edge belongs to this user
+    if edge.user_id != user.id {
+        return Err(AppError(MnemoError::Validation(
+            "edge does not belong to this user".into(),
+        )));
+    }
+
+    if !edge.is_valid() {
+        return Err(AppError(MnemoError::Validation(
+            "cannot revalidate an invalidated edge".into(),
+        )));
+    }
+
+    let previous_confidence = edge.confidence;
+
+    // Update confidence and reset the decay clock
+    edge.confidence = req.new_confidence;
+    edge.valid_at = chrono::Utc::now(); // reset decay clock
+    edge.updated_at = chrono::Utc::now();
+    if req.evidence_episode_id.is_some() {
+        edge.corroborate(); // additional corroboration
+    }
+
+    state.state_store.update_edge(&edge).await?;
+
+    let new_effective = mnemo_core::models::edge::effective_edge_confidence(
+        &edge,
+        0.5, // default importance for response
+        mnemo_core::models::edge::DEFAULT_EDGE_DECAY_HALF_LIFE_DAYS,
+    );
+
+    Ok(Json(mnemo_core::models::edge::RevalidateFactResult {
+        edge,
+        previous_confidence,
+        new_effective_confidence: new_effective,
+    }))
 }
 
 #[cfg(test)]

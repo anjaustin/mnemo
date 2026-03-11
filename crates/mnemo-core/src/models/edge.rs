@@ -192,6 +192,157 @@ impl Edge {
     }
 }
 
+// ─── Confidence Decay + Revalidation ───────────────────────────────
+
+/// Default half-life for edge confidence decay (in days).
+pub const DEFAULT_EDGE_DECAY_HALF_LIFE_DAYS: u32 = 90;
+
+/// Default revalidation threshold. When `effective_confidence` drops below
+/// this value, the fact is considered stale and needs revalidation.
+pub const DEFAULT_REVALIDATION_THRESHOLD: f32 = 0.3;
+
+/// EWC lambda for edge importance protection — same principle as agent
+/// experience consolidation: structurally important edges decay slower.
+const EDGE_EWC_LAMBDA: f32 = 2.0;
+
+/// Compute the effective confidence of an edge after temporal decay.
+///
+/// Formula: `confidence * corroboration_boost * decay_factor * importance_protection`
+///
+/// - `corroboration_boost`: `min(1.0 + 0.1 * (corroboration_count - 1), 2.0)`
+///   Each corroboration adds 10% boost, capped at 2x.
+/// - `decay_factor`: `2^(-age_days / half_life)` — exponential decay.
+/// - `importance_protection`: `1 + clamp(fisher_importance, 0, 1) * EDGE_EWC_LAMBDA`
+///   Structurally important edges resist decay.
+///
+/// The result is clamped to `[0.0, 1.0]`.
+pub fn effective_edge_confidence(edge: &Edge, fisher_importance: f32, half_life_days: u32) -> f32 {
+    if !edge.is_valid() {
+        return 0.0; // invalidated edges have zero effective confidence
+    }
+
+    let age_days = (Utc::now() - edge.valid_at).num_days().max(0) as f32;
+    let half_life = half_life_days.max(1) as f32;
+    let decay_factor = 2f32.powf(-age_days / half_life);
+
+    // Corroboration boost: each additional corroboration adds 10%, capped at 2x
+    let corroboration_boost =
+        (1.0 + 0.1 * (edge.corroboration_count.saturating_sub(1)) as f32).min(2.0);
+
+    // EWC++ protection: high-importance edges resist decay
+    let importance_protection = 1.0 + fisher_importance.clamp(0.0, 1.0) * EDGE_EWC_LAMBDA;
+
+    (edge.confidence * corroboration_boost * decay_factor * importance_protection).clamp(0.0, 1.0)
+}
+
+/// Compute the Fisher importance of an edge based on structural centrality
+/// and retrieval frequency signals.
+///
+/// Inputs:
+/// - `corroboration_count`: how many episodes confirm this fact
+/// - `total_edges_in_label`: total edges with the same label for this user
+/// - `outgoing_count`: number of outgoing edges from the source entity
+/// - `incoming_count`: number of incoming edges to the target entity
+///
+/// Higher importance for:
+/// - Highly corroborated facts (many episodes agree)
+/// - Rare relationship types (few edges with this label)
+/// - Edges connecting well-connected entities (hub nodes)
+pub fn compute_edge_fisher_importance(
+    corroboration_count: u32,
+    total_edges_in_label: u32,
+    outgoing_count: u32,
+    incoming_count: u32,
+) -> f32 {
+    // Corroboration signal: log-scaled count
+    let corroboration_signal = (1.0 + corroboration_count as f32).ln() / (1.0 + 10.0_f32).ln();
+
+    // Rarity signal: inverse of label frequency
+    let rarity_signal = 1.0 / (1.0 + total_edges_in_label as f32);
+
+    // Connectivity signal: how central are the connected entities
+    let connectivity = ((outgoing_count + incoming_count) as f32).sqrt() / 10.0;
+    let connectivity_signal = connectivity.min(1.0);
+
+    // Composite: weighted average
+    let importance = 0.4 * corroboration_signal + 0.3 * rarity_signal + 0.3 * connectivity_signal;
+    importance.clamp(0.0, 1.0)
+}
+
+/// A fact that has decayed below the revalidation threshold.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaleFact {
+    /// The edge representing the stale fact.
+    pub edge: Edge,
+    /// Current effective confidence after decay.
+    pub effective_confidence: f32,
+    /// The Fisher importance of this edge.
+    pub fisher_importance: f32,
+    /// Days since the fact was last corroborated or created.
+    pub age_days: u64,
+    /// Suggested clarification question for revalidation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_question: Option<String>,
+}
+
+/// Request body for `POST /api/v1/memory/:user/revalidate`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevalidateFactRequest {
+    /// The edge ID to revalidate.
+    pub edge_id: Uuid,
+    /// New confidence after revalidation (0.0-1.0).
+    pub new_confidence: f32,
+    /// Optional: episode that provides evidence for revalidation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_episode_id: Option<Uuid>,
+}
+
+/// Response from a revalidation action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevalidateFactResult {
+    /// The updated edge.
+    pub edge: Edge,
+    /// Previous confidence before revalidation.
+    pub previous_confidence: f32,
+    /// New effective confidence after revalidation.
+    pub new_effective_confidence: f32,
+}
+
+/// Query parameters for the stale facts endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaleFactsQuery {
+    /// Revalidation threshold (default: 0.3). Facts below this effective
+    /// confidence are considered stale.
+    #[serde(default = "default_revalidation_threshold")]
+    pub threshold: f32,
+    /// Maximum number of stale facts to return.
+    #[serde(default = "default_stale_limit")]
+    pub limit: u32,
+    /// Decay half-life in days (default: 90).
+    #[serde(default = "default_decay_half_life")]
+    pub half_life_days: u32,
+}
+
+fn default_revalidation_threshold() -> f32 {
+    DEFAULT_REVALIDATION_THRESHOLD
+}
+fn default_stale_limit() -> u32 {
+    50
+}
+fn default_decay_half_life() -> u32 {
+    DEFAULT_EDGE_DECAY_HALF_LIFE_DAYS
+}
+
+impl Default for StaleFactsQuery {
+    fn default() -> Self {
+        Self {
+            threshold: DEFAULT_REVALIDATION_THRESHOLD,
+            limit: 50,
+            half_life_days: DEFAULT_EDGE_DECAY_HALF_LIFE_DAYS,
+        }
+    }
+}
+
 impl EdgeFilter {
     /// Check if a given edge matches this filter.
     pub fn matches(&self, edge: &Edge) -> bool {
@@ -410,5 +561,229 @@ mod tests {
         assert_eq!(de.id, edge.id);
         assert_eq!(de.label, edge.label);
         assert_eq!(de.fact, edge.fact);
+    }
+
+    // ─── Confidence Decay + Revalidation Tests ────────────────────
+
+    fn make_edge_with_age(age_days: i64, confidence: f32, corroboration_count: u32) -> Edge {
+        let valid_at = Utc::now() - chrono::Duration::days(age_days);
+        let mut edge = Edge::from_extraction(
+            &sample_relationship(),
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            Uuid::from_u128(4),
+            valid_at,
+        );
+        edge.confidence = confidence;
+        edge.corroboration_count = corroboration_count;
+        edge
+    }
+
+    #[test]
+    fn test_effective_confidence_fresh_edge() {
+        let edge = make_edge_with_age(0, 0.9, 1);
+        let eff = effective_edge_confidence(&edge, 0.0, 90);
+        // Fresh edge: decay_factor ~= 1.0, no corroboration boost, no importance
+        // eff = 0.9 * 1.0 * 1.0 * 1.0 = 0.9
+        assert!(
+            (eff - 0.9).abs() < 0.05,
+            "Fresh edge should have ~0.9 effective confidence, got {}",
+            eff
+        );
+    }
+
+    #[test]
+    fn test_effective_confidence_decays_over_time() {
+        let edge_new = make_edge_with_age(0, 0.8, 1);
+        let edge_old = make_edge_with_age(180, 0.8, 1);
+        let eff_new = effective_edge_confidence(&edge_new, 0.0, 90);
+        let eff_old = effective_edge_confidence(&edge_old, 0.0, 90);
+        assert!(
+            eff_new > eff_old,
+            "Older edge should have lower effective confidence: new={} old={}",
+            eff_new,
+            eff_old
+        );
+    }
+
+    #[test]
+    fn test_effective_confidence_at_half_life() {
+        let edge = make_edge_with_age(90, 1.0, 1);
+        let eff = effective_edge_confidence(&edge, 0.0, 90);
+        // At exactly half-life: decay_factor = 0.5, no boosts
+        // eff = 1.0 * 1.0 * 0.5 * 1.0 = 0.5
+        assert!(
+            (eff - 0.5).abs() < 0.05,
+            "At half-life, confidence should be ~0.5, got {}",
+            eff
+        );
+    }
+
+    #[test]
+    fn test_effective_confidence_corroboration_boost() {
+        let edge_1 = make_edge_with_age(45, 0.8, 1);
+        let edge_5 = make_edge_with_age(45, 0.8, 5);
+        let eff_1 = effective_edge_confidence(&edge_1, 0.0, 90);
+        let eff_5 = effective_edge_confidence(&edge_5, 0.0, 90);
+        assert!(
+            eff_5 > eff_1,
+            "More corroboration should increase effective confidence: 1={} 5={}",
+            eff_1,
+            eff_5
+        );
+    }
+
+    #[test]
+    fn test_effective_confidence_corroboration_capped_at_2x() {
+        let edge_100 = make_edge_with_age(0, 0.5, 100);
+        let eff = effective_edge_confidence(&edge_100, 0.0, 90);
+        // corroboration_boost = min(1.0 + 0.1 * 99, 2.0) = 2.0
+        // eff = 0.5 * 2.0 * 1.0 * 1.0 = 1.0 (clamped)
+        assert!(
+            (eff - 1.0).abs() < 0.01,
+            "Corroboration should cap at 2x, eff={}",
+            eff
+        );
+    }
+
+    #[test]
+    fn test_effective_confidence_fisher_protection() {
+        let edge = make_edge_with_age(90, 0.8, 1);
+        let eff_no_importance = effective_edge_confidence(&edge, 0.0, 90);
+        let eff_high_importance = effective_edge_confidence(&edge, 1.0, 90);
+        assert!(
+            eff_high_importance > eff_no_importance,
+            "High importance should resist decay: low={} high={}",
+            eff_no_importance,
+            eff_high_importance
+        );
+    }
+
+    #[test]
+    fn test_effective_confidence_invalidated_edge_is_zero() {
+        let mut edge = make_edge_with_age(0, 0.9, 5);
+        edge.invalidate(Uuid::from_u128(99));
+        let eff = effective_edge_confidence(&edge, 1.0, 90);
+        assert_eq!(
+            eff, 0.0,
+            "Invalidated edge must have zero effective confidence"
+        );
+    }
+
+    #[test]
+    fn test_effective_confidence_clamped_to_one() {
+        // High confidence + high corroboration + high importance + fresh
+        let edge = make_edge_with_age(0, 1.0, 20);
+        let eff = effective_edge_confidence(&edge, 1.0, 90);
+        assert!(
+            eff <= 1.0,
+            "Effective confidence must be clamped to 1.0, got {}",
+            eff
+        );
+    }
+
+    #[test]
+    fn test_compute_edge_fisher_importance_first_in_category() {
+        // Only edge with this label — high rarity signal
+        let fi = compute_edge_fisher_importance(1, 1, 3, 3);
+        assert!(
+            fi > 0.0 && fi <= 1.0,
+            "Importance should be in (0, 1], got {}",
+            fi
+        );
+    }
+
+    #[test]
+    fn test_compute_edge_fisher_importance_high_corroboration() {
+        let fi_low = compute_edge_fisher_importance(1, 10, 5, 5);
+        let fi_high = compute_edge_fisher_importance(10, 10, 5, 5);
+        assert!(
+            fi_high > fi_low,
+            "Higher corroboration should increase importance: low={} high={}",
+            fi_low,
+            fi_high
+        );
+    }
+
+    #[test]
+    fn test_compute_edge_fisher_importance_rare_label() {
+        let fi_common = compute_edge_fisher_importance(3, 100, 5, 5);
+        let fi_rare = compute_edge_fisher_importance(3, 1, 5, 5);
+        assert!(
+            fi_rare > fi_common,
+            "Rarer label should increase importance: common={} rare={}",
+            fi_common,
+            fi_rare
+        );
+    }
+
+    #[test]
+    fn test_compute_edge_fisher_importance_high_connectivity() {
+        let fi_isolated = compute_edge_fisher_importance(3, 10, 1, 1);
+        let fi_hub = compute_edge_fisher_importance(3, 10, 50, 50);
+        assert!(
+            fi_hub > fi_isolated,
+            "Hub nodes should increase edge importance: isolated={} hub={}",
+            fi_isolated,
+            fi_hub
+        );
+    }
+
+    #[test]
+    fn test_compute_edge_fisher_importance_clamped() {
+        let fi = compute_edge_fisher_importance(1000, 1, 1000, 1000);
+        assert!(
+            fi >= 0.0 && fi <= 1.0,
+            "Importance must be clamped to [0, 1], got {}",
+            fi
+        );
+    }
+
+    #[test]
+    fn test_stale_fact_serialization() {
+        let edge = make_edge_with_age(100, 0.5, 1);
+        let stale = StaleFact {
+            edge,
+            effective_confidence: 0.15,
+            fisher_importance: 0.7,
+            age_days: 100,
+            suggested_question: Some("Is it still true that Kendra loves Adidas shoes?".into()),
+        };
+        let json = serde_json::to_string(&stale).unwrap();
+        let back: StaleFact = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.effective_confidence, 0.15);
+        assert_eq!(back.fisher_importance, 0.7);
+        assert_eq!(back.age_days, 100);
+        assert!(back.suggested_question.is_some());
+    }
+
+    #[test]
+    fn test_revalidate_request_serialization() {
+        let req = RevalidateFactRequest {
+            edge_id: Uuid::from_u128(42),
+            new_confidence: 0.85,
+            evidence_episode_id: Some(Uuid::from_u128(99)),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: RevalidateFactRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.new_confidence, 0.85);
+        assert!(back.evidence_episode_id.is_some());
+    }
+
+    #[test]
+    fn test_stale_facts_query_defaults() {
+        let query = StaleFactsQuery::default();
+        assert_eq!(query.threshold, DEFAULT_REVALIDATION_THRESHOLD);
+        assert_eq!(query.limit, 50);
+        assert_eq!(query.half_life_days, DEFAULT_EDGE_DECAY_HALF_LIFE_DAYS);
+    }
+
+    #[test]
+    fn test_stale_facts_query_deserialization_with_defaults() {
+        let json = "{}";
+        let query: StaleFactsQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(query.threshold, DEFAULT_REVALIDATION_THRESHOLD);
+        assert_eq!(query.half_life_days, DEFAULT_EDGE_DECAY_HALF_LIFE_DAYS);
     }
 }
