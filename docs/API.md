@@ -421,6 +421,49 @@ All fields are optional.
 }
 ```
 
+### `GET /api/v1/users/:user/coherence`
+
+Compute a coherence report for a user's knowledge graph. Measures internal
+consistency across four dimensions: entity coherence, fact coherence,
+temporal coherence, and structural coherence. No request body required.
+
+`:user` can be a UUID, `external_id`, or user name.
+
+```json
+// Response 200
+{
+  "user_id": "019513a4-7e2b-7000-8000-000000000001",
+  "score": 0.82,
+  "entity_coherence": 0.85,
+  "fact_coherence": 0.70,
+  "temporal_coherence": 0.90,
+  "structural_coherence": 0.83,
+  "recommendations": [
+    "Resolve 2 conflicting fact groups to improve consistency"
+  ],
+  "diagnostics": {
+    "total_entities": 42,
+    "total_edges": 128,
+    "active_edges": 104,
+    "invalidated_edges": 24,
+    "conflicting_groups": 2,
+    "communities_detected": 5,
+    "isolated_entities": 3,
+    "recent_supersessions": 6,
+    "recent_corroborations": 12
+  }
+}
+```
+
+**Sub-score weights** (sum to 1.0):
+
+| Dimension | Weight | Measures |
+|-----------|--------|----------|
+| Entity coherence | 0.20 | Type compatibility + evidence strength of connected entities |
+| Fact coherence | 0.35 | Ratio of clean vs. conflicting fact groups |
+| Temporal coherence | 0.20 | Corroboration-to-supersession ratio (last 30 days) |
+| Structural coherence | 0.25 | Graph connectivity; penalizes fragmentation and isolation |
+
 ### `POST /api/v1/memory/:user/causal_recall`
 
 Explain why memory was retrieved by returning fact-to-episode lineage chains.

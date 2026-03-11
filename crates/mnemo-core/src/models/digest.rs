@@ -15,4 +15,9 @@ pub struct MemoryDigest {
     pub generated_at: chrono::DateTime<chrono::Utc>,
     /// Which model generated this digest.
     pub model: String,
+    /// Coherence score (0.0–1.0) measuring internal consistency of the user's
+    /// knowledge graph. Computed by the coherence scoring system.
+    /// `None` for digests generated before coherence scoring was available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coherence_score: Option<f32>,
 }

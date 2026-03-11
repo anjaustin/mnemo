@@ -4,6 +4,7 @@
 //! Results can be merged using either Reciprocal Rank Fusion (RRF) or
 //! Maximal Marginal Relevance (MMR).
 
+pub mod coherence;
 pub mod compression;
 
 use chrono::{DateTime, Utc};

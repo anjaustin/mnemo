@@ -1104,6 +1104,7 @@ pub fn build_router(state: AppState) -> Router {
             post(memory_changes_since),
         )
         .route("/api/v1/memory/:user/conflict_radar", post(conflict_radar))
+        .route("/api/v1/users/:user/coherence", get(get_user_coherence))
         .route(
             "/api/v1/memory/:user/causal_recall",
             post(causal_recall_chains),
@@ -8861,6 +8862,7 @@ async fn refresh_memory_digest(
         dominant_topics,
         generated_at: chrono::Utc::now(),
         model: model_name,
+        coherence_score: None,
     };
 
     // Persist to Redis for durability — fail the request if persistence fails,
@@ -8877,6 +8879,56 @@ async fn refresh_memory_digest(
     }
 
     Ok(Json(digest))
+}
+
+// ─── Coherence Scoring ─────────────────────────────────────────────
+
+/// `GET /api/v1/users/:user/coherence`
+///
+/// Returns a coherence report for a user's knowledge graph, measuring
+/// internal consistency across four dimensions: entity coherence, fact
+/// coherence, temporal coherence, and structural coherence.
+async fn get_user_coherence(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    // Fetch all entities and edges (including invalidated for full picture)
+    let entities = list_all_entities_for_user(&state, user.id).await?;
+    let edges = state
+        .state_store
+        .query_edges(
+            user.id,
+            EdgeFilter {
+                include_invalidated: true,
+                limit: 10_000,
+                ..EdgeFilter::default()
+            },
+        )
+        .await?;
+
+    // Run community detection for structural coherence
+    let community_map = state
+        .graph
+        .detect_communities(user.id, 10)
+        .await
+        .unwrap_or_default();
+
+    // Compute the full coherence report
+    let report =
+        mnemo_retrieval::coherence::compute_coherence_report(&entities, &edges, &community_map);
+
+    Ok(Json(serde_json::json!({
+        "user_id": user.id,
+        "score": report.score,
+        "entity_coherence": report.entity_coherence,
+        "fact_coherence": report.fact_coherence,
+        "temporal_coherence": report.temporal_coherence,
+        "structural_coherence": report.structural_coherence,
+        "recommendations": report.recommendations,
+        "diagnostics": report.diagnostics,
+    })))
 }
 
 #[cfg(test)]

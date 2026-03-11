@@ -6797,6 +6797,7 @@ async fn test_digest_persisted_to_redis_and_served() {
         dominant_topics: vec!["distributed systems".into(), "Rust".into()],
         generated_at: chrono::Utc::now(),
         model: "test-model".into(),
+        coherence_score: None,
     };
     state_store.save_digest(&digest).await.unwrap();
 
@@ -8162,4 +8163,392 @@ async fn test_ops_compression_stats_reflect_tier_counts() {
     assert_eq!(body["tiers"]["full"]["count"], 0);
     assert_eq!(body["sweep"]["total_sweeps"], 0);
     assert_eq!(body["sweep"]["last_sweep_at"], "never");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Coherence scoring endpoint
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_coherence_empty_user_returns_high_score() {
+    let app = build_test_app().await;
+
+    // Create user with no entities/edges
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "coherence-empty-user",
+            "external_id": "coherence-empty",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = user["id"].as_str().unwrap();
+
+    let (status, body) = get_request(&app, &format!("/api/v1/users/{}/coherence", user_id)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Empty graph should be vacuously coherent (>=0.9)
+    let score = body["score"].as_f64().unwrap();
+    assert!(
+        score >= 0.9,
+        "empty graph should be vacuously coherent: {}",
+        score
+    );
+    assert_eq!(body["diagnostics"]["total_entities"], 0);
+    assert_eq!(body["diagnostics"]["total_edges"], 0);
+    assert!(body["recommendations"].is_array());
+}
+
+#[tokio::test]
+async fn test_coherence_healthy_graph_scores_well() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    // Create user
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "coherence-healthy-user",
+            "external_id": "coherence-healthy",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = Uuid::parse_str(user["id"].as_str().unwrap()).unwrap();
+
+    // Create entities: Person + Organization + Location (diverse types)
+    let episode_id = Uuid::now_v7();
+    let alice = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Alice".to_string(),
+                entity_type: EntityType::Person,
+                summary: Some("Software engineer".to_string()),
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let acme = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Acme Corp".to_string(),
+                entity_type: EntityType::Organization,
+                summary: Some("Tech company".to_string()),
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let nyc = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "New York".to_string(),
+                entity_type: EntityType::Location,
+                summary: Some("City".to_string()),
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+
+    // Create edges with high confidence (no conflicts)
+    let now = Utc::now();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Alice".to_string(),
+                target_name: "Acme Corp".to_string(),
+                label: "works_at".to_string(),
+                fact: "Alice works at Acme Corp".to_string(),
+                confidence: 0.9,
+                valid_at: Some(now - chrono::Duration::days(10)),
+            },
+            user_id,
+            alice.id,
+            acme.id,
+            episode_id,
+            now,
+        ))
+        .await
+        .unwrap();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Acme Corp".to_string(),
+                target_name: "New York".to_string(),
+                label: "located_in".to_string(),
+                fact: "Acme Corp is located in New York".to_string(),
+                confidence: 0.95,
+                valid_at: Some(now - chrono::Duration::days(30)),
+            },
+            user_id,
+            acme.id,
+            nyc.id,
+            episode_id,
+            now,
+        ))
+        .await
+        .unwrap();
+
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/users/{}/coherence", user_id),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let score = body["score"].as_f64().unwrap();
+    assert!(score > 0.5, "healthy graph should score reasonably: {}", score);
+    assert_eq!(body["diagnostics"]["total_entities"], 3);
+    assert_eq!(body["diagnostics"]["active_edges"], 2);
+    assert_eq!(body["diagnostics"]["conflicting_groups"], 0);
+    assert!(body["entity_coherence"].as_f64().unwrap() > 0.0);
+    assert!(body["fact_coherence"].as_f64().unwrap() > 0.0);
+    assert!(body["temporal_coherence"].as_f64().unwrap() > 0.0);
+    assert!(body["structural_coherence"].as_f64().unwrap() > 0.0);
+}
+
+#[tokio::test]
+async fn test_coherence_detects_fact_conflicts() {
+    let (app, state_store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: true,
+        scan_limit: 400,
+        relax_if_empty: false,
+    })
+    .await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "coherence-conflict-user",
+            "external_id": "coherence-conflict",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id = Uuid::parse_str(user["id"].as_str().unwrap()).unwrap();
+
+    let episode_id = Uuid::now_v7();
+    let alice = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Alice".to_string(),
+                entity_type: EntityType::Person,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let acme = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Acme Corp".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+    let globex = state_store
+        .create_entity(Entity::from_extraction(
+            &ExtractedEntity {
+                name: "Globex Corp".to_string(),
+                entity_type: EntityType::Organization,
+                summary: None,
+            },
+            user_id,
+            episode_id,
+        ))
+        .await
+        .unwrap();
+
+    // Create conflicting edges: Alice works_at BOTH Acme AND Globex simultaneously
+    let now = Utc::now();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Alice".to_string(),
+                target_name: "Acme Corp".to_string(),
+                label: "works_at".to_string(),
+                fact: "Alice works at Acme Corp".to_string(),
+                confidence: 0.9,
+                valid_at: Some(now - chrono::Duration::days(5)),
+            },
+            user_id,
+            alice.id,
+            acme.id,
+            episode_id,
+            now,
+        ))
+        .await
+        .unwrap();
+    state_store
+        .create_edge(Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "Alice".to_string(),
+                target_name: "Globex Corp".to_string(),
+                label: "works_at".to_string(),
+                fact: "Alice works at Globex Corp".to_string(),
+                confidence: 0.7,
+                valid_at: Some(now - chrono::Duration::days(2)),
+            },
+            user_id,
+            alice.id,
+            globex.id,
+            episode_id,
+            now,
+        ))
+        .await
+        .unwrap();
+
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/users/{}/coherence", user_id),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Fact coherence should be reduced due to conflict
+    let fact_coherence = body["fact_coherence"].as_f64().unwrap();
+    assert!(
+        fact_coherence < 1.0,
+        "conflicting facts should reduce fact coherence: {}",
+        fact_coherence
+    );
+    assert_eq!(body["diagnostics"]["conflicting_groups"], 1);
+    // Should have a recommendation about conflicts
+    let recs = body["recommendations"].as_array().unwrap();
+    assert!(
+        recs.iter()
+            .any(|r| r.as_str().unwrap().contains("conflicting")),
+        "should recommend resolving conflicts: {:?}",
+        recs
+    );
+}
+
+#[tokio::test]
+async fn test_coherence_user_by_external_id() {
+    let app = build_test_app().await;
+
+    let (status, _user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "coherence-extid-user",
+            "external_id": "coherence-ext-lookup",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Access coherence by external_id
+    let (status, body) =
+        get_request(&app, "/api/v1/users/coherence-ext-lookup/coherence").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["score"].as_f64().is_some());
+}
+
+#[tokio::test]
+async fn test_coherence_nonexistent_user_404() {
+    let app = build_test_app().await;
+
+    let (status, _body) = get_request(
+        &app,
+        &format!("/api/v1/users/{}/coherence", Uuid::now_v7()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_coherence_response_all_fields_present() {
+    let app = build_test_app().await;
+
+    let (status, user) = json_request(
+        &app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({
+            "name": "coherence-fields-user",
+            "external_id": "coherence-fields",
+            "metadata": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = get_request(
+        &app,
+        &format!("/api/v1/users/{}/coherence", user["id"].as_str().unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Verify all top-level fields are present
+    assert!(body["user_id"].is_string(), "user_id should be present");
+    assert!(body["score"].is_number(), "score should be present");
+    assert!(
+        body["entity_coherence"].is_number(),
+        "entity_coherence should be present"
+    );
+    assert!(
+        body["fact_coherence"].is_number(),
+        "fact_coherence should be present"
+    );
+    assert!(
+        body["temporal_coherence"].is_number(),
+        "temporal_coherence should be present"
+    );
+    assert!(
+        body["structural_coherence"].is_number(),
+        "structural_coherence should be present"
+    );
+    assert!(
+        body["recommendations"].is_array(),
+        "recommendations should be present"
+    );
+    assert!(
+        body["diagnostics"].is_object(),
+        "diagnostics should be present"
+    );
+
+    // Verify diagnostics sub-fields
+    let diag = &body["diagnostics"];
+    assert!(diag["total_entities"].is_number());
+    assert!(diag["total_edges"].is_number());
+    assert!(diag["active_edges"].is_number());
+    assert!(diag["invalidated_edges"].is_number());
+    assert!(diag["conflicting_groups"].is_number());
+    assert!(diag["communities_detected"].is_number());
+    assert!(diag["isolated_entities"].is_number());
+    assert!(diag["recent_supersessions"].is_number());
+    assert!(diag["recent_corroborations"].is_number());
+
+    // Score should be in [0, 1]
+    let score = body["score"].as_f64().unwrap();
+    assert!(score >= 0.0 && score <= 1.0, "score must be in [0,1]: {}", score);
 }

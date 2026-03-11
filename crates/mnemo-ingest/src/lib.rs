@@ -488,6 +488,7 @@ where
             dominant_topics,
             generated_at: chrono::Utc::now(),
             model: model_name,
+            coherence_score: None, // computed on-demand via coherence endpoint
         })
     }
 

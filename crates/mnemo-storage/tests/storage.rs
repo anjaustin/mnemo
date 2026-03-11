@@ -323,6 +323,7 @@ async fn test_digest_save_and_load() {
         dominant_topics: vec!["ML".into(), "Rust".into(), "Systems".into()],
         generated_at: chrono::Utc::now(),
         model: "test-model".into(),
+        coherence_score: None,
     };
     store.save_digest(&digest).await.unwrap();
 
@@ -349,6 +350,7 @@ async fn test_digest_overwrite() {
         dominant_topics: vec!["alpha".into()],
         generated_at: chrono::Utc::now(),
         model: "model-v1".into(),
+        coherence_score: None,
     };
     store.save_digest(&digest1).await.unwrap();
 
@@ -360,6 +362,7 @@ async fn test_digest_overwrite() {
         dominant_topics: vec!["beta".into(), "gamma".into()],
         generated_at: chrono::Utc::now(),
         model: "model-v2".into(),
+        coherence_score: None,
     };
     store.save_digest(&digest2).await.unwrap();
 
@@ -389,6 +392,7 @@ async fn test_digest_list_all() {
         dominant_topics: vec!["topic-a".into()],
         generated_at: chrono::Utc::now(),
         model: "test".into(),
+        coherence_score: None,
     };
     let digest_b = mnemo_core::models::digest::MemoryDigest {
         user_id: user_b,
@@ -398,6 +402,7 @@ async fn test_digest_list_all() {
         dominant_topics: vec!["topic-b".into()],
         generated_at: chrono::Utc::now(),
         model: "test".into(),
+        coherence_score: None,
     };
     store.save_digest(&digest_a).await.unwrap();
     store.save_digest(&digest_b).await.unwrap();
@@ -422,6 +427,7 @@ async fn test_digest_delete() {
         dominant_topics: vec![],
         generated_at: chrono::Utc::now(),
         model: "test".into(),
+        coherence_score: None,
     };
     store.save_digest(&digest).await.unwrap();
     assert!(store.get_digest(user_id).await.unwrap().is_some());
