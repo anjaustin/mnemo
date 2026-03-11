@@ -1181,6 +1181,10 @@ pub fn build_router(state: AppState) -> Router {
             post(rollback_agent_identity),
         )
         .route(
+            "/api/v1/agents/:agent_id/identity/verified",
+            post(verified_identity_update),
+        )
+        .route(
             "/api/v1/agents/:agent_id/experience",
             post(add_agent_experience),
         )
@@ -6463,6 +6467,60 @@ async fn rollback_agent_identity(
         .rollback_agent_identity(&agent_id, req.target_version, req.reason)
         .await?;
     Ok(Json(identity))
+}
+
+/// `POST /api/v1/agents/:agent_id/identity/verified`
+///
+/// Proof-carrying identity update. The proposer attaches a Merkle proof that
+/// every top-level key in `core` is a member of the canonical identity allowlist.
+/// The server verifies the proof (cheap) and applies the update only if
+/// verification passes. The proof is stored in the audit trail for auditability.
+async fn verified_identity_update(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<mnemo_core::models::agent::VerifiedIdentityUpdateRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+
+    // 1. Verify the proof
+    let verification = mnemo_core::models::agent::verify_identity_update_proof(&req.core, &req.proof);
+    if !verification.verified {
+        let failed_keys: Vec<&mnemo_core::models::agent::KeyVerificationResult> =
+            verification.key_results.iter().filter(|r| !r.valid).collect();
+        return Err(AppError(MnemoError::Validation(format!(
+            "proof verification failed: {}",
+            failed_keys
+                .iter()
+                .map(|r| format!(
+                    "{}: {}",
+                    r.key,
+                    r.error.as_deref().unwrap_or("unknown")
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))));
+    }
+
+    // 2. Apply the identity update (same as PUT /identity)
+    let identity = state
+        .state_store
+        .update_agent_identity(
+            &agent_id,
+            mnemo_core::models::agent::UpdateAgentIdentityRequest {
+                core: req.core.clone(),
+            },
+        )
+        .await?;
+    state
+        .metrics
+        .agent_identity_updates_total
+        .fetch_add(1, Ordering::Relaxed);
+
+    // 3. Return identity + verification result for auditability
+    Ok(Json(serde_json::json!({
+        "identity": identity,
+        "verification": verification,
+    })))
 }
 
 async fn add_agent_experience(

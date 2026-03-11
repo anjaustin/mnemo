@@ -1245,6 +1245,84 @@ Rollback identity core to a prior version while preserving an append-only versio
 }
 ```
 
+### `POST /api/v1/agents/:agent_id/identity/verified`
+
+Proof-carrying identity update. The proposer attaches a Merkle proof that every
+top-level key in `core` is a member of the canonical identity allowlist. The
+server verifies the proof (cheap) and applies the update only if verification
+passes. The proof is stored alongside the response for auditability.
+
+The canonical allowlist keys are: `boundaries`, `capabilities`, `mission`,
+`persona`, `style`, `values`.
+
+**Generating a proof**: Build an `AllowlistMerkleTree` from the canonical
+allowlist, then call `tree.prove(key)` for each top-level key in your candidate
+core. Collect these into an `IdentityUpdateProof` with the tree's root.
+
+```json
+{
+  "core": {
+    "mission": "help users accomplish tasks",
+    "style": "concise and direct"
+  },
+  "proof": {
+    "merkle_root": "a1b2c3...64hex...",
+    "key_proofs": [
+      {
+        "key": "mission",
+        "leaf_index": 2,
+        "siblings": [
+          { "hash": "d4e5f6...64hex...", "position": "right" },
+          { "hash": "a7b8c9...64hex...", "position": "left" }
+        ],
+        "root": "a1b2c3...64hex..."
+      },
+      {
+        "key": "style",
+        "leaf_index": 4,
+        "siblings": [
+          { "hash": "f0e1d2...64hex...", "position": "right" },
+          { "hash": "c3b4a5...64hex...", "position": "left" }
+        ],
+        "root": "a1b2c3...64hex..."
+      }
+    ]
+  }
+}
+```
+
+Response includes the updated identity profile and the verification result:
+
+```json
+{
+  "identity": {
+    "agent_id": "support-bot",
+    "version": 6,
+    "core": { "mission": "...", "style": "..." },
+    "created_at": "...",
+    "updated_at": "..."
+  },
+  "verification": {
+    "verified": true,
+    "key_results": [
+      { "key": "mission", "valid": true },
+      { "key": "style", "valid": true }
+    ],
+    "merkle_root": "a1b2c3...64hex..."
+  }
+}
+```
+
+Verification checks:
+1. Proof `merkle_root` matches the canonical allowlist Merkle root.
+2. Every top-level key in `core` has a valid membership proof.
+3. No extra proofs for keys not present in `core`.
+4. No forbidden substrings (`user`, `session`, `episode`, `email`, `phone`, `address`, `external_id`) at any depth.
+
+Errors:
+- `400` if proof verification fails (includes per-key error details).
+- `404` if the agent does not exist.
+
 ### `POST /api/v1/agents/:agent_id/branches`
 
 Create a COW (copy-on-write) branch from the agent's current identity.

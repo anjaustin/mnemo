@@ -696,6 +696,383 @@ pub struct ForkResult {
     pub lineage: ForkLineage,
 }
 
+// ─── Verified Identity Updates (Proof-Carrying Writes) ─────────────
+
+/// The canonical allowlist of top-level identity core keys.
+pub const IDENTITY_ALLOWLIST: &[&str] = &[
+    "boundaries",
+    "capabilities",
+    "mission",
+    "persona",
+    "style",
+    "values",
+];
+
+/// Forbidden substrings that must not appear in any key at any depth.
+pub const IDENTITY_FORBIDDEN_SUBSTRINGS: &[&str] = &[
+    "address",
+    "email",
+    "episode",
+    "external_id",
+    "phone",
+    "session",
+    "user",
+];
+
+/// SHA-256 hash of a leaf or internal node in the allowlist Merkle tree.
+pub type MerkleHash = [u8; 32];
+
+/// Compute SHA-256 of arbitrary bytes.
+fn sha256(data: &[u8]) -> MerkleHash {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&result);
+    out
+}
+
+/// Compute the hash of a leaf: `SHA256("leaf:" || key_bytes)`.
+fn leaf_hash(key: &str) -> MerkleHash {
+    let mut buf = Vec::with_capacity(5 + key.len());
+    buf.extend_from_slice(b"leaf:");
+    buf.extend_from_slice(key.as_bytes());
+    sha256(&buf)
+}
+
+/// Compute the hash of an internal node: `SHA256("node:" || left || right)`.
+fn node_hash(left: &MerkleHash, right: &MerkleHash) -> MerkleHash {
+    let mut buf = Vec::with_capacity(5 + 64);
+    buf.extend_from_slice(b"node:");
+    buf.extend_from_slice(left);
+    buf.extend_from_slice(right);
+    sha256(&buf)
+}
+
+/// A Merkle tree built from the identity allowlist.
+///
+/// Leaves are sorted alphabetically and hashed with a domain separator.
+/// If the number of leaves is odd, the last leaf is duplicated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllowlistMerkleTree {
+    /// The Merkle root hash (hex-encoded for JSON).
+    pub root: String,
+    /// Sorted leaf keys used to build the tree.
+    pub leaves: Vec<String>,
+    /// All layers of the tree (layer 0 = leaves, last = root).
+    #[serde(skip)]
+    layers: Vec<Vec<MerkleHash>>,
+}
+
+impl AllowlistMerkleTree {
+    /// Build a Merkle tree from the canonical allowlist.
+    pub fn from_allowlist() -> Self {
+        Self::from_keys(IDENTITY_ALLOWLIST.iter().map(|s| s.to_string()).collect())
+    }
+
+    /// Build a Merkle tree from an arbitrary sorted key list.
+    pub fn from_keys(mut keys: Vec<String>) -> Self {
+        keys.sort();
+        let mut leaf_hashes: Vec<MerkleHash> = keys.iter().map(|k| leaf_hash(k)).collect();
+        // Pad to even length
+        if leaf_hashes.len() % 2 != 0 {
+            leaf_hashes.push(*leaf_hashes.last().unwrap());
+        }
+
+        let mut layers = vec![leaf_hashes.clone()];
+        let mut current = leaf_hashes;
+
+        while current.len() > 1 {
+            let mut next = Vec::with_capacity((current.len() + 1) / 2);
+            for pair in current.chunks(2) {
+                if pair.len() == 2 {
+                    next.push(node_hash(&pair[0], &pair[1]));
+                } else {
+                    next.push(node_hash(&pair[0], &pair[0]));
+                }
+            }
+            layers.push(next.clone());
+            current = next;
+        }
+
+        let root_hash = current.first().copied().unwrap_or([0u8; 32]);
+        Self {
+            root: hex::encode(root_hash),
+            leaves: keys,
+            layers,
+        }
+    }
+
+    /// Generate a membership proof for a given key.
+    /// Returns `None` if the key is not in the allowlist.
+    pub fn prove(&self, key: &str) -> Option<AllowlistMembershipProof> {
+        let idx = self.leaves.iter().position(|k| k == key)?;
+        let mut siblings = Vec::new();
+        let mut current_idx = idx;
+
+        // Account for padding: if odd number of original leaves, the leaf layer
+        // was padded, so use the padded layer length
+        for layer in &self.layers[..self.layers.len().saturating_sub(1)] {
+            let sibling_idx = if current_idx % 2 == 0 {
+                current_idx + 1
+            } else {
+                current_idx - 1
+            };
+            let sibling_hash = if sibling_idx < layer.len() {
+                layer[sibling_idx]
+            } else {
+                layer[current_idx] // duplicate for odd
+            };
+            siblings.push(ProofSibling {
+                hash: hex::encode(sibling_hash),
+                position: if current_idx % 2 == 0 {
+                    SiblingPosition::Right
+                } else {
+                    SiblingPosition::Left
+                },
+            });
+            current_idx /= 2;
+        }
+
+        Some(AllowlistMembershipProof {
+            key: key.to_string(),
+            leaf_index: idx as u32,
+            siblings,
+            root: self.root.clone(),
+        })
+    }
+
+    /// Verify a membership proof against this tree's root.
+    pub fn verify(&self, proof: &AllowlistMembershipProof) -> bool {
+        Self::verify_against_root(&self.root, proof)
+    }
+
+    /// Verify a proof against a given root hash (static verification).
+    pub fn verify_against_root(root: &str, proof: &AllowlistMembershipProof) -> bool {
+        let mut current = leaf_hash(&proof.key);
+        for sibling in &proof.siblings {
+            let sibling_hash = match hex::decode(&sibling.hash) {
+                Ok(h) if h.len() == 32 => {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&h);
+                    arr
+                }
+                _ => return false,
+            };
+            current = match sibling.position {
+                SiblingPosition::Right => node_hash(&current, &sibling_hash),
+                SiblingPosition::Left => node_hash(&sibling_hash, &current),
+            };
+        }
+        hex::encode(current) == root
+    }
+}
+
+/// Which side the sibling is on in the Merkle proof path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SiblingPosition {
+    Left,
+    Right,
+}
+
+/// A single sibling in a Merkle proof path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProofSibling {
+    /// Hex-encoded SHA-256 hash of the sibling node.
+    pub hash: String,
+    /// Whether this sibling is on the left or right.
+    pub position: SiblingPosition,
+}
+
+/// Proof that a single key is a member of the identity allowlist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllowlistMembershipProof {
+    /// The key being proved.
+    pub key: String,
+    /// Leaf index in the sorted allowlist.
+    pub leaf_index: u32,
+    /// Sibling hashes along the path from leaf to root.
+    pub siblings: Vec<ProofSibling>,
+    /// The Merkle root this proof targets.
+    pub root: String,
+}
+
+/// A complete proof covering all top-level keys in a candidate identity core.
+/// Each key must have a valid membership proof.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityUpdateProof {
+    /// Merkle root hash (hex) the proofs are verified against.
+    pub merkle_root: String,
+    /// One membership proof per top-level key in the candidate core.
+    pub key_proofs: Vec<AllowlistMembershipProof>,
+}
+
+/// Request body for `POST /api/v1/agents/:agent_id/identity/verified`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifiedIdentityUpdateRequest {
+    /// The candidate identity core (same as `UpdateAgentIdentityRequest.core`).
+    pub core: serde_json::Value,
+    /// Cryptographic proof that all keys satisfy the contamination guard.
+    pub proof: IdentityUpdateProof,
+}
+
+/// Result of proof verification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProofVerificationResult {
+    /// Whether all proofs verified successfully.
+    pub verified: bool,
+    /// Details per key.
+    pub key_results: Vec<KeyVerificationResult>,
+    /// The Merkle root used for verification.
+    pub merkle_root: String,
+}
+
+/// Per-key verification result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyVerificationResult {
+    /// The key being verified.
+    pub key: String,
+    /// Whether the proof is valid.
+    pub valid: bool,
+    /// Error message if invalid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Verify an `IdentityUpdateProof` against the canonical allowlist Merkle root.
+///
+/// Checks:
+/// 1. The proof's merkle_root matches the canonical root.
+/// 2. Every top-level key in `core` has a valid membership proof.
+/// 3. No extra proofs for keys not in `core`.
+/// 4. Forbidden-substring check on all keys at all depths.
+pub fn verify_identity_update_proof(
+    core: &serde_json::Value,
+    proof: &IdentityUpdateProof,
+) -> ProofVerificationResult {
+    let tree = AllowlistMerkleTree::from_allowlist();
+    let canonical_root = &tree.root;
+
+    let mut key_results = Vec::new();
+
+    // Check root matches canonical
+    if proof.merkle_root != *canonical_root {
+        return ProofVerificationResult {
+            verified: false,
+            key_results: vec![KeyVerificationResult {
+                key: "<merkle_root>".into(),
+                valid: false,
+                error: Some(format!(
+                    "proof merkle_root {} does not match canonical root {}",
+                    proof.merkle_root, canonical_root
+                )),
+            }],
+            merkle_root: canonical_root.clone(),
+        };
+    }
+
+    // Extract top-level keys from core
+    let core_keys: Vec<String> = match core.as_object() {
+        Some(map) => map.keys().cloned().collect(),
+        None => {
+            return ProofVerificationResult {
+                verified: false,
+                key_results: vec![KeyVerificationResult {
+                    key: "<core>".into(),
+                    valid: false,
+                    error: Some("core must be a JSON object".into()),
+                }],
+                merkle_root: canonical_root.clone(),
+            };
+        }
+    };
+
+    // Check each core key has a valid proof
+    for core_key in &core_keys {
+        let matching_proof = proof.key_proofs.iter().find(|p| p.key == *core_key);
+        match matching_proof {
+            None => {
+                key_results.push(KeyVerificationResult {
+                    key: core_key.clone(),
+                    valid: false,
+                    error: Some("no proof provided for this key".into()),
+                });
+            }
+            Some(kp) => {
+                if AllowlistMerkleTree::verify_against_root(canonical_root, kp) {
+                    key_results.push(KeyVerificationResult {
+                        key: core_key.clone(),
+                        valid: true,
+                        error: None,
+                    });
+                } else {
+                    key_results.push(KeyVerificationResult {
+                        key: core_key.clone(),
+                        valid: false,
+                        error: Some("Merkle proof verification failed".into()),
+                    });
+                }
+            }
+        }
+    }
+
+    // Check for extra proofs (proofs for keys not in core)
+    for kp in &proof.key_proofs {
+        if !core_keys.contains(&kp.key) {
+            key_results.push(KeyVerificationResult {
+                key: kp.key.clone(),
+                valid: false,
+                error: Some("proof provided for key not present in core".into()),
+            });
+        }
+    }
+
+    // Forbidden-substring deep scan
+    if let Err(forbidden_key) = check_forbidden_substrings(core, "core/") {
+        key_results.push(KeyVerificationResult {
+            key: forbidden_key.clone(),
+            valid: false,
+            error: Some(format!("forbidden substring detected at {}", forbidden_key)),
+        });
+    }
+
+    let verified = key_results.iter().all(|r| r.valid);
+    ProofVerificationResult {
+        verified,
+        key_results,
+        merkle_root: canonical_root.clone(),
+    }
+}
+
+/// Recursively check for forbidden substrings in all keys.
+fn check_forbidden_substrings(value: &serde_json::Value, path: &str) -> Result<(), String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                let normalized = k.to_ascii_lowercase();
+                if IDENTITY_FORBIDDEN_SUBSTRINGS
+                    .iter()
+                    .any(|token| normalized.contains(token))
+                {
+                    return Err(format!("{}{}", path, k));
+                }
+                let next = format!("{}{}/", path, k);
+                check_forbidden_substrings(v, &next)?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (idx, item) in items.iter().enumerate() {
+                let next = format!("{}[{}]/", path, idx);
+                check_forbidden_substrings(item, &next)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2124,5 +2501,255 @@ mod tests {
             !strict.matches(&event),
             "Specific category should exclude non-matching events"
         );
+    }
+
+    // ─── Verified Identity Updates (Merkle Proof) Tests ───────────
+
+    #[test]
+    fn test_merkle_tree_from_allowlist_deterministic() {
+        let tree1 = AllowlistMerkleTree::from_allowlist();
+        let tree2 = AllowlistMerkleTree::from_allowlist();
+        assert_eq!(tree1.root, tree2.root, "Merkle root must be deterministic");
+        assert_eq!(tree1.leaves.len(), IDENTITY_ALLOWLIST.len());
+    }
+
+    #[test]
+    fn test_merkle_tree_leaves_sorted() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let mut sorted = tree.leaves.clone();
+        sorted.sort();
+        assert_eq!(tree.leaves, sorted, "Leaves must be sorted alphabetically");
+    }
+
+    #[test]
+    fn test_merkle_tree_root_is_64_hex_chars() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        assert_eq!(tree.root.len(), 64, "SHA-256 hex = 64 chars");
+        assert!(
+            tree.root.chars().all(|c| c.is_ascii_hexdigit()),
+            "Root must be valid hex"
+        );
+    }
+
+    #[test]
+    fn test_merkle_proof_for_each_allowlist_key() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        for key in IDENTITY_ALLOWLIST {
+            let proof = tree
+                .prove(key)
+                .expect(&format!("proof for '{}' should exist", key));
+            assert_eq!(proof.key, *key);
+            assert_eq!(proof.root, tree.root);
+            assert!(
+                tree.verify(&proof),
+                "Proof for '{}' must verify against the tree root",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn test_merkle_proof_nonexistent_key_returns_none() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        assert!(tree.prove("nonexistent_key").is_none());
+        assert!(tree.prove("").is_none());
+    }
+
+    #[test]
+    fn test_merkle_static_verification() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let proof = tree.prove("mission").unwrap();
+        // Verify using only the root string (not the tree object)
+        assert!(AllowlistMerkleTree::verify_against_root(&tree.root, &proof));
+    }
+
+    #[test]
+    fn test_merkle_proof_wrong_root_fails() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let proof = tree.prove("mission").unwrap();
+        let bad_root = "0".repeat(64);
+        assert!(!AllowlistMerkleTree::verify_against_root(&bad_root, &proof));
+    }
+
+    #[test]
+    fn test_merkle_proof_tampered_key_fails() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let mut proof = tree.prove("mission").unwrap();
+        proof.key = "hacked".into(); // tamper with the key
+        assert!(!tree.verify(&proof), "Tampered key must fail verification");
+    }
+
+    #[test]
+    fn test_merkle_proof_serde_roundtrip() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let proof = tree.prove("style").unwrap();
+        let json = serde_json::to_string(&proof).unwrap();
+        let back: AllowlistMembershipProof = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.key, "style");
+        assert_eq!(back.root, tree.root);
+        assert!(tree.verify(&back), "Deserialized proof must still verify");
+    }
+
+    #[test]
+    fn test_verify_identity_update_proof_valid() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let core = json!({
+            "mission": "help users",
+            "style": "friendly"
+        });
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![tree.prove("mission").unwrap(), tree.prove("style").unwrap()],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(
+            result.verified,
+            "Valid proof should pass: {:?}",
+            result.key_results
+        );
+    }
+
+    #[test]
+    fn test_verify_identity_update_proof_missing_key_proof() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let core = json!({
+            "mission": "help users",
+            "style": "friendly"
+        });
+        // Only provide proof for "mission", not "style"
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![tree.prove("mission").unwrap()],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(!result.verified);
+        assert!(result
+            .key_results
+            .iter()
+            .any(|r| r.key == "style" && !r.valid));
+    }
+
+    #[test]
+    fn test_verify_identity_update_proof_wrong_root() {
+        let core = json!({"mission": "test"});
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let proof = IdentityUpdateProof {
+            merkle_root: "bad".repeat(16), // wrong root
+            key_proofs: vec![tree.prove("mission").unwrap()],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(!result.verified);
+    }
+
+    #[test]
+    fn test_verify_identity_update_proof_forbidden_nested_key() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let core = json!({
+            "mission": {
+                "user_data": "should fail"
+            }
+        });
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![tree.prove("mission").unwrap()],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(!result.verified, "Forbidden nested key should fail");
+    }
+
+    #[test]
+    fn test_verify_identity_update_proof_extra_proof_rejected() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let core = json!({"mission": "test"});
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![
+                tree.prove("mission").unwrap(),
+                tree.prove("style").unwrap(), // extra, not in core
+            ],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(!result.verified, "Extra proofs for absent keys should fail");
+    }
+
+    #[test]
+    fn test_verify_identity_update_proof_non_object_core() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let core = json!("not an object");
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(!result.verified, "Non-object core should fail");
+    }
+
+    #[test]
+    fn test_verify_identity_update_proof_empty_core() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let core = json!({});
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(result.verified, "Empty core with no proofs should pass");
+    }
+
+    #[test]
+    fn test_verified_identity_update_request_serde() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let req = VerifiedIdentityUpdateRequest {
+            core: json!({"persona": "helpful"}),
+            proof: IdentityUpdateProof {
+                merkle_root: tree.root.clone(),
+                key_proofs: vec![tree.prove("persona").unwrap()],
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: VerifiedIdentityUpdateRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.core, json!({"persona": "helpful"}));
+        assert_eq!(back.proof.merkle_root, tree.root);
+    }
+
+    #[test]
+    fn test_forbidden_substrings_constant_matches_server() {
+        // Ensure our constants match what the server uses
+        assert!(IDENTITY_FORBIDDEN_SUBSTRINGS.contains(&"user"));
+        assert!(IDENTITY_FORBIDDEN_SUBSTRINGS.contains(&"session"));
+        assert!(IDENTITY_FORBIDDEN_SUBSTRINGS.contains(&"episode"));
+        assert!(IDENTITY_FORBIDDEN_SUBSTRINGS.contains(&"email"));
+        assert!(IDENTITY_FORBIDDEN_SUBSTRINGS.contains(&"phone"));
+        assert!(IDENTITY_FORBIDDEN_SUBSTRINGS.contains(&"address"));
+        assert!(IDENTITY_FORBIDDEN_SUBSTRINGS.contains(&"external_id"));
+    }
+
+    #[test]
+    fn test_allowlist_constant_matches_server() {
+        assert!(IDENTITY_ALLOWLIST.contains(&"mission"));
+        assert!(IDENTITY_ALLOWLIST.contains(&"style"));
+        assert!(IDENTITY_ALLOWLIST.contains(&"boundaries"));
+        assert!(IDENTITY_ALLOWLIST.contains(&"capabilities"));
+        assert!(IDENTITY_ALLOWLIST.contains(&"values"));
+        assert!(IDENTITY_ALLOWLIST.contains(&"persona"));
+        assert_eq!(IDENTITY_ALLOWLIST.len(), 6);
+    }
+
+    #[test]
+    fn test_merkle_tree_from_custom_keys() {
+        let tree = AllowlistMerkleTree::from_keys(vec!["alpha".into(), "beta".into()]);
+        assert_eq!(tree.leaves, vec!["alpha", "beta"]);
+        let proof_a = tree.prove("alpha").unwrap();
+        let proof_b = tree.prove("beta").unwrap();
+        assert!(tree.verify(&proof_a));
+        assert!(tree.verify(&proof_b));
+    }
+
+    #[test]
+    fn test_merkle_tree_single_leaf() {
+        let tree = AllowlistMerkleTree::from_keys(vec!["only".into()]);
+        assert_eq!(tree.leaves.len(), 1);
+        let proof = tree.prove("only").unwrap();
+        assert!(tree.verify(&proof));
     }
 }
