@@ -2752,4 +2752,210 @@ mod tests {
         let proof = tree.prove("only").unwrap();
         assert!(tree.verify(&proof));
     }
+
+    // ─── Verified Identity Updates Falsification ──────────────────
+
+    #[test]
+    fn test_falsify_proof_tampered_sibling_hash() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let mut proof = tree.prove("mission").unwrap();
+        // Flip a bit in the first sibling hash
+        if let Some(sibling) = proof.siblings.first_mut() {
+            let mut bytes: Vec<u8> = hex::decode(&sibling.hash).unwrap();
+            bytes[0] ^= 0x01; // bit flip
+            sibling.hash = hex::encode(bytes);
+        }
+        assert!(
+            !tree.verify(&proof),
+            "Tampered sibling hash must fail verification"
+        );
+    }
+
+    #[test]
+    fn test_falsify_proof_swapped_sibling_positions() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let mut proof = tree.prove("mission").unwrap();
+        // Swap all sibling positions
+        for sibling in &mut proof.siblings {
+            sibling.position = match sibling.position {
+                SiblingPosition::Left => SiblingPosition::Right,
+                SiblingPosition::Right => SiblingPosition::Left,
+            };
+        }
+        // This should fail because the hash computation depends on order
+        assert!(
+            !tree.verify(&proof),
+            "Swapped sibling positions must fail verification"
+        );
+    }
+
+    #[test]
+    fn test_falsify_proof_truncated_siblings() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let mut proof = tree.prove("mission").unwrap();
+        // Remove the last sibling (path incomplete)
+        if !proof.siblings.is_empty() {
+            proof.siblings.pop();
+        }
+        assert!(
+            !tree.verify(&proof),
+            "Truncated proof path must fail verification"
+        );
+    }
+
+    #[test]
+    fn test_falsify_proof_key_substitution() {
+        // Take a valid proof for "mission" but claim it proves "boundaries"
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let mut proof = tree.prove("mission").unwrap();
+        proof.key = "boundaries".into(); // key substitution attack
+        assert!(
+            !tree.verify(&proof),
+            "Key substitution must fail — leaf hash changes"
+        );
+    }
+
+    #[test]
+    fn test_falsify_proof_for_unlisted_key() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        // Craft a core with an unlisted key and provide no valid proof
+        let core = json!({"hacked_key": "evil"});
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![], // no proof for hacked_key
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(!result.verified);
+        assert!(result
+            .key_results
+            .iter()
+            .any(|r| r.key == "hacked_key" && !r.valid));
+    }
+
+    #[test]
+    fn test_falsify_cross_tree_root_attack() {
+        // Build a custom tree with "hacked_key" and try to use its root
+        let custom_tree =
+            AllowlistMerkleTree::from_keys(vec!["hacked_key".into(), "mission".into()]);
+        let canonical_tree = AllowlistMerkleTree::from_allowlist();
+
+        assert_ne!(custom_tree.root, canonical_tree.root);
+
+        let core = json!({"mission": "test"});
+        let custom_proof = custom_tree.prove("mission").unwrap();
+        let proof = IdentityUpdateProof {
+            merkle_root: custom_tree.root.clone(), // wrong root
+            key_proofs: vec![custom_proof],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(!result.verified, "Cross-tree root must be rejected");
+    }
+
+    #[test]
+    fn test_falsify_deeply_nested_forbidden_substring() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        // Forbidden substring buried at depth 5
+        let core = json!({
+            "mission": {
+                "level1": {
+                    "level2": {
+                        "level3": {
+                            "level4": {
+                                "user_secret": "should be caught"
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![tree.prove("mission").unwrap()],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(
+            !result.verified,
+            "Deeply nested forbidden key must be caught"
+        );
+    }
+
+    #[test]
+    fn test_falsify_forbidden_substring_in_array_element() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let core = json!({
+            "values": [
+                {"email_contact": "bad@example.com"}
+            ]
+        });
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![tree.prove("values").unwrap()],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(
+            !result.verified,
+            "Forbidden key inside array element must be caught"
+        );
+    }
+
+    #[test]
+    fn test_falsify_case_sensitivity_attack() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        // "Mission" (capitalized) is NOT in the allowlist (only "mission")
+        let core = json!({"Mission": "sneaky"});
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![], // no valid proof possible
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        assert!(!result.verified, "Case-differing key must be rejected");
+    }
+
+    #[test]
+    fn test_falsify_duplicate_proofs_for_same_key() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let core = json!({"mission": "test"});
+        let mission_proof = tree.prove("mission").unwrap();
+        // Provide duplicate proofs — should still pass (no explicit rejection of duplicates,
+        // but the extra "mission" proof won't match a core key that doesn't exist twice)
+        let proof = IdentityUpdateProof {
+            merkle_root: tree.root.clone(),
+            key_proofs: vec![mission_proof.clone(), mission_proof],
+        };
+        let result = verify_identity_update_proof(&core, &proof);
+        // Duplicate proofs produce an "extra proof" error for the second occurrence
+        // because core_keys only has "mission" once but key_proofs has it twice.
+        // Actually the check iterates core keys and finds a match, then checks for
+        // extra proofs — duplicates map to the same key, so no extra. This should pass.
+        assert!(
+            result.verified,
+            "Duplicate proofs for same key should not cause failure"
+        );
+    }
+
+    #[test]
+    fn test_falsify_proof_with_invalid_hex_sibling() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let mut proof = tree.prove("mission").unwrap();
+        if let Some(sibling) = proof.siblings.first_mut() {
+            sibling.hash = "not_valid_hex_zzzz".into();
+        }
+        assert!(
+            !tree.verify(&proof),
+            "Invalid hex in sibling must fail verification"
+        );
+    }
+
+    #[test]
+    fn test_falsify_proof_with_short_hex_sibling() {
+        let tree = AllowlistMerkleTree::from_allowlist();
+        let mut proof = tree.prove("mission").unwrap();
+        if let Some(sibling) = proof.siblings.first_mut() {
+            sibling.hash = "abcd".into(); // valid hex but wrong length
+        }
+        assert!(
+            !tree.verify(&proof),
+            "Short hex sibling must fail (not 32 bytes)"
+        );
+    }
 }
