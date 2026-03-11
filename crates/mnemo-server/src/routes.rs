@@ -5445,14 +5445,27 @@ async fn causal_recall_chains(
     }
 
     let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
-    let mode = req.mode.unwrap_or_else(|| {
+    let (mode, routing_decision_json) = if let Some(explicit_mode) = req.mode {
+        let decision = mnemo_retrieval::router::RoutingDecision {
+            selected_strategy: match explicit_mode {
+                MemoryContextMode::Head => RetrievalStrategy::Head,
+                MemoryContextMode::Hybrid => RetrievalStrategy::Hybrid,
+                MemoryContextMode::Historical => RetrievalStrategy::Historical,
+            },
+            confidence: 1.0,
+            source: RoutingSource::ExplicitRequest,
+            alternatives: vec![],
+        };
+        (explicit_mode, Some(serde_json::to_value(&decision).ok()).flatten())
+    } else {
         let decision = classify_query(&req.query);
-        match decision.selected_strategy {
+        let mode = match decision.selected_strategy {
             RetrievalStrategy::Head => MemoryContextMode::Head,
             RetrievalStrategy::Historical => MemoryContextMode::Historical,
             _ => MemoryContextMode::Hybrid,
-        }
-    });
+        };
+        (mode, Some(serde_json::to_value(&decision).ok()).flatten())
+    };
     let requested_session_name = req.session.and_then(|s| {
         let trimmed = s.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
@@ -5482,6 +5495,7 @@ async fn causal_recall_chains(
         .retrieval
         .get_context(user.id, &context_req, reranker_for_state(&state))
         .await?;
+    context.routing_decision = routing_decision_json;
     maybe_attach_recent_episode_fallback(
         &state,
         user.id,
@@ -6657,14 +6671,27 @@ async fn get_agent_context(
         let trimmed = s.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     });
-    let mode = req.mode.unwrap_or_else(|| {
+    let (mode, routing_decision_json) = if let Some(explicit_mode) = req.mode {
+        let decision = mnemo_retrieval::router::RoutingDecision {
+            selected_strategy: match explicit_mode {
+                MemoryContextMode::Head => RetrievalStrategy::Head,
+                MemoryContextMode::Hybrid => RetrievalStrategy::Hybrid,
+                MemoryContextMode::Historical => RetrievalStrategy::Historical,
+            },
+            confidence: 1.0,
+            source: RoutingSource::ExplicitRequest,
+            alternatives: vec![],
+        };
+        (explicit_mode, Some(serde_json::to_value(&decision).ok()).flatten())
+    } else {
         let decision = classify_query(&req.query);
-        match decision.selected_strategy {
+        let mode = match decision.selected_strategy {
             RetrievalStrategy::Head => MemoryContextMode::Head,
             RetrievalStrategy::Historical => MemoryContextMode::Historical,
             _ => MemoryContextMode::Hybrid,
-        }
-    });
+        };
+        (mode, Some(serde_json::to_value(&decision).ok()).flatten())
+    };
     let scoped_session =
         resolve_session_scope(&state, user.id, mode, requested_session_name).await?;
     let session_id = scoped_session.as_ref().map(|s| s.id);
@@ -6690,6 +6717,7 @@ async fn get_agent_context(
         .retrieval
         .get_context(user.id, &context_req, reranker_for_state(&state))
         .await?;
+    context.routing_decision = routing_decision_json;
     maybe_attach_recent_episode_fallback(
         &state,
         user.id,
