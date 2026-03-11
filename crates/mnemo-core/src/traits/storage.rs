@@ -423,6 +423,30 @@ pub trait SpanStore: Send + Sync {
     async fn list_recent_spans(&self, limit: usize) -> StorageResult<Vec<LlmSpan>>;
 }
 
+use crate::models::clarification::ClarificationRequest;
+
+/// Persistence for self-healing memory clarification requests.
+#[allow(async_fn_in_trait)]
+pub trait ClarificationStore: Send + Sync {
+    /// Save a new or updated clarification request.
+    async fn save_clarification(&self, req: &ClarificationRequest) -> StorageResult<()>;
+
+    /// Get a clarification by ID.
+    async fn get_clarification(&self, id: Uuid) -> StorageResult<Option<ClarificationRequest>>;
+
+    /// List clarifications for a user, ordered by severity descending.
+    /// If `pending_only` is true, only return pending (non-resolved, non-expired) clarifications.
+    async fn list_clarifications(
+        &self,
+        user_id: Uuid,
+        pending_only: bool,
+        limit: usize,
+    ) -> StorageResult<Vec<ClarificationRequest>>;
+
+    /// Delete a clarification.
+    async fn delete_clarification(&self, id: Uuid) -> StorageResult<()>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -436,6 +460,7 @@ pub trait StateStore:
     + AgentStore
     + DigestStore
     + SpanStore
+    + ClarificationStore
 {
 }
 
@@ -449,6 +474,7 @@ impl<T> StateStore for T where
         + AgentStore
         + DigestStore
         + SpanStore
+        + ClarificationStore
 {
 }
 

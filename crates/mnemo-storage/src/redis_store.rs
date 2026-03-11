@@ -1761,3 +1761,104 @@ impl SpanStore for RedisStateStore {
         Ok(spans)
     }
 }
+
+// ─── ClarificationStore ───────────────────────────────────────────
+
+use mnemo_core::models::clarification::ClarificationRequest;
+
+impl ClarificationStore for RedisStateStore {
+    async fn save_clarification(&self, req: &ClarificationRequest) -> Result<(), MnemoError> {
+        let key = self.key(&["clarification", &req.id.to_string()]);
+        self.set_json(&key, req).await?;
+
+        // Add to user's clarification sorted set (score = severity * 1000 for ordering)
+        let zset_key = self.key(&["user_clarifications", &req.user_id.to_string()]);
+        let score = (req.severity * 1000.0) as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&zset_key)
+            .arg(score)
+            .arg(req.id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_clarification(&self, id: Uuid) -> Result<Option<ClarificationRequest>, MnemoError> {
+        let key = self.key(&["clarification", &id.to_string()]);
+        self.get_json::<ClarificationRequest>(&key).await
+    }
+
+    async fn list_clarifications(
+        &self,
+        user_id: Uuid,
+        pending_only: bool,
+        limit: usize,
+    ) -> Result<Vec<ClarificationRequest>, MnemoError> {
+        let zset_key = self.key(&["user_clarifications", &user_id.to_string()]);
+        let mut conn = self.conn.clone();
+
+        // Overfetch to account for filtering
+        let fetch_limit = if pending_only { limit * 3 } else { limit };
+        let clamped = fetch_limit.min(1000) as isize;
+
+        let ids: Vec<String> = redis::cmd("ZREVRANGE")
+            .arg(&zset_key)
+            .arg(0)
+            .arg(clamped - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut results = Vec::with_capacity(ids.len());
+        for id_str in &ids {
+            let key = self.key(&["clarification", id_str]);
+            if let Some(mut clar) = self.get_json::<ClarificationRequest>(&key).await? {
+                // Auto-expire pending clarifications that have passed their TTL
+                if clar.is_expired() {
+                    clar.expire();
+                    self.set_json(&key, &clar).await?;
+                }
+                if pending_only {
+                    if clar.status == mnemo_core::models::clarification::ClarificationStatus::Pending {
+                        results.push(clar);
+                    }
+                } else {
+                    results.push(clar);
+                }
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    async fn delete_clarification(&self, id: Uuid) -> Result<(), MnemoError> {
+        let key = self.key(&["clarification", &id.to_string()]);
+
+        // Get the clarification first to find the user_id for index cleanup
+        if let Some(clar) = self.get_json::<ClarificationRequest>(&key).await? {
+            let zset_key = self.key(&["user_clarifications", &clar.user_id.to_string()]);
+            let mut conn = self.conn.clone();
+            redis::cmd("ZREM")
+                .arg(&zset_key)
+                .arg(id.to_string())
+                .query_async::<()>(&mut conn)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
+
+        // Delete the JSON document
+        let mut conn = self.conn.clone();
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+}

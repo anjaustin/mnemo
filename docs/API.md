@@ -689,6 +689,88 @@ Errors:
 - `400` if the edge does not belong to the specified user.
 - `404` if the edge or user does not exist.
 
+### `GET /api/v1/memory/:user/clarifications`
+
+List self-healing clarification requests for a user. By default, returns only
+pending (unresolved) clarifications sorted by severity. These are questions
+the system has generated from detected memory conflicts.
+
+Query parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `all` | `false` | If `true`, include resolved/expired/dismissed clarifications |
+| `limit` | `50` | Maximum number of clarifications to return (max 200) |
+
+Response:
+
+```json
+{
+  "user_id": "019513a4-...",
+  "count": 2,
+  "pending_only": true,
+  "clarifications": [
+    {
+      "id": "019513a5-...",
+      "user_id": "019513a4-...",
+      "question": "We have conflicting information about Kendra's loves. Is it \"Kendra loves Adidas shoes\" or \"Kendra loves Nike shoes\"?",
+      "status": "pending",
+      "conflict_edge_ids": ["...", "..."],
+      "source_entity": "Kendra",
+      "label": "loves",
+      "conflicting_facts": ["Kendra loves Adidas shoes", "Kendra loves Nike shoes"],
+      "severity": 0.85,
+      "created_at": "2026-03-11T...",
+      "expires_at": "2026-03-18T..."
+    }
+  ]
+}
+```
+
+### `POST /api/v1/memory/:user/clarifications`
+
+Generate clarification requests from detected memory conflicts. Runs the
+conflict radar, identifies conflicts above the severity threshold, and creates
+targeted clarification questions.
+
+```json
+{
+  "min_severity": 0.6,
+  "max_clarifications": 5
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `min_severity` | `0.6` | Minimum conflict severity to generate clarifications for |
+| `max_clarifications` | `5` | Maximum number of clarifications to generate |
+
+Returns `201 Created` with the generated clarifications.
+
+### `POST /api/v1/memory/:user/clarifications/:id/resolve`
+
+Manually resolve a pending clarification with an answer. If `winning_edge_id`
+is provided, the losing edges are automatically invalidated (superseded).
+
+```json
+{
+  "answer": "Nike is correct, she switched brands last month",
+  "winning_edge_id": "019513a5-..."
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `answer` | yes | The answer to the clarification question |
+| `winning_edge_id` | no | Which conflicting edge to keep; losers are invalidated |
+
+Returns the updated clarification with `status: "resolved"`.
+
+### `POST /api/v1/memory/:user/clarifications/:id/dismiss`
+
+Dismiss a clarification without resolving it. No request body required.
+Returns the updated clarification with `status: "dismissed"`.
+
 ### `POST /api/v1/memory/:user/causal_recall`
 
 Explain why memory was retrieved by returning fact-to-episode lineage chains.

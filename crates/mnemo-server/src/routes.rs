@@ -36,8 +36,8 @@ use mnemo_core::models::{
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::storage::{
-    AgentStore, EdgeStore, EntityStore, EpisodeStore, RawVectorStore, SessionStore, SpanStore,
-    UserStore, VectorStore,
+    AgentStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, RawVectorStore,
+    SessionStore, SpanStore, UserStore, VectorStore,
 };
 
 use mnemo_retrieval::Reranker;
@@ -124,6 +124,8 @@ fn webhook_event_type_str(event_type: MemoryWebhookEventType) -> &'static str {
         MemoryWebhookEventType::HeadAdvanced => "head_advanced",
         MemoryWebhookEventType::ConflictDetected => "conflict_detected",
         MemoryWebhookEventType::RevalidationNeeded => "revalidation_needed",
+        MemoryWebhookEventType::ClarificationGenerated => "clarification_generated",
+        MemoryWebhookEventType::ClarificationResolved => "clarification_resolved",
     }
 }
 
@@ -1112,6 +1114,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:user/coherence", get(get_user_coherence))
         .route("/api/v1/memory/:user/stale", get(get_stale_facts))
         .route("/api/v1/memory/:user/revalidate", post(revalidate_fact))
+        .route(
+            "/api/v1/memory/:user/clarifications",
+            get(list_clarifications).post(generate_clarifications),
+        )
+        .route(
+            "/api/v1/memory/:user/clarifications/:id/resolve",
+            post(resolve_clarification),
+        )
+        .route(
+            "/api/v1/memory/:user/clarifications/:id/dismiss",
+            post(dismiss_clarification),
+        )
         .route(
             "/api/v1/memory/:user/causal_recall",
             post(causal_recall_chains),
@@ -9327,6 +9341,225 @@ async fn revalidate_fact(
         previous_confidence,
         new_effective_confidence: new_effective,
     }))
+}
+
+/// `GET /api/v1/memory/:user/clarifications`
+///
+/// List clarification requests for a user. Returns pending clarifications by
+/// default; set `?all=true` to include resolved/expired/dismissed.
+async fn list_clarifications(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Query(params): Query<ListClarificationsParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let pending_only = !params.all.unwrap_or(false);
+    let limit = params.limit.unwrap_or(50).min(200) as usize;
+
+    let clarifications = state
+        .state_store
+        .list_clarifications(user.id, pending_only, limit)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "user_id": user.id,
+        "count": clarifications.len(),
+        "pending_only": pending_only,
+        "clarifications": clarifications,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct ListClarificationsParams {
+    all: Option<bool>,
+    limit: Option<u32>,
+}
+
+/// `POST /api/v1/memory/:user/clarifications`
+///
+/// Generate clarification requests from detected conflicts. Runs the conflict
+/// radar, identifies conflicts above the severity threshold, and generates
+/// targeted clarification questions.
+async fn generate_clarifications(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<mnemo_core::models::clarification::GenerateClarificationsRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    // Fetch all edges (including invalidated) to detect conflicts
+    let edges = state
+        .state_store
+        .query_edges(
+            user.id,
+            EdgeFilter {
+                include_invalidated: true,
+                limit: 10_000,
+                ..EdgeFilter::default()
+            },
+        )
+        .await?;
+
+    // Build entity name lookup
+    let entities = list_all_entities_for_user(&state, user.id).await?;
+    let entity_names: std::collections::HashMap<Uuid, String> =
+        entities.iter().map(|e| (e.id, e.name.clone())).collect();
+
+    // Group edges by (source_entity_id, label) — same as conflict radar
+    let mut groups: std::collections::HashMap<(Uuid, String), Vec<&Edge>> =
+        std::collections::HashMap::new();
+    for edge in &edges {
+        groups
+            .entry((edge.source_entity_id, edge.label.clone()))
+            .or_default()
+            .push(edge);
+    }
+
+    let now = chrono::Utc::now();
+    let mut generated = Vec::new();
+
+    for ((source_id, label), group) in &groups {
+        if generated.len() >= req.max_clarifications as usize {
+            break;
+        }
+
+        // Count active edges (simultaneously valid now)
+        let active: Vec<&&Edge> = group.iter().filter(|e| e.is_valid_at(now)).collect();
+        if active.len() <= 1 {
+            continue; // no conflict
+        }
+
+        // Compute severity (same logic as conflict radar)
+        let severity = (0.85 + 0.05 * (active.len() as f32 - 2.0)).min(1.0);
+        if severity < req.min_severity {
+            continue;
+        }
+
+        let source_name = entity_names
+            .get(source_id)
+            .cloned()
+            .unwrap_or_else(|| source_id.to_string());
+
+        let conflicting_facts: Vec<String> = active.iter().map(|e| e.fact.clone()).collect();
+        let conflict_edge_ids: Vec<Uuid> = active.iter().map(|e| e.id).collect();
+
+        let question = mnemo_core::models::clarification::generate_clarification_question(
+            &source_name,
+            label,
+            &conflicting_facts,
+        );
+
+        let clarification = mnemo_core::models::clarification::ClarificationRequest::new(
+            user.id,
+            question,
+            conflict_edge_ids,
+            source_name,
+            label.clone(),
+            conflicting_facts,
+            severity,
+            mnemo_core::models::clarification::DEFAULT_CLARIFICATION_TTL_DAYS,
+        );
+
+        state.state_store.save_clarification(&clarification).await?;
+        generated.push(clarification);
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "user_id": user.id,
+            "generated_count": generated.len(),
+            "clarifications": generated,
+        })),
+    ))
+}
+
+/// `POST /api/v1/memory/:user/clarifications/:id/resolve`
+///
+/// Manually resolve a pending clarification with an answer.
+async fn resolve_clarification(
+    State(state): State<AppState>,
+    Path((user_identifier, clarification_id)): Path<(String, Uuid)>,
+    Json(req): Json<mnemo_core::models::clarification::ResolveClarificationRequest>,
+) -> Result<Json<mnemo_core::models::clarification::ClarificationRequest>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    if req.answer.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "answer is required".into(),
+        )));
+    }
+
+    let mut clarification = state
+        .state_store
+        .get_clarification(clarification_id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "clarification".into(),
+            id: clarification_id.to_string(),
+        })?;
+
+    if clarification.user_id != user.id {
+        return Err(AppError(MnemoError::Validation(
+            "clarification does not belong to this user".into(),
+        )));
+    }
+
+    if clarification.status != mnemo_core::models::clarification::ClarificationStatus::Pending {
+        return Err(AppError(MnemoError::Validation(format!(
+            "clarification is not pending (status: {:?})",
+            clarification.status
+        ))));
+    }
+
+    // If a winning edge was specified, invalidate the losing edges
+    if let Some(winner_id) = req.winning_edge_id {
+        for edge_id in &clarification.conflict_edge_ids {
+            if *edge_id != winner_id {
+                if let Ok(mut loser) = state.state_store.get_edge(*edge_id).await {
+                    if loser.is_valid() {
+                        loser.invalidate(Uuid::from_u128(0)); // system invalidation
+                        let _ = state.state_store.update_edge(&loser).await;
+                    }
+                }
+            }
+        }
+    }
+
+    clarification.resolve(req.answer, req.winning_edge_id, None);
+    state.state_store.save_clarification(&clarification).await?;
+
+    Ok(Json(clarification))
+}
+
+/// `POST /api/v1/memory/:user/clarifications/:id/dismiss`
+///
+/// Dismiss a clarification without resolving it.
+async fn dismiss_clarification(
+    State(state): State<AppState>,
+    Path((user_identifier, clarification_id)): Path<(String, Uuid)>,
+) -> Result<Json<mnemo_core::models::clarification::ClarificationRequest>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    let mut clarification = state
+        .state_store
+        .get_clarification(clarification_id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "clarification".into(),
+            id: clarification_id.to_string(),
+        })?;
+
+    if clarification.user_id != user.id {
+        return Err(AppError(MnemoError::Validation(
+            "clarification does not belong to this user".into(),
+        )));
+    }
+
+    clarification.dismiss();
+    state.state_store.save_clarification(&clarification).await?;
+
+    Ok(Json(clarification))
 }
 
 #[cfg(test)]
