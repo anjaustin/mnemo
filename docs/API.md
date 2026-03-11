@@ -41,6 +41,56 @@ Query params:
 
 Returns HTTP/webhook/policy counters plus active backlog gauges and recent audit activity counts.
 
+### `GET /api/v1/ops/compression`
+
+Temporal tensor compression statistics. Reports per-tier point counts,
+estimated storage, savings percentage, and sweep history.
+
+**Compression tiers**:
+
+| Tier | Age | Precision | Savings |
+|------|-----|-----------|---------|
+| `full` | 0-7 days | f32 | 0% |
+| `half` | 7-30 days | f16 | ~50% |
+| `int8` | 30-90 days | int8 | ~75% |
+| `binary` | 90+ days | binary | ~97% |
+
+**Configuration** (environment variables):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MNEMO_EMBEDDING_COMPRESSION_ENABLED` | `false` | Enable background compression sweep |
+| `MNEMO_COMPRESSION_TIER1_DAYS` | `7` | Days until f16 quantization |
+| `MNEMO_COMPRESSION_TIER2_DAYS` | `30` | Days until int8 quantization |
+| `MNEMO_COMPRESSION_TIER3_DAYS` | `90` | Days until binary quantization |
+| `MNEMO_COMPRESSION_SWEEP_INTERVAL_SECS` | `3600` | Seconds between sweep runs |
+
+**Response shape** (abridged):
+```json
+{
+  "enabled": true,
+  "dimensions": 384,
+  "total_points": 15000,
+  "tiers": {
+    "full":   { "count": 5000, "precision": "f32",    "estimated_bytes": 7680000 },
+    "half":   { "count": 4000, "precision": "f16",    "estimated_bytes": 3072000 },
+    "int8":   { "count": 3000, "precision": "int8",   "estimated_bytes": 1152000 },
+    "binary": { "count": 3000, "precision": "binary", "estimated_bytes": 144000 }
+  },
+  "storage": {
+    "estimated_bytes": 12048000,
+    "uncompressed_bytes": 23040000,
+    "savings_percent": 47.71
+  },
+  "sweep": {
+    "interval_secs": 3600,
+    "last_sweep_at": "2025-03-10T12:00:00Z",
+    "last_sweep_compressed": 150,
+    "total_sweeps": 24
+  }
+}
+```
+
 ### `GET /api/v1/traces/:request_id`
 
 Cross-pipeline trace lookup by request correlation ID.

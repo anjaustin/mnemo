@@ -268,4 +268,10 @@ pub struct AppState {
     pub require_tls: bool,
     /// HMAC secret for signing audit export responses (SOC 2 compliance).
     pub audit_signing_secret: Option<String>,
+    /// Temporal tensor compression config.
+    pub compression_config: mnemo_retrieval::compression::CompressionConfig,
+    /// Temporal tensor compression stats (atomic, shared with background sweep).
+    pub compression_stats: Arc<mnemo_retrieval::compression::CompressionStats>,
+    /// Embedding dimensions (needed for compression storage estimates).
+    pub embedding_dimensions: u32,
 }

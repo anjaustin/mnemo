@@ -180,6 +180,9 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         require_tls: false,
         audit_signing_secret: None,
+        compression_config: mnemo_retrieval::compression::CompressionConfig::default(),
+        compression_stats: Arc::new(mnemo_retrieval::compression::CompressionStats::default()),
+        embedding_dimensions: 384,
     };
 
     let app = build_router(state.clone()).layer(from_fn_with_state(
@@ -5018,6 +5021,9 @@ async fn test_webhook_persistence_survives_restart() {
         memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         require_tls: false,
         audit_signing_secret: None,
+        compression_config: mnemo_retrieval::compression::CompressionConfig::default(),
+        compression_stats: Arc::new(mnemo_retrieval::compression::CompressionStats::default()),
+        embedding_dimensions: 384,
     };
 
     let app1 = build_router(state1.clone()).layer(from_fn_with_state(
@@ -5110,6 +5116,9 @@ async fn test_webhook_persistence_survives_restart() {
         memory_digests: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         require_tls: false,
         audit_signing_secret: None,
+        compression_config: mnemo_retrieval::compression::CompressionConfig::default(),
+        compression_stats: Arc::new(mnemo_retrieval::compression::CompressionStats::default()),
+        embedding_dimensions: 384,
     };
 
     // Verify state2 starts empty
@@ -8103,4 +8112,54 @@ async fn test_ewc_high_fisher_events_resist_decay_in_context() {
         ew,
         raw * conf
     );
+}
+
+// ─── Temporal Tensor Compression ───────────────────────────────────
+
+#[tokio::test]
+async fn test_ops_compression_endpoint_returns_stats() {
+    let app = build_test_app().await;
+
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/ops/compression",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Check structure
+    assert_eq!(body["enabled"], false); // disabled by default in test config
+    assert_eq!(body["dimensions"], 384);
+    assert!(body["total_points"].is_number());
+    assert!(body["tiers"]["full"]["count"].is_number());
+    assert!(body["tiers"]["half"]["count"].is_number());
+    assert!(body["tiers"]["int8"]["count"].is_number());
+    assert!(body["tiers"]["binary"]["count"].is_number());
+    assert!(body["storage"]["estimated_bytes"].is_number());
+    assert!(body["storage"]["uncompressed_bytes"].is_number());
+    assert!(body["storage"]["savings_percent"].is_number());
+    assert!(body["sweep"]["interval_secs"].is_number());
+    assert!(body["sweep"]["total_sweeps"].is_number());
+    assert!(body["sweep"]["last_sweep_at"].is_string());
+}
+
+#[tokio::test]
+async fn test_ops_compression_stats_reflect_tier_counts() {
+    let app = build_test_app().await;
+
+    // Initially all zeros
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/ops/compression",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["total_points"], 0);
+    assert_eq!(body["tiers"]["full"]["count"], 0);
+    assert_eq!(body["sweep"]["total_sweeps"], 0);
+    assert_eq!(body["sweep"]["last_sweep_at"], "never");
 }

@@ -860,7 +860,10 @@ where
                 episode.id,
                 episode.user_id,
                 ep_emb,
-                serde_json::json!({"session_id": episode.session_id.to_string()}),
+                serde_json::json!({
+                    "session_id": episode.session_id.to_string(),
+                    "created_at": episode.created_at.timestamp() as f64,
+                }),
             )
             .await?;
 

@@ -284,6 +284,35 @@ async fn main() -> anyhow::Result<()> {
         memory_digests: digest_cache,
         require_tls: config.server.require_tls,
         audit_signing_secret: config.server.audit_signing_secret.clone(),
+        compression_config: {
+            let mut cc = mnemo_retrieval::compression::CompressionConfig::default();
+            if let Ok(v) = std::env::var("MNEMO_EMBEDDING_COMPRESSION_ENABLED") {
+                cc.enabled = v == "true" || v == "1";
+            }
+            if let Ok(v) = std::env::var("MNEMO_COMPRESSION_TIER1_DAYS") {
+                if let Ok(d) = v.parse() {
+                    cc.tier1_days = d;
+                }
+            }
+            if let Ok(v) = std::env::var("MNEMO_COMPRESSION_TIER2_DAYS") {
+                if let Ok(d) = v.parse() {
+                    cc.tier2_days = d;
+                }
+            }
+            if let Ok(v) = std::env::var("MNEMO_COMPRESSION_TIER3_DAYS") {
+                if let Ok(d) = v.parse() {
+                    cc.tier3_days = d;
+                }
+            }
+            if let Ok(v) = std::env::var("MNEMO_COMPRESSION_SWEEP_INTERVAL_SECS") {
+                if let Ok(d) = v.parse() {
+                    cc.sweep_interval_secs = d;
+                }
+            }
+            cc
+        },
+        compression_stats: Arc::new(mnemo_retrieval::compression::CompressionStats::default()),
+        embedding_dimensions: config.embedding.dimensions,
     };
 
     if let Err(err) = restore_webhook_state(&app_state).await {
@@ -357,6 +386,34 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         });
+    }
+
+    // Temporal tensor compression background sweep
+    if app_state.compression_config.enabled {
+        let sweep_state = app_state.clone();
+        let interval_secs = app_state.compression_config.sweep_interval_secs;
+        tracing::info!(
+            interval_secs = interval_secs,
+            "Temporal compression sweep enabled"
+        );
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                match mnemo_server::routes::run_compression_sweep(&sweep_state).await {
+                    Ok(compressed) => {
+                        tracing::info!(compressed = compressed, "Compression sweep complete");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Compression sweep failed (non-fatal)");
+                    }
+                }
+            }
+        });
+    } else {
+        tracing::debug!("Temporal compression disabled (MNEMO_EMBEDDING_COMPRESSION_ENABLED=false)");
     }
 
     let app = build_router(app_state.clone())

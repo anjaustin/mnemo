@@ -1027,6 +1027,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/metrics", get(metrics))
         .route("/api/v1/ops/summary", get(get_ops_summary))
+        .route("/api/v1/ops/compression", get(get_ops_compression))
         .route("/api/v1/ops/incidents", get(get_ops_incidents))
         .route("/api/v1/traces/:request_id", get(get_trace_by_request_id))
         .route(
@@ -1498,6 +1499,116 @@ async fn get_ops_summary(
         governance_audit_events_in_window,
         webhook_audit_events_in_window,
     })
+}
+
+// ─── Temporal Tensor Compression ───────────────────────────────────
+
+async fn get_ops_compression(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(
+        state
+            .compression_stats
+            .to_json(&state.compression_config, state.embedding_dimensions),
+    )
+}
+
+/// Run one compression sweep: iterate episode collection, quantize old vectors.
+///
+/// This is public so `main.rs` can call it from the background task.
+pub async fn run_compression_sweep(state: &AppState) -> Result<u64, MnemoError> {
+    use mnemo_retrieval::compression::{quantize_for_tier, CompressionTier};
+
+    let config = &state.compression_config;
+    let stats = &state.compression_stats;
+
+    stats.reset_tier_counts();
+    let mut compressed_count: u64 = 0;
+    let mut examined_count: u64 = 0;
+    let mut offset: Option<String> = None;
+    let batch_size = 100u32;
+
+    loop {
+        if examined_count >= config.max_points_per_sweep as u64 {
+            break;
+        }
+
+        let (points, next_offset) = state
+            .vector_store
+            .scroll_collection("episodes", None, batch_size, offset)
+            .await?;
+
+        if points.is_empty() {
+            break;
+        }
+
+        for pt in &points {
+            examined_count += 1;
+
+            // Determine created_at from payload
+            let created_at_epoch = pt
+                .payload
+                .get("created_at")
+                .and_then(|v| v.as_f64());
+
+            let current_tier_str = pt
+                .payload
+                .get("compression_tier")
+                .and_then(|v| v.as_str())
+                .unwrap_or("full");
+            let current_tier =
+                CompressionTier::from_str_opt(current_tier_str).unwrap_or(CompressionTier::Full);
+
+            // If no created_at, treat as Tier 0 (full)
+            let target_tier = match created_at_epoch {
+                Some(ts) => {
+                    let created = chrono::DateTime::from_timestamp(ts as i64, 0)
+                        .unwrap_or_else(|| chrono::Utc::now());
+                    config.tier_for_timestamp(created)
+                }
+                None => CompressionTier::Full,
+            };
+
+            stats.increment_tier(target_tier);
+
+            // Only compress if target tier is higher than current tier
+            if target_tier > current_tier && !pt.vector.is_empty() {
+                let compressed_vector = quantize_for_tier(&pt.vector, target_tier);
+
+                // Build updated payload: merge compression_tier into existing payload
+                let mut payload = pt.payload.clone();
+                if let serde_json::Value::Object(ref mut map) = payload {
+                    map.insert(
+                        "compression_tier".to_string(),
+                        serde_json::Value::String(target_tier.as_str().to_string()),
+                    );
+                }
+
+                state
+                    .vector_store
+                    .upsert_compressed_point("episodes", pt.id, compressed_vector, payload)
+                    .await?;
+                compressed_count += 1;
+            }
+        }
+
+        offset = next_offset;
+        if offset.is_none() {
+            break;
+        }
+    }
+
+    stats
+        .last_sweep_compressed
+        .store(compressed_count, Ordering::Relaxed);
+    stats
+        .last_sweep_examined
+        .store(examined_count, Ordering::Relaxed);
+    stats.last_sweep_epoch.store(
+        chrono::Utc::now().timestamp() as u64,
+        Ordering::Relaxed,
+    );
+    stats.total_sweeps.fetch_add(1, Ordering::Relaxed);
+
+    Ok(compressed_count)
 }
 
 async fn get_ops_incidents(

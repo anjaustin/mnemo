@@ -1,9 +1,10 @@
 use qdrant_client::qdrant::r#match::MatchValue;
 use qdrant_client::qdrant::{
-    value::Kind, CountPointsBuilder, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder,
-    DeletePointsBuilder, Distance, FieldCondition, FieldType, Filter, Match, PointId, PointStruct,
-    PointsIdsList, SearchPointsBuilder, SetPayloadPointsBuilder, UpsertPointsBuilder,
-    Value as QdrantValue, VectorParamsBuilder,
+    value::Kind, Condition, CountPointsBuilder, CreateCollectionBuilder,
+    CreateFieldIndexCollectionBuilder, DeletePointsBuilder, Distance, FieldCondition, FieldType,
+    Filter, Match, PointId, PointStruct, PointsIdsList, Range, ScrollPointsBuilder,
+    SearchPointsBuilder, SetPayloadPointsBuilder, UpsertPointsBuilder, Value as QdrantValue,
+    VectorParamsBuilder,
 };
 use qdrant_client::{Payload, Qdrant};
 use serde_json::Value;
@@ -279,6 +280,168 @@ fn extract_point_uuid(point_id: &Option<PointId>) -> Option<Uuid> {
             None // We only use UUID-based IDs
         }
         None => None,
+    }
+}
+
+// ─── Compression / Scroll Support ──────────────────────────────────
+
+/// A point retrieved via scroll, including its vector and payload.
+#[derive(Debug, Clone)]
+pub struct ScrolledPoint {
+    pub id: Uuid,
+    pub vector: Vec<f32>,
+    pub payload: serde_json::Value,
+}
+
+impl QdrantVectorStore {
+    /// Scroll through a collection with optional filter, returning points with vectors.
+    /// Uses Qdrant's scroll API for efficient iteration.
+    ///
+    /// Returns `(points, next_offset)`. Pass `next_offset` as the `offset` param
+    /// to the next call for pagination. `None` means no more pages.
+    pub async fn scroll_collection(
+        &self,
+        collection: &str,
+        filter: Option<Filter>,
+        limit: u32,
+        offset: Option<String>,
+    ) -> StorageResult<(Vec<ScrolledPoint>, Option<String>)> {
+        let coll_name = self.collection_name(collection);
+        let mut builder = ScrollPointsBuilder::new(&coll_name)
+            .limit(limit)
+            .with_payload(true)
+            .with_vectors(true);
+
+        if let Some(f) = filter {
+            builder = builder.filter(f);
+        }
+        if let Some(ref o) = offset {
+            builder = builder.offset(PointId::from(o.as_str()));
+        }
+
+        let result = self
+            .client
+            .scroll(builder)
+            .await
+            .map_err(|e| MnemoError::Qdrant(format!("Scroll failed: {}", e)))?;
+
+        let mut points = Vec::with_capacity(result.result.len());
+        for pt in &result.result {
+            let id = match extract_point_uuid(&pt.id) {
+                Some(uuid) => uuid,
+                None => continue,
+            };
+
+            // Extract the default (unnamed) vector.
+            // `data` is deprecated in newer qdrant-client versions but is the
+            // only accessor in 1.17.
+            #[allow(deprecated)]
+            let vector = pt
+                .vectors
+                .as_ref()
+                .and_then(|v| match &v.vectors_options {
+                    Some(
+                        qdrant_client::qdrant::vectors_output::VectorsOptions::Vector(vec),
+                    ) => Some(vec.data.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            let payload = Self::payload_to_json(&pt.payload);
+            points.push(ScrolledPoint {
+                id,
+                vector,
+                payload,
+            });
+        }
+
+        // Convert next_page_offset PointId back to String for opaque pagination
+        let next_offset_str = result.next_page_offset.and_then(|pid| {
+            match pid.point_id_options {
+                Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) => Some(s),
+                Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => {
+                    Some(n.to_string())
+                }
+                None => None,
+            }
+        });
+
+        Ok((points, next_offset_str))
+    }
+
+    /// Count points in a collection with optional filter.
+    pub async fn count_collection(
+        &self,
+        collection: &str,
+        filter: Option<Filter>,
+    ) -> StorageResult<u64> {
+        let coll_name = self.collection_name(collection);
+        let mut builder = CountPointsBuilder::new(&coll_name).exact(true);
+        if let Some(f) = filter {
+            builder = builder.filter(f);
+        }
+        let result = self
+            .client
+            .count(builder)
+            .await
+            .map_err(|e| MnemoError::Qdrant(format!("Count failed: {}", e)))?;
+        Ok(result.result.map(|r| r.count).unwrap_or(0))
+    }
+
+    /// Re-upsert a point with a (possibly compressed) vector and updated payload.
+    /// Used by the temporal compression sweep to replace full-precision vectors
+    /// with quantized ones.
+    pub async fn upsert_compressed_point(
+        &self,
+        collection: &str,
+        id: Uuid,
+        vector: Vec<f32>,
+        payload: serde_json::Value,
+    ) -> StorageResult<()> {
+        let coll_name = self.collection_name(collection);
+        let qdrant_payload: Payload = payload
+            .try_into()
+            .map_err(|e: <serde_json::Value as TryInto<Payload>>::Error| {
+                MnemoError::Qdrant(format!("Payload conversion failed: {}", e))
+            })?;
+
+        let point = PointStruct::new(Self::uuid_to_point_id(id), vector, qdrant_payload);
+        self.client
+            .upsert_points(UpsertPointsBuilder::new(&coll_name, vec![point]).wait(true))
+            .await
+            .map_err(|e| MnemoError::Qdrant(format!("Compressed upsert failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Build a Qdrant filter for `created_at` range.
+    pub fn created_at_range_filter(before_ts: f64) -> Filter {
+        Filter::must([Condition::from(FieldCondition {
+            key: "created_at".to_string(),
+            range: Some(Range {
+                lt: Some(before_ts),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })])
+    }
+
+    /// Build a Qdrant filter for `created_at` within a range [gte, lt).
+    pub fn created_at_range_between(gte_ts: f64, lt_ts: f64) -> Filter {
+        Filter::must([Condition::from(FieldCondition {
+            key: "created_at".to_string(),
+            range: Some(Range {
+                gte: Some(gte_ts),
+                lt: Some(lt_ts),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })])
+    }
+
+    /// Get the underlying prefix for collection naming.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
     }
 }
 

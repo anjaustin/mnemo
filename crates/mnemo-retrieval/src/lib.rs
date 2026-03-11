@@ -4,6 +4,8 @@
 //! Results can be merged using either Reciprocal Rank Fusion (RRF) or
 //! Maximal Marginal Relevance (MMR).
 
+pub mod compression;
+
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
