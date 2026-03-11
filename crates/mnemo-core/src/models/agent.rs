@@ -1484,6 +1484,84 @@ mod tests {
         assert_eq!(json["parent_version_before"], 3);
     }
 
+    // ─── COW Branching falsification ─────────────────────────────
+
+    #[test]
+    fn test_falsify_branch_name_path_traversal() {
+        assert!(validate_branch_name("../main").is_err());
+        assert!(validate_branch_name("..%2f..").is_err()); // contains %
+        assert!(validate_branch_name("foo/../bar").is_err()); // contains /
+        assert!(validate_branch_name("..").is_err()); // contains .
+    }
+
+    #[test]
+    fn test_falsify_branch_name_colon_rejected() {
+        // Colons would collide with the agent_id:branch:name key scheme
+        assert!(validate_branch_name("foo:bar").is_err());
+    }
+
+    #[test]
+    fn test_falsify_branch_name_unicode_rejected() {
+        assert!(validate_branch_name("日本語").is_err());
+        assert!(validate_branch_name("café").is_err());
+        assert!(validate_branch_name("test\u{0000}null").is_err()); // null byte
+    }
+
+    #[test]
+    fn test_falsify_branch_metadata_missing_merged_defaults_false() {
+        // Backward compat: if merged field is missing from JSON, should default to false
+        let json = json!({
+            "branch_name": "test",
+            "parent_agent_id": "bot",
+            "fork_version": 1,
+            "created_at": "2025-01-01T00:00:00Z"
+        });
+        let meta: BranchMetadata = serde_json::from_value(json).unwrap();
+        assert!(!meta.merged, "merged should default to false");
+    }
+
+    #[test]
+    fn test_falsify_branch_metadata_missing_description_defaults_none() {
+        let json = json!({
+            "branch_name": "test",
+            "parent_agent_id": "bot",
+            "fork_version": 1,
+            "created_at": "2025-01-01T00:00:00Z"
+        });
+        let meta: BranchMetadata = serde_json::from_value(json).unwrap();
+        assert!(meta.description.is_none());
+    }
+
+    #[test]
+    fn test_falsify_create_branch_empty_name_in_request() {
+        let req: CreateBranchRequest = serde_json::from_value(json!({
+            "branch_name": ""
+        }))
+        .unwrap();
+        // validate_branch_name should catch this
+        assert!(validate_branch_name(&req.branch_name).is_err());
+    }
+
+    #[test]
+    fn test_falsify_branch_name_only_hyphens_valid() {
+        // Edge case: branch name of just hyphens should be valid
+        assert!(validate_branch_name("---").is_ok());
+        assert!(validate_branch_name("-").is_ok());
+    }
+
+    #[test]
+    fn test_falsify_merge_result_contains_branch_core() {
+        let result = MergeResult {
+            branch_name: "test".to_string(),
+            merged_identity: AgentIdentityProfile::new("bot".to_string()),
+            parent_version_before: 1,
+            branch_core_applied: json!({"tone": "warm", "style": "casual"}),
+        };
+        // Verify the branch_core_applied is captured for audit trail
+        assert_eq!(result.branch_core_applied["tone"], "warm");
+        assert_eq!(result.branch_core_applied["style"], "casual");
+    }
+
     #[test]
     fn test_branch_info_includes_both_metadata_and_identity() {
         let info = BranchInfo {
