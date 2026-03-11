@@ -313,6 +313,23 @@ async fn main() -> anyhow::Result<()> {
         },
         compression_stats: Arc::new(mnemo_retrieval::compression::CompressionStats::default()),
         embedding_dimensions: config.embedding.dimensions,
+        hyperbolic_config: {
+            let mut hc = mnemo_retrieval::hyperbolic::HyperbolicConfig::default();
+            if let Ok(v) = std::env::var("MNEMO_HYPERBOLIC_GRAPH_ENABLED") {
+                hc.enabled = v == "true" || v == "1";
+            }
+            if let Ok(v) = std::env::var("MNEMO_HYPERBOLIC_CURVATURE") {
+                if let Ok(c) = v.parse() {
+                    hc.curvature = c;
+                }
+            }
+            if let Ok(v) = std::env::var("MNEMO_HYPERBOLIC_ALPHA") {
+                if let Ok(a) = v.parse() {
+                    hc.alpha = a;
+                }
+            }
+            hc
+        },
     };
 
     if let Err(err) = restore_webhook_state(&app_state).await {

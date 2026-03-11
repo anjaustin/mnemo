@@ -1029,6 +1029,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .route("/api/v1/ops/summary", get(get_ops_summary))
         .route("/api/v1/ops/compression", get(get_ops_compression))
+        .route("/api/v1/ops/hyperbolic", get(get_ops_hyperbolic))
         .route("/api/v1/ops/incidents", get(get_ops_incidents))
         .route("/api/v1/traces/:request_id", get(get_trace_by_request_id))
         .route(
@@ -1515,6 +1516,10 @@ async fn get_ops_compression(State(state): State<AppState>) -> Json<serde_json::
             .compression_stats
             .to_json(&state.compression_config, state.embedding_dimensions),
     )
+}
+
+async fn get_ops_hyperbolic(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::to_value(state.hyperbolic_config.status()).unwrap_or_default())
 }
 
 /// Run one compression sweep: iterate episode collection, quantize old vectors.

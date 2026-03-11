@@ -91,6 +91,29 @@ estimated storage, savings percentage, and sweep history.
 }
 ```
 
+### `GET /api/v1/ops/hyperbolic`
+
+Hyperbolic HNSW status. Reports whether Poincare ball re-ranking is enabled
+for entity search results, along with curvature and blend parameters.
+
+**Configuration** (environment variables):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MNEMO_HYPERBOLIC_GRAPH_ENABLED` | `false` | Enable Poincare ball re-ranking for entity search |
+| `MNEMO_HYPERBOLIC_CURVATURE` | `1.0` | Curvature of the Poincare ball (higher = more hierarchy compression) |
+| `MNEMO_HYPERBOLIC_ALPHA` | `0.3` | Blend factor: 0.0 = pure Cosine, 1.0 = pure hyperbolic |
+
+**Response shape**:
+```json
+{
+  "enabled": false,
+  "curvature": 1.0,
+  "alpha": 0.3,
+  "description": "Hyperbolic re-ranking disabled: entity search uses standard Cosine similarity only"
+}
+```
+
 ### `GET /api/v1/traces/:request_id`
 
 Cross-pipeline trace lookup by request correlation ID.

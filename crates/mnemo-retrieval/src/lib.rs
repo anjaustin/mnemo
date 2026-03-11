@@ -6,6 +6,7 @@
 
 pub mod coherence;
 pub mod compression;
+pub mod hyperbolic;
 pub mod router;
 
 use chrono::{DateTime, Utc};

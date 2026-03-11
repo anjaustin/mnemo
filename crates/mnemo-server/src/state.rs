@@ -274,4 +274,6 @@ pub struct AppState {
     pub compression_stats: Arc<mnemo_retrieval::compression::CompressionStats>,
     /// Embedding dimensions (needed for compression storage estimates).
     pub embedding_dimensions: u32,
+    /// Hyperbolic HNSW config for Poincare ball entity re-ranking.
+    pub hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig,
 }
