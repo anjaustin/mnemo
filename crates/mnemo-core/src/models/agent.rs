@@ -505,6 +505,87 @@ pub fn compute_fisher_importance(
     importance.clamp(0.0, 1.0)
 }
 
+// ─── COW Branching ────────────────────────────────────────────────
+
+/// Metadata for a copy-on-write branch of an agent identity.
+///
+/// Branches allow controlled experimentation: create a branch, run it for N
+/// conversations, compare metrics against main, then merge or discard.
+/// The branch stores a full copy of the identity core at fork time and
+/// evolves independently from the main identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchMetadata {
+    /// Name of the branch (e.g. `"experiment-1"`, `"tone-warmer"`).
+    pub branch_name: String,
+    /// The agent_id that this branch was forked from.
+    pub parent_agent_id: String,
+    /// The version of the parent identity at the time of forking.
+    pub fork_version: u64,
+    /// When the branch was created.
+    pub created_at: DateTime<Utc>,
+    /// Optional description of the experiment.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Whether the branch has been merged back into the parent.
+    #[serde(default)]
+    pub merged: bool,
+}
+
+/// Request body for creating a new branch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBranchRequest {
+    /// Name of the branch (alphanumeric + hyphens, max 64 chars).
+    pub branch_name: String,
+    /// Optional description of the experiment.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Optional initial core override. If omitted, the branch starts with
+    /// a copy of the parent's current core.
+    #[serde(default)]
+    pub core_override: Option<serde_json::Value>,
+}
+
+/// Response for branch operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchInfo {
+    /// Branch metadata.
+    pub metadata: BranchMetadata,
+    /// Current identity profile on the branch.
+    pub identity: AgentIdentityProfile,
+}
+
+/// Result of merging a branch back into the parent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    /// The branch that was merged.
+    pub branch_name: String,
+    /// The parent's identity after merge (new version).
+    pub merged_identity: AgentIdentityProfile,
+    /// The parent version before merge.
+    pub parent_version_before: u64,
+    /// The branch's core at merge time.
+    pub branch_core_applied: serde_json::Value,
+}
+
+/// Validate a branch name: must be 1-64 chars, alphanumeric + hyphens only.
+pub fn validate_branch_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("branch name cannot be empty".into());
+    }
+    if name.len() > 64 {
+        return Err("branch name must be <= 64 characters".into());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(
+            "branch name must contain only alphanumeric characters, hyphens, or underscores".into(),
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1315,5 +1396,111 @@ mod tests {
         let result = verify_audit_chain(&chain);
         assert!(!result.valid, "Forked chain should be detected as invalid");
         assert!(result.breaks.iter().any(|b| b.index == 2));
+    }
+
+    // ─── COW Branching model tests ────────────────────────────────
+
+    #[test]
+    fn test_validate_branch_name_valid() {
+        assert!(validate_branch_name("experiment-1").is_ok());
+        assert!(validate_branch_name("tone_warmer").is_ok());
+        assert!(validate_branch_name("a").is_ok());
+        assert!(validate_branch_name("abc-123_xyz").is_ok());
+    }
+
+    #[test]
+    fn test_validate_branch_name_empty() {
+        assert!(validate_branch_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_branch_name_too_long() {
+        let long = "a".repeat(65);
+        assert!(validate_branch_name(&long).is_err());
+        let exact = "a".repeat(64);
+        assert!(validate_branch_name(&exact).is_ok());
+    }
+
+    #[test]
+    fn test_validate_branch_name_invalid_chars() {
+        assert!(validate_branch_name("my branch").is_err()); // space
+        assert!(validate_branch_name("foo/bar").is_err()); // slash
+        assert!(validate_branch_name("foo..bar").is_err()); // dot
+        assert!(validate_branch_name("foo@bar").is_err()); // at
+    }
+
+    #[test]
+    fn test_branch_metadata_serialization() {
+        let meta = BranchMetadata {
+            branch_name: "experiment-1".to_string(),
+            parent_agent_id: "support-bot".to_string(),
+            fork_version: 5,
+            created_at: chrono::Utc::now(),
+            description: Some("Test warmer tone".to_string()),
+            merged: false,
+        };
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(json["branch_name"], "experiment-1");
+        assert_eq!(json["parent_agent_id"], "support-bot");
+        assert_eq!(json["fork_version"], 5);
+        assert_eq!(json["merged"], false);
+
+        let roundtrip: BranchMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip.branch_name, "experiment-1");
+    }
+
+    #[test]
+    fn test_create_branch_request_defaults() {
+        let req: CreateBranchRequest = serde_json::from_value(json!({
+            "branch_name": "test"
+        }))
+        .unwrap();
+        assert!(req.description.is_none());
+        assert!(req.core_override.is_none());
+    }
+
+    #[test]
+    fn test_create_branch_request_with_override() {
+        let req: CreateBranchRequest = serde_json::from_value(json!({
+            "branch_name": "test",
+            "description": "warmer tone",
+            "core_override": {"tone": "friendly"}
+        }))
+        .unwrap();
+        assert_eq!(req.description.as_deref(), Some("warmer tone"));
+        assert_eq!(req.core_override.unwrap()["tone"], "friendly");
+    }
+
+    #[test]
+    fn test_merge_result_serialization() {
+        let result = MergeResult {
+            branch_name: "exp-1".to_string(),
+            merged_identity: AgentIdentityProfile::new("test".to_string()),
+            parent_version_before: 3,
+            branch_core_applied: json!({"tone": "warm"}),
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["branch_name"], "exp-1");
+        assert_eq!(json["parent_version_before"], 3);
+    }
+
+    #[test]
+    fn test_branch_info_includes_both_metadata_and_identity() {
+        let info = BranchInfo {
+            metadata: BranchMetadata {
+                branch_name: "test".to_string(),
+                parent_agent_id: "bot".to_string(),
+                fork_version: 1,
+                created_at: chrono::Utc::now(),
+                description: None,
+                merged: false,
+            },
+            identity: AgentIdentityProfile::new("bot:branch:test".to_string()),
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert!(json.get("metadata").is_some());
+        assert!(json.get("identity").is_some());
+        assert_eq!(json["metadata"]["branch_name"], "test");
+        assert_eq!(json["identity"]["agent_id"], "bot:branch:test");
     }
 }

@@ -1132,6 +1132,46 @@ Rollback identity core to a prior version while preserving an append-only versio
 }
 ```
 
+### `POST /api/v1/agents/:agent_id/branches`
+
+Create a COW (copy-on-write) branch from the agent's current identity.
+Branches allow A/B testing of personality changes: create a branch, run it,
+compare, then merge or discard.
+
+```json
+{
+  "branch_name": "warmer-tone",
+  "description": "Test a friendlier persona",
+  "core_override": { "tone": "warm", "style": "conversational" }
+}
+```
+
+- `branch_name`: 1-64 chars, alphanumeric + hyphens/underscores only.
+- `core_override`: Optional. If omitted, branch starts with parent's current core.
+- Returns: `BranchInfo` (metadata + identity).
+
+### `GET /api/v1/agents/:agent_id/branches`
+
+List all branches for an agent. Returns `Vec<BranchMetadata>`.
+
+### `GET /api/v1/agents/:agent_id/branches/:branch_name`
+
+Get branch details (metadata + current identity). Returns `BranchInfo`.
+
+### `PUT /api/v1/agents/:agent_id/branches/:branch_name/identity`
+
+Update a branch's identity core. Same body as `PUT /identity`.
+
+### `POST /api/v1/agents/:agent_id/branches/:branch_name/merge`
+
+Merge a branch back into the parent's main identity. The branch's current
+`core` replaces the parent's `core` (just like a normal identity update).
+Returns `MergeResult` with the merged identity and version info.
+
+### `DELETE /api/v1/agents/:agent_id/branches/:branch_name`
+
+Delete a branch without merging. Returns `204 No Content`.
+
 ### `POST /api/v1/agents/:agent_id/experience`
 
 Add an adaptive experience event. The server computes a `fisher_importance` score

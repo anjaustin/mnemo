@@ -4,7 +4,8 @@ use crate::error::MnemoError;
 use crate::models::{
     agent::{
         AgentIdentityAuditEvent, AgentIdentityProfile, AuditChainVerification,
-        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
+        BranchInfo, BranchMetadata, CreateBranchRequest, CreateExperienceRequest,
+        CreatePromotionProposalRequest, ExperienceEvent, MergeResult,
         PromotionProposal, UpdateAgentIdentityRequest,
     },
     digest::MemoryDigest,
@@ -75,6 +76,44 @@ pub trait AgentStore: Send + Sync {
         proposal_id: Uuid,
     ) -> StorageResult<PromotionProposal>;
     async fn update_promotion_proposal(&self, proposal: &PromotionProposal) -> StorageResult<()>;
+
+    // ─── COW Branching ──────────────────────────────────────────
+    /// Create a branch from the agent's current identity.
+    async fn create_agent_branch(
+        &self,
+        agent_id: &str,
+        req: CreateBranchRequest,
+    ) -> StorageResult<BranchInfo>;
+    /// List all branches for an agent.
+    async fn list_agent_branches(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<Vec<BranchMetadata>>;
+    /// Get a specific branch's info (metadata + current identity).
+    async fn get_agent_branch(
+        &self,
+        agent_id: &str,
+        branch_name: &str,
+    ) -> StorageResult<BranchInfo>;
+    /// Update a branch's identity core.
+    async fn update_agent_branch(
+        &self,
+        agent_id: &str,
+        branch_name: &str,
+        req: UpdateAgentIdentityRequest,
+    ) -> StorageResult<AgentIdentityProfile>;
+    /// Merge a branch back into the parent's main identity.
+    async fn merge_agent_branch(
+        &self,
+        agent_id: &str,
+        branch_name: &str,
+    ) -> StorageResult<MergeResult>;
+    /// Delete a branch without merging.
+    async fn delete_agent_branch(
+        &self,
+        agent_id: &str,
+        branch_name: &str,
+    ) -> StorageResult<()>;
 }
 
 /// Result type for all storage operations.

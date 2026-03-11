@@ -1199,6 +1199,23 @@ pub fn build_router(state: AppState) -> Router {
             post(reject_promotion_proposal),
         )
         .route("/api/v1/agents/:agent_id/context", post(get_agent_context))
+        // COW branching
+        .route(
+            "/api/v1/agents/:agent_id/branches",
+            post(create_agent_branch).get(list_agent_branches),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/branches/:branch_name",
+            get(get_agent_branch).delete(delete_agent_branch),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/branches/:branch_name/identity",
+            put(update_agent_branch),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/branches/:branch_name/merge",
+            post(merge_agent_branch),
+        )
         // Graph knowledge API
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
         .route("/api/v1/graph/:user/entities", get(graph_list_entities))
@@ -6650,6 +6667,64 @@ async fn reject_promotion_proposal(
         .update_promotion_proposal(&proposal)
         .await?;
     Ok(Json(proposal))
+}
+
+// ─── COW Branching endpoints ──────────────────────────────────────
+
+async fn create_agent_branch(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<mnemo_core::models::agent::CreateBranchRequest>,
+) -> Result<Json<mnemo_core::models::agent::BranchInfo>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let info = state.state_store.create_agent_branch(&agent_id, req).await?;
+    Ok(Json(info))
+}
+
+async fn list_agent_branches(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Vec<mnemo_core::models::agent::BranchMetadata>>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let branches = state.state_store.list_agent_branches(&agent_id).await?;
+    Ok(Json(branches))
+}
+
+async fn get_agent_branch(
+    State(state): State<AppState>,
+    Path((agent_id, branch_name)): Path<(String, String)>,
+) -> Result<Json<mnemo_core::models::agent::BranchInfo>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let info = state.state_store.get_agent_branch(&agent_id, &branch_name).await?;
+    Ok(Json(info))
+}
+
+async fn update_agent_branch(
+    State(state): State<AppState>,
+    Path((agent_id, branch_name)): Path<(String, String)>,
+    Json(req): Json<mnemo_core::models::agent::UpdateAgentIdentityRequest>,
+) -> Result<Json<mnemo_core::models::agent::AgentIdentityProfile>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let identity = state.state_store.update_agent_branch(&agent_id, &branch_name, req).await?;
+    Ok(Json(identity))
+}
+
+async fn merge_agent_branch(
+    State(state): State<AppState>,
+    Path((agent_id, branch_name)): Path<(String, String)>,
+) -> Result<Json<mnemo_core::models::agent::MergeResult>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let result = state.state_store.merge_agent_branch(&agent_id, &branch_name).await?;
+    Ok(Json(result))
+}
+
+async fn delete_agent_branch(
+    State(state): State<AppState>,
+    Path((agent_id, branch_name)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    state.state_store.delete_agent_branch(&agent_id, &branch_name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_agent_context(

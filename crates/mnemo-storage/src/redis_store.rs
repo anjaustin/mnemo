@@ -9,8 +9,9 @@ use mnemo_core::error::MnemoError;
 use mnemo_core::models::{
     agent::{
         AgentIdentityAuditAction, AgentIdentityAuditEvent, AgentIdentityProfile,
-        AuditChainVerification, CreateExperienceRequest, CreatePromotionProposalRequest,
-        ExperienceEvent, PromotionProposal, UpdateAgentIdentityRequest,
+        AuditChainVerification, BranchInfo, BranchMetadata, CreateBranchRequest,
+        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
+        MergeResult, PromotionProposal, UpdateAgentIdentityRequest, validate_branch_name,
     },
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -1101,6 +1102,233 @@ impl AgentStore for RedisStateStore {
     async fn update_promotion_proposal(&self, proposal: &PromotionProposal) -> StorageResult<()> {
         let key = self.key(&["promotion_proposal", &proposal.id.to_string()]);
         self.set_json(&key, proposal).await
+    }
+
+    // ─── COW Branching ──────────────────────────────────────────
+
+    async fn create_agent_branch(
+        &self,
+        agent_id: &str,
+        req: CreateBranchRequest,
+    ) -> StorageResult<BranchInfo> {
+        validate_branch_name(&req.branch_name)
+            .map_err(|e| MnemoError::Validation(e))?;
+
+        // Check if branch already exists
+        let meta_key = self.key(&["agent_branch", agent_id, &req.branch_name]);
+        if self.get_json::<BranchMetadata>(&meta_key).await?.is_some() {
+            return Err(MnemoError::Validation(format!(
+                "branch '{}' already exists for agent '{}'",
+                req.branch_name, agent_id
+            )));
+        }
+
+        // Get the parent identity to fork from
+        let parent = self.get_agent_identity(agent_id).await?;
+
+        // Create branch identity: starts with parent's core (or override)
+        let branch_core = req.core_override.unwrap_or_else(|| parent.core.clone());
+        let branch_agent_id = format!("{}:branch:{}", agent_id, req.branch_name);
+        let branch_identity = AgentIdentityProfile {
+            agent_id: branch_agent_id.clone(),
+            version: parent.version,
+            core: branch_core,
+            updated_at: chrono::Utc::now(),
+        };
+
+        // Store the branch identity
+        let branch_identity_key = self.key(&["agent_identity", &branch_agent_id]);
+        self.set_json(&branch_identity_key, &branch_identity).await?;
+
+        // Store branch metadata
+        let metadata = BranchMetadata {
+            branch_name: req.branch_name.clone(),
+            parent_agent_id: agent_id.to_string(),
+            fork_version: parent.version,
+            created_at: chrono::Utc::now(),
+            description: req.description,
+            merged: false,
+        };
+        self.set_json(&meta_key, &metadata).await?;
+
+        // Add to branch index
+        let index_key = self.key(&["agent_branches", agent_id]);
+        let mut conn = self.conn.clone();
+        let _: () = redis::cmd("ZADD")
+            .arg(&index_key)
+            .arg(metadata.created_at.timestamp_millis() as f64)
+            .arg(&req.branch_name)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(BranchInfo {
+            metadata,
+            identity: branch_identity,
+        })
+    }
+
+    async fn list_agent_branches(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<Vec<BranchMetadata>> {
+        let index_key = self.key(&["agent_branches", agent_id]);
+        let mut conn = self.conn.clone();
+
+        let members: Vec<String> = redis::cmd("ZRANGE")
+            .arg(&index_key)
+            .arg(0i64)
+            .arg(-1i64)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for branch_name in members {
+            let meta_key = self.key(&["agent_branch", agent_id, &branch_name]);
+            if let Some(meta) = self.get_json::<BranchMetadata>(&meta_key).await? {
+                results.push(meta);
+            }
+        }
+        Ok(results)
+    }
+
+    async fn get_agent_branch(
+        &self,
+        agent_id: &str,
+        branch_name: &str,
+    ) -> StorageResult<BranchInfo> {
+        let meta_key = self.key(&["agent_branch", agent_id, branch_name]);
+        let metadata = self.get_json::<BranchMetadata>(&meta_key).await?.ok_or_else(|| {
+            MnemoError::NotFound {
+                resource_type: "AgentBranch".into(),
+                id: format!("{}:{}", agent_id, branch_name),
+            }
+        })?;
+
+        let branch_agent_id = format!("{}:branch:{}", agent_id, branch_name);
+        let identity = self.get_agent_identity(&branch_agent_id).await?;
+
+        Ok(BranchInfo { metadata, identity })
+    }
+
+    async fn update_agent_branch(
+        &self,
+        agent_id: &str,
+        branch_name: &str,
+        req: UpdateAgentIdentityRequest,
+    ) -> StorageResult<AgentIdentityProfile> {
+        // Verify branch exists
+        let meta_key = self.key(&["agent_branch", agent_id, branch_name]);
+        let metadata = self.get_json::<BranchMetadata>(&meta_key).await?.ok_or_else(|| {
+            MnemoError::NotFound {
+                resource_type: "AgentBranch".into(),
+                id: format!("{}:{}", agent_id, branch_name),
+            }
+        })?;
+        if metadata.merged {
+            return Err(MnemoError::Validation(format!(
+                "branch '{}' has already been merged",
+                branch_name
+            )));
+        }
+
+        let branch_agent_id = format!("{}:branch:{}", agent_id, branch_name);
+        self.update_agent_identity(&branch_agent_id, req).await
+    }
+
+    async fn merge_agent_branch(
+        &self,
+        agent_id: &str,
+        branch_name: &str,
+    ) -> StorageResult<MergeResult> {
+        // Get branch
+        let meta_key = self.key(&["agent_branch", agent_id, branch_name]);
+        let mut metadata = self.get_json::<BranchMetadata>(&meta_key).await?.ok_or_else(|| {
+            MnemoError::NotFound {
+                resource_type: "AgentBranch".into(),
+                id: format!("{}:{}", agent_id, branch_name),
+            }
+        })?;
+        if metadata.merged {
+            return Err(MnemoError::Validation(format!(
+                "branch '{}' has already been merged",
+                branch_name
+            )));
+        }
+
+        // Get the branch's current identity
+        let branch_agent_id = format!("{}:branch:{}", agent_id, branch_name);
+        let branch_identity = self.get_agent_identity(&branch_agent_id).await?;
+        let branch_core = branch_identity.core.clone();
+
+        // Apply the branch's core to the parent as a normal update
+        let parent_before = self.get_agent_identity(agent_id).await?;
+        let parent_version_before = parent_before.version;
+        let merged_identity = self
+            .update_agent_identity(
+                agent_id,
+                UpdateAgentIdentityRequest {
+                    core: branch_core.clone(),
+                },
+            )
+            .await?;
+
+        // Mark branch as merged
+        metadata.merged = true;
+        self.set_json(&meta_key, &metadata).await?;
+
+        Ok(MergeResult {
+            branch_name: branch_name.to_string(),
+            merged_identity,
+            parent_version_before,
+            branch_core_applied: branch_core,
+        })
+    }
+
+    async fn delete_agent_branch(
+        &self,
+        agent_id: &str,
+        branch_name: &str,
+    ) -> StorageResult<()> {
+        // Verify branch exists
+        let meta_key = self.key(&["agent_branch", agent_id, branch_name]);
+        if self.get_json::<BranchMetadata>(&meta_key).await?.is_none() {
+            return Err(MnemoError::NotFound {
+                resource_type: "AgentBranch".into(),
+                id: format!("{}:{}", agent_id, branch_name),
+            });
+        }
+
+        // Delete branch identity
+        let branch_agent_id = format!("{}:branch:{}", agent_id, branch_name);
+        let identity_key = self.key(&["agent_identity", &branch_agent_id]);
+        let mut conn = self.conn.clone();
+        let _: () = redis::cmd("DEL")
+            .arg(&identity_key)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Delete metadata
+        let mut conn2 = self.conn.clone();
+        let _: () = redis::cmd("DEL")
+            .arg(&meta_key)
+            .query_async(&mut conn2)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Remove from index
+        let index_key = self.key(&["agent_branches", agent_id]);
+        let mut conn3 = self.conn.clone();
+        let _: () = redis::cmd("ZREM")
+            .arg(&index_key)
+            .arg(branch_name)
+            .query_async(&mut conn3)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
     }
 }
 
