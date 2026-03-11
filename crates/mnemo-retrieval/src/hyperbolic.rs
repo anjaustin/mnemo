@@ -692,4 +692,202 @@ mod tests {
         assert!(json.get("alpha").is_some());
         assert!(json.get("description").is_some());
     }
+
+    // ─── Falsification round: adversarial tests ──────────────────
+
+    #[test]
+    fn test_falsify_zero_curvature_no_panic() {
+        // Zero curvature: sqrt(0) = 0, division by 0 in distance formula.
+        // Should not panic. Distance may be 0 or meaningless, but no crash.
+        let u = vec![0.3, 0.2];
+        let v = vec![-0.1, 0.4];
+        let d = poincare_distance(&u, &v, 0.0);
+        assert!(
+            d.is_finite(),
+            "Distance with zero curvature should be finite, got {}",
+            d
+        );
+    }
+
+    #[test]
+    fn test_falsify_negative_curvature_no_panic() {
+        // Negative curvature is nonsensical for Poincare ball but should not crash.
+        let u = vec![0.3, 0.2];
+        let v = vec![-0.1, 0.4];
+        let d = poincare_distance(&u, &v, -1.0);
+        // May be NaN due to sqrt of negative, but should not panic
+        let _ = d; // just don't panic
+    }
+
+    #[test]
+    fn test_falsify_boundary_point_distance() {
+        // Points exactly at norm = MAX_NORM (near boundary)
+        let u = vec![MAX_NORM, 0.0];
+        let v = vec![0.0, MAX_NORM];
+        let d = poincare_distance(&u, &v, 1.0);
+        assert!(
+            d.is_finite(),
+            "Boundary distance should be finite, got {}",
+            d
+        );
+        assert!(d > 0.0, "Boundary points should be far apart");
+    }
+
+    #[test]
+    fn test_falsify_high_dimensional_exp_log_roundtrip() {
+        // 384-dimensional roundtrip (production embedding size)
+        let v: Vec<f32> = (0..384).map(|i| (i as f32 * 0.01).sin() * 0.5).collect();
+        let projected = exp_map_origin(&v, 1.0);
+        let norm: f32 = projected.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            norm < 1.0,
+            "384-dim projection must be inside ball, norm={}",
+            norm
+        );
+
+        let recovered = log_map_origin(&projected, 1.0);
+        let max_err: f32 = v
+            .iter()
+            .zip(recovered.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_err < 0.01,
+            "384-dim roundtrip max error should be < 0.01, got {}",
+            max_err
+        );
+    }
+
+    #[test]
+    fn test_falsify_exp_map_very_large_vector() {
+        // Vector with norm > 1000 — should still map inside ball
+        let v = vec![1000.0; 100];
+        let p = exp_map_origin(&v, 1.0);
+        let norm: f32 = p.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            norm < 1.0,
+            "Huge vector must still map inside ball, norm={}",
+            norm
+        );
+        // Should be very close to boundary (tanh → 1)
+        assert!(
+            norm > 0.99,
+            "Huge vector should map near boundary, norm={}",
+            norm
+        );
+    }
+
+    #[test]
+    fn test_falsify_alpha_clamping() {
+        let candidates = vec![HyperbolicCandidate {
+            entity_id: test_uuid(100),
+            cosine_score: 0.8,
+            poincare_embedding: vec![0.1, 0.0],
+        }];
+        // alpha > 1.0 should be clamped to 1.0
+        let r1 = hyperbolic_rerank(&[0.0, 0.0], &candidates, 1.0, 5.0);
+        let r2 = hyperbolic_rerank(&[0.0, 0.0], &candidates, 1.0, 1.0);
+        assert!(
+            (r1[0].final_score - r2[0].final_score).abs() < 1e-5,
+            "alpha>1 should clamp to 1.0"
+        );
+
+        // alpha < 0 should be clamped to 0.0
+        let r3 = hyperbolic_rerank(&[0.0, 0.0], &candidates, 1.0, -5.0);
+        let r4 = hyperbolic_rerank(&[0.0, 0.0], &candidates, 1.0, 0.0);
+        assert!(
+            (r3[0].final_score - r4[0].final_score).abs() < 1e-5,
+            "alpha<0 should clamp to 0.0"
+        );
+    }
+
+    #[test]
+    fn test_falsify_identical_poincare_embeddings_all_same_score() {
+        // All candidates have identical embeddings → same hyperbolic score
+        let emb = vec![0.3, 0.2];
+        let candidates: Vec<HyperbolicCandidate> = (0..5)
+            .map(|i| HyperbolicCandidate {
+                entity_id: test_uuid(200 + i),
+                cosine_score: 0.5,
+                poincare_embedding: emb.clone(),
+            })
+            .collect();
+        let results = hyperbolic_rerank(&[0.1, 0.1], &candidates, 1.0, 0.5);
+        // All should have identical final scores
+        let first_score = results[0].final_score;
+        for r in &results {
+            assert!(
+                (r.final_score - first_score).abs() < 1e-5,
+                "Identical embeddings should produce identical scores"
+            );
+        }
+    }
+
+    #[test]
+    fn test_falsify_single_candidate_reranking() {
+        let candidates = vec![HyperbolicCandidate {
+            entity_id: test_uuid(300),
+            cosine_score: 0.7,
+            poincare_embedding: vec![0.4, 0.3],
+        }];
+        let results = hyperbolic_rerank(&[0.0, 0.0], &candidates, 1.0, 0.5);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].final_score > 0.0);
+        assert!(results[0].poincare_distance > 0.0);
+    }
+
+    #[test]
+    fn test_falsify_mobius_add_inverse() {
+        // x ⊕ (-x) should be near origin (Mobius negation: -x in Poincare is just -x)
+        let x = vec![0.3, 0.2];
+        let neg_x: Vec<f32> = x.iter().map(|v| -v).collect();
+        let result = mobius_add(&x, &neg_x, 1.0);
+        let norm: f32 = result.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(norm < 0.1, "x ⊕ (-x) should be near origin, norm={}", norm);
+    }
+
+    #[test]
+    fn test_falsify_poincare_distance_non_negative() {
+        // Exhaustive check: random-ish points should all have d >= 0
+        let points: Vec<Vec<f32>> = vec![
+            vec![0.0, 0.0],
+            vec![0.5, 0.0],
+            vec![0.0, 0.5],
+            vec![-0.3, 0.4],
+            vec![0.9, 0.0],
+            vec![0.0, -0.9],
+        ];
+        for i in 0..points.len() {
+            for j in 0..points.len() {
+                let d = poincare_distance(&points[i], &points[j], 1.0);
+                assert!(
+                    d >= 0.0,
+                    "Distance should be non-negative: d({:?}, {:?}) = {}",
+                    points[i],
+                    points[j],
+                    d
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_falsify_hierarchy_preserves_parent_child_ordering() {
+        // Simulate hierarchy: root at origin, children further out
+        let root = exp_map_origin(&[0.1, 0.0, 0.0], 1.0);
+        let child = exp_map_origin(&[1.0, 0.0, 0.0], 1.0);
+        let grandchild = exp_map_origin(&[5.0, 0.0, 0.0], 1.0);
+
+        let root_depth = hierarchy_depth(&root);
+        let child_depth = hierarchy_depth(&child);
+        let grandchild_depth = hierarchy_depth(&grandchild);
+
+        assert!(
+            root_depth < child_depth && child_depth < grandchild_depth,
+            "Hierarchy depth should increase: root={}, child={}, grandchild={}",
+            root_depth,
+            child_depth,
+            grandchild_depth
+        );
+    }
 }
