@@ -7,6 +7,23 @@ use serde_json::Value;
 use crate::protocol::{ToolCallResult, ToolDefinition};
 use crate::McpServer;
 
+/// Validate that an identifier is safe for URL path interpolation.
+fn validate_path_segment(value: &str, field_name: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("'{}' cannot be empty", field_name));
+    }
+    if value.contains("..") || value.contains('/') || value.contains('\\') || value.contains('\0') {
+        return Err(format!(
+            "'{}' contains illegal characters: '{}'",
+            field_name, value
+        ));
+    }
+    if value.len() > 256 {
+        return Err(format!("'{}' exceeds maximum length of 256 characters", field_name));
+    }
+    Ok(())
+}
+
 /// Return all tool definitions.
 pub fn list_tools() -> Vec<ToolDefinition> {
     vec![
@@ -196,6 +213,10 @@ async fn handle_remember(server: &McpServer, args: &Value) -> ToolCallResult {
         Err(e) => return ToolCallResult::error(e),
     };
 
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
+
     let session = args
         .get("session")
         .and_then(|v| v.as_str())
@@ -239,6 +260,10 @@ async fn handle_recall(server: &McpServer, args: &Value) -> ToolCallResult {
         Ok(u) => u.to_string(),
         Err(e) => return ToolCallResult::error(e),
     };
+
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
 
     let session = args
         .get("session")
@@ -284,6 +309,10 @@ async fn handle_graph_query(server: &McpServer, args: &Value) -> ToolCallResult 
         Err(e) => return ToolCallResult::error(e),
     };
 
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
+
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50);
 
     let path = match operation {
@@ -327,6 +356,10 @@ async fn handle_agent_identity(server: &McpServer, args: &Value) -> ToolCallResu
         None => return ToolCallResult::error("'agent_id' argument is required"),
     };
 
+    if let Err(e) = validate_path_segment(agent_id, "agent_id") {
+        return ToolCallResult::error(e);
+    }
+
     let action = match args.get("action").and_then(|v| v.as_str()) {
         Some(a) => a,
         None => return ToolCallResult::error("'action' argument is required"),
@@ -360,7 +393,7 @@ async fn handle_agent_identity(server: &McpServer, args: &Value) -> ToolCallResu
             };
 
             let path = format!("/api/v1/agents/{}/identity", agent_id);
-            match server.post(&path).json(&update).send().await {
+            match server.put(&path).json(&update).send().await {
                 Ok(resp) => {
                     let status = resp.status();
                     match resp.json::<Value>().await {
@@ -386,6 +419,10 @@ async fn handle_digest(server: &McpServer, args: &Value) -> ToolCallResult {
         Err(e) => return ToolCallResult::error(e),
     };
 
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
+
     let action = match args.get("action").and_then(|v| v.as_str()) {
         Some(a) => a,
         None => return ToolCallResult::error("'action' argument is required"),
@@ -393,7 +430,7 @@ async fn handle_digest(server: &McpServer, args: &Value) -> ToolCallResult {
 
     match action {
         "get" => {
-            let path = format!("/api/v1/users/{}/digest", user);
+            let path = format!("/api/v1/memory/{}/digest", user);
             match server.get(&path).send().await {
                 Ok(resp) => {
                     let status = resp.status();
@@ -411,7 +448,7 @@ async fn handle_digest(server: &McpServer, args: &Value) -> ToolCallResult {
             }
         }
         "generate" => {
-            let path = format!("/api/v1/users/{}/digest", user);
+            let path = format!("/api/v1/memory/{}/digest", user);
             match server.post(&path).json(&serde_json::json!({})).send().await {
                 Ok(resp) => {
                     let status = resp.status();
@@ -440,6 +477,10 @@ async fn handle_coherence(server: &McpServer, args: &Value) -> ToolCallResult {
         Ok(u) => u.to_string(),
         Err(e) => return ToolCallResult::error(e),
     };
+
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
 
     let path = format!("/api/v1/users/{}/coherence", user);
     match server.get(&path).send().await {
@@ -673,5 +714,234 @@ mod tests {
         )
         .await;
         assert_eq!(result.is_error, Some(true));
+    }
+
+    // ─── Falsification: adversarial tool tests ────────────────────
+
+    #[tokio::test]
+    async fn test_falsify_path_traversal_in_user_rejected() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        // Path traversal attempt via user field
+        let result = dispatch_tool(
+            &server,
+            "mnemo_recall",
+            &serde_json::json!({"query": "test", "user": "../../etc/passwd"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0].text.contains("illegal characters"),
+            "Should reject path traversal: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_falsify_path_traversal_in_agent_id_rejected() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_agent_identity",
+            &serde_json::json!({"agent_id": "../../../admin", "action": "get"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("illegal characters"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_null_byte_in_user_rejected() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_coherence",
+            &serde_json::json!({"user": "user\u{0000}admin"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("illegal characters"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_slash_in_user_rejected() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        // Forward slash injection
+        let result = dispatch_tool(
+            &server,
+            "mnemo_remember",
+            &serde_json::json!({"text": "hello", "user": "user/admin"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_oversized_identifier_rejected() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let huge_user = "a".repeat(300);
+        let result = dispatch_tool(
+            &server,
+            "mnemo_coherence",
+            &serde_json::json!({"user": huge_user}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("maximum length"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_remember_whitespace_only_text() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_remember",
+            &serde_json::json!({"text": "   \t\n  "}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("non-empty"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_digest_invalid_action() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_digest",
+            &serde_json::json!({"action": "delete"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("Unknown action"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_agent_identity_update_without_body() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_agent_identity",
+            &serde_json::json!({"agent_id": "abc-123", "action": "update"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("update"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_agent_identity_invalid_action() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_agent_identity",
+            &serde_json::json!({"agent_id": "abc-123", "action": "delete"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("Unknown action"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_graph_query_missing_operation() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_graph_query",
+            &serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("operation"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_recall_missing_query() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_recall",
+            &serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_remember_non_string_text() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        // text is a number, not a string
+        let result = dispatch_tool(
+            &server,
+            "mnemo_remember",
+            &serde_json::json!({"text": 12345}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_default_user_with_path_traversal_rejected() {
+        // Default user itself could be malicious
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("../../../etc/shadow".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "mnemo_coherence",
+            &serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("illegal characters"));
     }
 }

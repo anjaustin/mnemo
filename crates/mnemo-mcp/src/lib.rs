@@ -85,6 +85,16 @@ impl McpServer {
         req.header("Content-Type", "application/json")
     }
 
+    /// Build a PUT request with auth headers and JSON body.
+    pub fn put(&self, path: &str) -> reqwest::RequestBuilder {
+        let url = format!("{}{}", self.config.mnemo_base_url, path);
+        let mut req = self.http.put(&url);
+        if let Some(ref key) = self.config.api_key {
+            req = req.header("X-Api-Key", key);
+        }
+        req.header("Content-Type", "application/json")
+    }
+
     /// Resolve a user identifier: use the provided one or fall back to default.
     pub fn resolve_user<'a>(&'a self, provided: Option<&'a str>) -> Result<&'a str, String> {
         provided
