@@ -45,45 +45,8 @@ impl std::fmt::Display for ApiKeyRole {
 // ─── Data Classification ───────────────────────────────────────────
 
 /// Sensitivity classification for edges, entities, and memory regions.
-///
-/// Ordered: Public < Internal < Confidential < Restricted.
-/// A caller with `max_classification = Internal` can see Public + Internal
-/// data but not Confidential or Restricted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Classification {
-    /// Safe for any audience — customers, external agents.
-    Public = 0,
-    /// Safe for internal agents and operators.
-    Internal = 1,
-    /// Restricted to authorized agents/users.  May contain PII.
-    Confidential = 2,
-    /// Highest sensitivity — financial, health, or protected-class data.
-    Restricted = 3,
-}
-
-impl Classification {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Public => "public",
-            Self::Internal => "internal",
-            Self::Confidential => "confidential",
-            Self::Restricted => "restricted",
-        }
-    }
-}
-
-impl Default for Classification {
-    fn default() -> Self {
-        Self::Internal
-    }
-}
-
-impl std::fmt::Display for Classification {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+// Re-export from shared module — Classification is used across api_key, edge, entity.
+pub use super::classification::Classification;
 
 // ─── API Key Scope ─────────────────────────────────────────────────
 

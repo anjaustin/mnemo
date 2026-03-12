@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::classification::Classification;
+
 /// The type of an entity in the knowledge graph.
 ///
 /// Mnemo ships with common types and supports custom types
@@ -92,6 +94,11 @@ pub struct Entity {
     #[serde(default)]
     pub metadata: serde_json::Value,
 
+    /// Sensitivity classification.  Defaults to `Internal` for secure-by-default
+    /// posture and backward compatibility with data created before v0.6.0.
+    #[serde(default)]
+    pub classification: Classification,
+
     /// How many times this entity has been mentioned across all episodes.
     /// Used for episode-mention reranking.
     /// Note: The entity→episode mapping is stored separately in the storage layer
@@ -116,6 +123,9 @@ pub struct ExtractedEntity {
     /// Optional summary/description from the extraction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// LLM-suggested classification.  Defaults to `Internal` if not provided.
+    #[serde(default)]
+    pub classification: Classification,
 }
 
 impl Entity {
@@ -130,6 +140,7 @@ impl Entity {
             summary: extracted.summary.clone(),
             aliases: Vec::new(),
             metadata: serde_json::json!({}),
+            classification: extracted.classification,
             mention_count: 1,
             community_id: None,
             created_at: now,
@@ -179,6 +190,7 @@ mod tests {
             name: "Kendra".to_string(),
             entity_type: EntityType::Person,
             summary: Some("A customer who likes athletic shoes".to_string()),
+            classification: Classification::default(),
         }
     }
 

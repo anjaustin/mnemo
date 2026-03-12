@@ -1,7 +1,7 @@
 use axum::extract::{DefaultBodyLimit, Extension, Json, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -38,6 +38,7 @@ use mnemo_core::models::{
 use mnemo_core::models::api_key::{
     ApiKeyRole, CallerContext, CreateApiKeyRequest,
 };
+use mnemo_core::models::classification::Classification;
 use mnemo_core::traits::storage::{
     AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
     NarrativeStore, RawVectorStore, SessionStore, SpanStore, UserStore, VectorStore,
@@ -1099,10 +1100,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:user_id/entities", get(list_entities))
         .route("/api/v1/entities/:id", get(get_entity))
         .route("/api/v1/entities/:id", delete(delete_entity))
+        .route(
+            "/api/v1/entities/:id/classification",
+            patch(patch_entity_classification),
+        )
         // Edges
         .route("/api/v1/users/:user_id/edges", get(query_edges))
         .route("/api/v1/edges/:id", get(get_edge))
         .route("/api/v1/edges/:id", delete(delete_edge))
+        .route(
+            "/api/v1/edges/:id/classification",
+            patch(patch_edge_classification),
+        )
         // Context & Search
         .route("/api/v1/users/:user_id/context", post(get_context))
         .route("/api/v1/memory/feedback", post(memory_retrieval_feedback))
@@ -2833,15 +2842,38 @@ async fn delete_session_message_by_idx(
 
 // ─── Entity routes ─────────────────────────────────────────────────
 
+#[derive(Deserialize)]
+struct ListEntitiesParams {
+    #[serde(default = "default_entity_limit")]
+    limit: u32,
+    after: Option<Uuid>,
+    /// Maximum classification level to include.  Entities above this are excluded.
+    max_classification: Option<Classification>,
+}
+
+fn default_entity_limit() -> u32 {
+    20
+}
+
 async fn list_entities(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
-    Query(params): Query<PaginationParams>,
+    Query(params): Query<ListEntitiesParams>,
 ) -> Result<Json<ListResponse<Entity>>, AppError> {
-    let entities = state
+    // Over-fetch if classification filtering is active (same pattern as EdgeFilter)
+    let fetch_limit = if params.max_classification.is_some() {
+        params.limit.saturating_mul(3).max(100)
+    } else {
+        params.limit
+    };
+    let mut entities = state
         .state_store
-        .list_entities(user_id, params.limit, params.after)
+        .list_entities(user_id, fetch_limit, params.after)
         .await?;
+    if let Some(max) = params.max_classification {
+        entities.retain(|e| e.classification <= max);
+        entities.truncate(params.limit as usize);
+    }
     Ok(Json(ListResponse::new(entities)))
 }
 
@@ -2907,6 +2939,45 @@ async fn delete_edge(
     )
     .await;
     Ok(Json(DeleteResponse { deleted: true }))
+}
+
+// ─── Classification PATCH endpoints ────────────────────────────────
+
+#[derive(Deserialize)]
+struct ClassificationPatch {
+    classification: Classification,
+}
+
+async fn patch_entity_classification(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ClassificationPatch>,
+) -> Result<Json<Entity>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
+    let mut entity = state.state_store.get_entity(id).await?;
+    entity.classification = body.classification;
+    entity.updated_at = chrono::Utc::now();
+    state.state_store.update_entity(&entity).await?;
+    Ok(Json(entity))
+}
+
+async fn patch_edge_classification(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ClassificationPatch>,
+) -> Result<Json<Edge>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
+    let mut edge = state.state_store.get_edge(id).await?;
+    edge.classification = body.classification;
+    edge.updated_at = chrono::Utc::now();
+    state.state_store.update_edge(&edge).await?;
+    Ok(Json(edge))
 }
 
 // ─── Context route ─────────────────────────────────────────────────
@@ -4084,6 +4155,7 @@ async fn extract_memory(
                         name: e.name,
                         entity_type: e.entity_type,
                         summary: e.summary,
+                        classification: e.classification,
                     })
                     .collect()
             }

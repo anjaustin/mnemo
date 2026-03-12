@@ -33,11 +33,13 @@ impl MockLlm {
                     name: "Kendra".into(),
                     entity_type: EntityType::Person,
                     summary: Some("A runner".into()),
+                    classification: Default::default(),
                 },
                 ExtractedEntity {
                     name: "Nike".into(),
                     entity_type: EntityType::Organization,
                     summary: Some("Shoe company".into()),
+                    classification: Default::default(),
                 },
             ],
             relationships: vec![ExtractedRelationship {
@@ -47,6 +49,7 @@ impl MockLlm {
                 fact: "Kendra prefers Nike running shoes".into(),
                 confidence: 0.95,
                 valid_at: None,
+                classification: Default::default(),
             }],
         }
     }

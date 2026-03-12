@@ -361,6 +361,7 @@ mod tests {
             summary: None,
             aliases: vec![],
             metadata: serde_json::json!({}),
+            classification: mnemo_core::models::classification::Classification::default(),
             mention_count: mentions,
             community_id: None,
             created_at: Utc::now(),
@@ -401,6 +402,7 @@ mod tests {
             confidence,
             corroboration_count: corroboration,
             metadata: serde_json::json!({}),
+            classification: mnemo_core::models::classification::Classification::default(),
             created_at: created,
             updated_at: Utc::now(),
         }

@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use mnemo_core::error::MnemoError;
+use mnemo_core::models::classification::Classification;
 use mnemo_core::models::edge::ExtractedRelationship;
 use mnemo_core::models::entity::{EntityType, ExtractedEntity};
 use mnemo_core::traits::llm::{
@@ -113,10 +114,10 @@ pub const EXTRACTION_SYSTEM_PROMPT: &str = r#"You are an entity and relationship
 Respond ONLY with valid JSON in this exact format:
 {
   "entities": [
-    {"name": "Entity Name", "type": "person|organization|product|location|event|concept", "summary": "Brief description"}
+    {"name": "Entity Name", "type": "person|organization|product|location|event|concept", "summary": "Brief description", "classification": "internal"}
   ],
   "relationships": [
-    {"source": "Source Entity", "target": "Target Entity", "label": "relationship_label", "fact": "Natural language fact description", "confidence": 0.95}
+    {"source": "Source Entity", "target": "Target Entity", "label": "relationship_label", "fact": "Natural language fact description", "confidence": 0.95, "classification": "internal"}
   ]
 }
 
@@ -126,7 +127,13 @@ Rules:
 - Confidence is 0.0-1.0 based on how explicit the relationship is in the text
 - Extract temporal cues when present (dates, relative time references)
 - If existing entities are provided, reuse their exact names for consistency
-- Do NOT hallucinate entities or relationships not supported by the text"#;
+- Do NOT hallucinate entities or relationships not supported by the text
+- classification is one of: "public", "internal", "confidential", "restricted"
+  - "public": safe for any audience (general knowledge, product info)
+  - "internal": default — safe for internal agents and operators
+  - "confidential": contains PII (names + contact info, addresses, account numbers)
+  - "restricted": contains financial, health, or protected-class data
+  - When in doubt, use "internal""#;
 
 // ─── LLM extraction response parsing ──────────────────────────────
 
@@ -144,6 +151,9 @@ struct RawEntity {
     #[serde(rename = "type")]
     entity_type: String,
     summary: Option<String>,
+    /// LLM-suggested classification.  Falls back to "internal" if omitted.
+    #[serde(default)]
+    classification: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -154,6 +164,9 @@ struct RawRelationship {
     fact: String,
     #[serde(default = "default_confidence")]
     confidence: f32,
+    /// LLM-suggested classification.  Falls back to "internal" if omitted.
+    #[serde(default)]
+    classification: Option<String>,
 }
 
 fn default_confidence() -> f32 {
@@ -321,6 +334,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 name: e.name,
                 entity_type: EntityType::from_str_flexible(&e.entity_type),
                 summary: e.summary,
+                classification: e
+                    .classification
+                    .as_deref()
+                    .map(Classification::from_str_flexible)
+                    .unwrap_or_default(),
             })
             .collect();
 
@@ -334,6 +352,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 fact: r.fact,
                 confidence: r.confidence,
                 valid_at: None,
+                classification: r
+                    .classification
+                    .as_deref()
+                    .map(Classification::from_str_flexible)
+                    .unwrap_or_default(),
             })
             .collect();
 
@@ -417,6 +440,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 name: e.name,
                 entity_type: EntityType::from_str_flexible(&e.entity_type),
                 summary: e.summary,
+                classification: e
+                    .classification
+                    .as_deref()
+                    .map(Classification::from_str_flexible)
+                    .unwrap_or_default(),
             })
             .collect();
         let relationships = parsed
@@ -429,6 +457,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 fact: r.fact,
                 confidence: r.confidence,
                 valid_at: None,
+                classification: r
+                    .classification
+                    .as_deref()
+                    .map(Classification::from_str_flexible)
+                    .unwrap_or_default(),
             })
             .collect();
         Ok((ExtractionResult { entities, relationships }, usage))
@@ -710,6 +743,7 @@ mod tests {
             name: "Kendra".to_string(),
             entity_type: EntityType::Person,
             summary: Some("A customer".to_string()),
+            classification: Classification::default(),
         }];
 
         let provider = OpenAiCompatibleProvider::new(openai_config(&server.uri()));

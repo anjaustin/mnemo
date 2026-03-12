@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use mnemo_core::error::MnemoError;
+use mnemo_core::models::classification::Classification;
 use mnemo_core::models::edge::ExtractedRelationship;
 use mnemo_core::models::entity::{EntityType, ExtractedEntity};
 use mnemo_core::traits::llm::{ExtractionResult, LlmConfig, LlmProvider, LlmResult, TokenUsage};
@@ -78,6 +79,8 @@ struct RawEntity {
     #[serde(rename = "type")]
     entity_type: String,
     summary: Option<String>,
+    #[serde(default)]
+    classification: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +91,8 @@ struct RawRelationship {
     fact: String,
     #[serde(default = "default_confidence")]
     confidence: f32,
+    #[serde(default)]
+    classification: Option<String>,
 }
 
 fn default_confidence() -> f32 {
@@ -245,6 +250,11 @@ impl LlmProvider for AnthropicProvider {
                     name: e.name,
                     entity_type: EntityType::from_str_flexible(&e.entity_type),
                     summary: e.summary,
+                    classification: e
+                        .classification
+                        .as_deref()
+                        .map(Classification::from_str_flexible)
+                        .unwrap_or_default(),
                 })
                 .collect(),
             relationships: parsed
@@ -257,6 +267,11 @@ impl LlmProvider for AnthropicProvider {
                     fact: r.fact,
                     confidence: r.confidence,
                     valid_at: None,
+                    classification: r
+                        .classification
+                        .as_deref()
+                        .map(Classification::from_str_flexible)
+                        .unwrap_or_default(),
                 })
                 .collect(),
         })
@@ -329,6 +344,11 @@ impl LlmProvider for AnthropicProvider {
                         name: e.name,
                         entity_type: EntityType::from_str_flexible(&e.entity_type),
                         summary: e.summary,
+                        classification: e
+                            .classification
+                            .as_deref()
+                            .map(Classification::from_str_flexible)
+                            .unwrap_or_default(),
                     })
                     .collect(),
                 relationships: parsed
@@ -341,6 +361,11 @@ impl LlmProvider for AnthropicProvider {
                         fact: r.fact,
                         confidence: r.confidence,
                         valid_at: None,
+                        classification: r
+                            .classification
+                            .as_deref()
+                            .map(Classification::from_str_flexible)
+                            .unwrap_or_default(),
                     })
                     .collect(),
             },

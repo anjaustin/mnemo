@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod api_key;
 pub mod clarification;
+pub mod classification;
 pub mod context;
 pub mod counterfactual;
 pub mod digest;

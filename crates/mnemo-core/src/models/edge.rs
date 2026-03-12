@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::classification::Classification;
+
 /// An edge represents a fact/relationship between two entities in the temporal knowledge graph.
 ///
 /// Edges are the core of Mnemo's temporal reasoning. Unlike traditional knowledge graphs
@@ -62,6 +64,11 @@ pub struct Edge {
     #[serde(default)]
     pub metadata: serde_json::Value,
 
+    /// Sensitivity classification.  Defaults to `Internal` for secure-by-default
+    /// posture and backward compatibility with data created before v0.6.0.
+    #[serde(default)]
+    pub classification: Classification,
+
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -83,6 +90,9 @@ pub struct ExtractedRelationship {
     /// When the fact is stated to be valid (extracted from temporal cues in the text).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_at: Option<DateTime<Utc>>,
+    /// LLM-suggested classification.  Defaults to `Internal` if not provided.
+    #[serde(default)]
+    pub classification: Classification,
 }
 
 /// Query parameters for filtering edges.
@@ -109,6 +119,11 @@ pub struct EdgeFilter {
     #[serde(default)]
     pub include_invalidated: bool,
 
+    /// Maximum classification level to include.  Edges with classification
+    /// above this level are excluded.  `None` means no filtering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_classification: Option<Classification>,
+
     #[serde(default = "default_limit")]
     pub limit: u32,
 }
@@ -121,6 +136,7 @@ impl Default for EdgeFilter {
             label: None,
             valid_at_time: None,
             include_invalidated: false,
+            max_classification: None,
             limit: default_limit(),
         }
     }
@@ -156,6 +172,7 @@ impl Edge {
             confidence: rel.confidence,
             corroboration_count: 1,
             metadata: serde_json::json!({}),
+            classification: rel.classification,
             created_at: now,
             updated_at: now,
         }
@@ -369,6 +386,11 @@ impl EdgeFilter {
         if !self.include_invalidated && !edge.is_valid() {
             return false;
         }
+        if let Some(max) = self.max_classification {
+            if edge.classification > max {
+                return false;
+            }
+        }
         true
     }
 }
@@ -385,6 +407,7 @@ mod tests {
             fact: "Kendra loves Adidas shoes and wears them exclusively".to_string(),
             confidence: 0.95,
             valid_at: None,
+            classification: Classification::default(),
         }
     }
 

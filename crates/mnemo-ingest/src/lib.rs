@@ -678,6 +678,7 @@ where
                 name: e.name.clone(),
                 entity_type: e.entity_type.clone(),
                 summary: e.summary.clone(),
+                classification: e.classification,
             })
             .collect();
 
