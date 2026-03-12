@@ -8561,3 +8561,711 @@ async fn test_coherence_response_all_fields_present() {
     let score = body["score"].as_f64().unwrap();
     assert!(score >= 0.0 && score <= 1.0, "score must be in [0,1]: {}", score);
 }
+
+// =============================================================================
+// RBAC-01: Scoped API Key CRUD integration tests
+// =============================================================================
+
+/// Builds a test app with auth enabled, bootstrap admin keys, and Redis-backed
+/// scoped key support. Returns (app, state_store, admin_key) so tests can
+/// authenticate as admin and also exercise scoped key lookups.
+async fn build_authed_test_app_with_store(
+    admin_keys: Vec<String>,
+) -> (axum::Router, Arc<RedisStateStore>, String) {
+    let (base_app, _state, state_store) =
+        build_test_harness_with_state_and_prefilter_and_webhooks(
+            MetadataPrefilterConfig {
+                enabled: true,
+                scan_limit: 400,
+                relax_if_empty: false,
+            },
+            WebhookDeliveryConfig {
+                enabled: false,
+                max_attempts: 3,
+                base_backoff_ms: 20,
+                request_timeout_ms: 150,
+                max_events_per_webhook: 1000,
+                rate_limit_per_minute: 120,
+                circuit_breaker_threshold: 5,
+                circuit_breaker_cooldown_ms: 200,
+                persistence_enabled: false,
+            },
+        )
+        .await;
+
+    let admin_key = admin_keys[0].clone();
+
+    // Wrap with auth layer using with_keys_and_store for scoped key support
+    let app = base_app.layer(AuthLayer::new(AuthConfig::with_keys_and_store(
+        admin_keys,
+        state_store.clone(),
+    )));
+
+    (app, state_store, admin_key)
+}
+
+// ---- RBAC-01a: Create API key ----
+
+#[tokio::test]
+async fn rbac01a_create_api_key_returns_raw_key_and_metadata() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({
+            "name": "test-read-key",
+            "role": "read",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "create key failed: {:?}", body);
+
+    // raw_key must start with "mnk_" and be shown exactly once
+    let raw_key = body["raw_key"].as_str().unwrap();
+    assert!(raw_key.starts_with("mnk_"), "raw_key should start with mnk_");
+    assert_eq!(raw_key.len(), 68, "mnk_ + 64 hex chars = 68");
+
+    // Metadata fields
+    assert!(body["id"].is_string());
+    assert_eq!(body["name"].as_str().unwrap(), "test-read-key");
+    assert_eq!(body["role"].as_str().unwrap(), "read");
+    assert!(!body["revoked"].as_bool().unwrap());
+    assert!(body["key_prefix"].is_string());
+    assert!(body["created_at"].is_string());
+}
+
+#[tokio::test]
+async fn rbac01a_create_api_key_with_scope() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    let user_id = Uuid::from_u128(42);
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({
+            "name": "scoped-write-key",
+            "role": "write",
+            "scope": {
+                "allowed_user_ids": [user_id],
+                "max_classification": "confidential",
+            },
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "create scoped key failed: {:?}", body);
+    assert_eq!(body["role"].as_str().unwrap(), "write");
+    assert_eq!(
+        body["scope"]["allowed_user_ids"][0].as_str().unwrap(),
+        user_id.to_string()
+    );
+    assert_eq!(
+        body["scope"]["max_classification"].as_str().unwrap(),
+        "confidential"
+    );
+}
+
+#[tokio::test]
+async fn rbac01a_create_api_key_rejects_empty_name() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({
+            "name": "   ",
+            "role": "read",
+        }),
+    )
+    .await;
+
+    // Empty/whitespace-only name should be rejected
+    assert_eq!(status, StatusCode::BAD_REQUEST, "blank name should fail: {:?}", body);
+}
+
+#[tokio::test]
+async fn rbac01a_create_api_key_without_auth_returns_401() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // No auth header at all
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        serde_json::json!({
+            "name": "should-fail",
+            "role": "read",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "no-auth should 401: {:?}", body);
+}
+
+// ---- RBAC-01b: List API keys ----
+
+#[tokio::test]
+async fn rbac01b_list_api_keys_returns_created_keys() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create two keys
+    for name in ["list-key-1", "list-key-2"] {
+        let (status, _) = json_request_with_header(
+            &app,
+            "POST",
+            "/api/v1/keys",
+            "authorization",
+            "Bearer rbac-admin-key",
+            serde_json::json!({ "name": name, "role": "read" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    // List keys
+    let (status, body) = json_request_with_header(
+        &app,
+        "GET",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "list keys failed: {:?}", body);
+    let keys = body["keys"].as_array().unwrap();
+    assert!(keys.len() >= 2, "should have at least 2 keys, got {}", keys.len());
+
+    // Verify no key_hash is exposed
+    for key in keys {
+        assert!(key.get("key_hash").is_none(), "key_hash must not be exposed in list");
+    }
+}
+
+#[tokio::test]
+async fn rbac01b_list_api_keys_respects_limit() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create 3 keys
+    for i in 0..3 {
+        let (status, _) = json_request_with_header(
+            &app,
+            "POST",
+            "/api/v1/keys",
+            "authorization",
+            "Bearer rbac-admin-key",
+            serde_json::json!({ "name": format!("limit-key-{}", i), "role": "read" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    // List with limit=2
+    let (status, body) = json_request_with_header(
+        &app,
+        "GET",
+        "/api/v1/keys?limit=2",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "list with limit failed: {:?}", body);
+    let keys = body["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 2, "limit=2 should return exactly 2 keys");
+}
+
+// ---- RBAC-01c: Revoke API key ----
+
+#[tokio::test]
+async fn rbac01c_revoke_api_key_sets_revoked_flag() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create a key
+    let (status, create_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({ "name": "to-revoke", "role": "write" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let key_id = create_body["id"].as_str().unwrap();
+
+    // Revoke it
+    let (status, _body) = json_request_with_header(
+        &app,
+        "DELETE",
+        &format!("/api/v1/keys/{}", key_id),
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "revoke should return 204");
+
+    // List and verify the key is revoked
+    let (status, list_body) = json_request_with_header(
+        &app,
+        "GET",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let keys = list_body["keys"].as_array().unwrap();
+    let revoked_key = keys.iter().find(|k| k["id"].as_str().unwrap() == key_id).unwrap();
+    assert!(revoked_key["revoked"].as_bool().unwrap(), "key should be revoked");
+}
+
+#[tokio::test]
+async fn rbac01c_revoke_nonexistent_key_returns_404() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    let fake_id = Uuid::from_u128(999);
+    let (status, _body) = json_request_with_header(
+        &app,
+        "DELETE",
+        &format!("/api/v1/keys/{}", fake_id),
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nonexistent key should 404");
+}
+
+// ---- RBAC-01d: Rotate API key ----
+
+#[tokio::test]
+async fn rbac01d_rotate_api_key_revokes_old_creates_new() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create a key
+    let (status, create_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({ "name": "to-rotate", "role": "write" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let old_key_id = create_body["id"].as_str().unwrap().to_string();
+    let old_raw_key = create_body["raw_key"].as_str().unwrap().to_string();
+
+    // Rotate
+    let (status, rotate_body) = json_request_with_header(
+        &app,
+        "POST",
+        &format!("/api/v1/keys/{}/rotate", old_key_id),
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "rotate should return 201: {:?}", rotate_body);
+
+    let new_key_id = rotate_body["id"].as_str().unwrap();
+    let new_raw_key = rotate_body["raw_key"].as_str().unwrap();
+
+    // New key should differ from old
+    assert_ne!(old_key_id, new_key_id, "new key should have different id");
+    assert_ne!(old_raw_key, new_raw_key, "new raw key should differ");
+
+    // New key should have same name and role
+    assert_eq!(rotate_body["name"].as_str().unwrap(), "to-rotate");
+    assert_eq!(rotate_body["role"].as_str().unwrap(), "write");
+    assert!(!rotate_body["revoked"].as_bool().unwrap(), "new key should not be revoked");
+
+    // Old key should now be revoked (verify via list)
+    let (status, list_body) = json_request_with_header(
+        &app,
+        "GET",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let keys = list_body["keys"].as_array().unwrap();
+    let old = keys.iter().find(|k| k["id"].as_str().unwrap() == old_key_id).unwrap();
+    assert!(old["revoked"].as_bool().unwrap(), "old key must be revoked after rotation");
+}
+
+#[tokio::test]
+async fn rbac01d_rotate_nonexistent_key_returns_404() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    let fake_id = Uuid::from_u128(888);
+    let (status, _body) = json_request_with_header(
+        &app,
+        "POST",
+        &format!("/api/v1/keys/{}/rotate", fake_id),
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "rotate nonexistent should 404");
+}
+
+// =============================================================================
+// RBAC-02: Scoped API Key falsification / security tests
+// =============================================================================
+
+// ---- RBAC-02a: Scoped key authentication via middleware ----
+
+#[tokio::test]
+async fn rbac02a_scoped_key_authenticates_via_middleware() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create a write-scoped key
+    let (status, create_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({ "name": "write-key", "role": "write" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let raw_key = create_body["raw_key"].as_str().unwrap().to_string();
+
+    // Use the scoped key to write memory (should succeed — Write >= Write)
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "authorization",
+        &format!("Bearer {}", raw_key),
+        serde_json::json!({
+            "user": format!("rbac02a_user_{}", Uuid::now_v7()),
+            "session": "s1",
+            "text": "scoped key write test",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "scoped write key should be able to ingest: {:?}", body);
+}
+
+// ---- RBAC-02b: Role escalation prevention ----
+
+#[tokio::test]
+async fn rbac02b_read_key_cannot_access_admin_endpoints() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create a read-only key
+    let (status, create_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({ "name": "reader", "role": "read" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let read_key = create_body["raw_key"].as_str().unwrap().to_string();
+
+    // Try to list keys (Admin-only) with the read key — should fail
+    let (status, body) = json_request_with_header(
+        &app,
+        "GET",
+        "/api/v1/keys",
+        "authorization",
+        &format!("Bearer {}", read_key),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not list keys: {:?}", body);
+
+    // Try to create a key (Admin-only) with the read key — should fail
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        &format!("Bearer {}", read_key),
+        serde_json::json!({ "name": "escalated", "role": "admin" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not create keys: {:?}", body);
+}
+
+#[tokio::test]
+async fn rbac02b_write_key_cannot_access_admin_endpoints() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create a write key
+    let (status, create_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({ "name": "writer", "role": "write" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let write_key = create_body["raw_key"].as_str().unwrap().to_string();
+
+    // Try to list keys with write key — should fail (Write < Admin)
+    let (status, body) = json_request_with_header(
+        &app,
+        "GET",
+        "/api/v1/keys",
+        "authorization",
+        &format!("Bearer {}", write_key),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "write key should not list keys: {:?}", body);
+}
+
+// ---- RBAC-02c: Revoked key rejection ----
+
+#[tokio::test]
+async fn rbac02c_revoked_key_cannot_authenticate() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create and then revoke a key
+    let (status, create_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({ "name": "to-revoke-auth", "role": "write" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let raw_key = create_body["raw_key"].as_str().unwrap().to_string();
+    let key_id = create_body["id"].as_str().unwrap().to_string();
+
+    // Revoke
+    let (status, _) = json_request_with_header(
+        &app,
+        "DELETE",
+        &format!("/api/v1/keys/{}", key_id),
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Wait briefly to let cache expire (cache TTL is 30s, but for a freshly revoked key
+    // the cache entry was set before revocation, so we need the cache to be refreshed).
+    // The middleware checks the store on cache miss. Since we just created and revoked,
+    // the cache may still have the old active entry. We need to wait for cache expiry
+    // or the key was never cached (first auth attempt after revocation = cache miss).
+    // Actually: the key was created but never used to authenticate, so it's not cached.
+    // First use after revocation = fresh lookup = will see revoked = reject.
+
+    // Try to use the revoked key
+    let (status, _body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "authorization",
+        &format!("Bearer {}", raw_key),
+        serde_json::json!({
+            "user": "revoked-test",
+            "session": "s1",
+            "text": "should fail",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "revoked key must be rejected");
+}
+
+// ---- RBAC-02d: Expired key rejection ----
+
+#[tokio::test]
+async fn rbac02d_expired_key_cannot_authenticate() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create a key that is already expired (expires_at in the past)
+    let past = chrono::Utc::now() - chrono::Duration::hours(1);
+    let (status, create_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({
+            "name": "expired-key",
+            "role": "write",
+            "expires_at": past.to_rfc3339(),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let raw_key = create_body["raw_key"].as_str().unwrap().to_string();
+
+    // Try to use the expired key
+    let (status, _body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "authorization",
+        &format!("Bearer {}", raw_key),
+        serde_json::json!({
+            "user": "expired-test",
+            "session": "s1",
+            "text": "should fail",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "expired key must be rejected");
+}
+
+// ---- RBAC-02e: Rotated key — old key stops working, new key works ----
+
+#[tokio::test]
+async fn rbac02e_rotated_old_key_rejected_new_key_works() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // Create a key
+    let (status, create_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({ "name": "rotate-auth-test", "role": "write" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let old_raw = create_body["raw_key"].as_str().unwrap().to_string();
+    let key_id = create_body["id"].as_str().unwrap().to_string();
+
+    // Rotate
+    let (status, rotate_body) = json_request_with_header(
+        &app,
+        "POST",
+        &format!("/api/v1/keys/{}/rotate", key_id),
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let new_raw = rotate_body["raw_key"].as_str().unwrap().to_string();
+
+    // Old key should fail (revoked by rotation)
+    let (status, _) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "authorization",
+        &format!("Bearer {}", old_raw),
+        serde_json::json!({
+            "user": "rotate-test-old",
+            "session": "s1",
+            "text": "should fail",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "old key after rotation must be rejected");
+
+    // New key should work
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "authorization",
+        &format!("Bearer {}", new_raw),
+        serde_json::json!({
+            "user": format!("rbac02e_user_{}", Uuid::now_v7()),
+            "session": "s1",
+            "text": "new key write",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "new rotated key should work: {:?}", body);
+}
+
+// ---- RBAC-02f: Fabricated / invalid key rejected ----
+
+#[tokio::test]
+async fn rbac02f_fabricated_key_rejected() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    // A key that looks valid (mnk_ prefix) but was never created
+    let (status, _body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/memory",
+        "authorization",
+        "Bearer mnk_0000000000000000000000000000000000000000000000000000000000000000",
+        serde_json::json!({
+            "user": "fabricated-test",
+            "session": "s1",
+            "text": "should fail",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "fabricated key must be rejected");
+}
+
+// ---- RBAC-02g: Key name length validation ----
+
+#[tokio::test]
+async fn rbac02g_key_name_too_long_rejected() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["rbac-admin-key".to_string()]).await;
+
+    let long_name = "x".repeat(200);
+    let (status, _body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer rbac-admin-key",
+        serde_json::json!({
+            "name": long_name,
+            "role": "read",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "name >128 chars should fail");
+}

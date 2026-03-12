@@ -213,8 +213,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Auth
     let auth_config = if config.auth.enabled {
-        tracing::info!(keys = config.auth.api_keys.len(), "API key auth enabled");
-        AuthConfig::with_keys(config.auth.api_keys.clone())
+        tracing::info!(keys = config.auth.api_keys.len(), "API key auth enabled (scoped keys via Redis)");
+        AuthConfig::with_keys_and_store(config.auth.api_keys.clone(), state_store.clone())
     } else {
         tracing::warn!("API key auth DISABLED");
         AuthConfig::disabled()

@@ -9,12 +9,35 @@ use axum::Json;
 use tower::{Layer, Service};
 
 use mnemo_core::error::{ApiErrorDetail, ApiErrorResponse};
+use mnemo_core::models::api_key::{CallerContext, hash_api_key};
+use mnemo_core::traits::storage::ApiKeyStore;
+use mnemo_storage::RedisStateStore;
+use tokio::sync::RwLock;
 
 /// Configuration for API key authentication.
+///
+/// Supports three modes:
+/// 1. **Disabled** — all requests get implicit Admin context.
+/// 2. **Bootstrap keys only** — legacy mode: a set of raw strings treated as Admin keys.
+/// 3. **Scoped keys** — keys stored in Redis with role/scope metadata.
 #[derive(Clone)]
 pub struct AuthConfig {
     pub enabled: bool,
+    /// Legacy bootstrap keys (raw strings).  These always grant Admin role.
     pub valid_keys: HashSet<String>,
+    /// Optional reference to the state store for scoped key lookups.
+    pub state_store: Option<Arc<RedisStateStore>>,
+    /// Cache of recently-resolved scoped keys (hash → CallerContext).
+    /// Populated on first lookup, invalidated on key revocation.
+    pub key_cache: Arc<RwLock<std::collections::HashMap<String, CachedKey>>>,
+}
+
+/// A cached key lookup result.
+#[derive(Clone)]
+pub struct CachedKey {
+    pub context: CallerContext,
+    pub active: bool,
+    pub cached_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl AuthConfig {
@@ -22,6 +45,8 @@ impl AuthConfig {
         Self {
             enabled: false,
             valid_keys: HashSet::new(),
+            state_store: None,
+            key_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -29,6 +54,17 @@ impl AuthConfig {
         Self {
             enabled: true,
             valid_keys: keys.into_iter().collect(),
+            state_store: None,
+            key_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    pub fn with_keys_and_store(keys: Vec<String>, store: Arc<RedisStateStore>) -> Self {
+        Self {
+            enabled: true,
+            valid_keys: keys.into_iter().collect(),
+            state_store: Some(store),
+            key_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 }
@@ -80,12 +116,16 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
+    fn call(&mut self, mut req: Request<Body>) -> Self::Future {
+        // ── Auth disabled → implicit admin ──────────────────────
         if !self.config.enabled {
+            req.extensions_mut()
+                .insert(CallerContext::admin_bootstrap());
             let mut inner = self.inner.clone();
             return Box::pin(async move { inner.call(req).await });
         }
 
+        // ── Exempt paths ────────────────────────────────────────
         let path = req.uri().path();
         if path == "/health"
             || path == "/healthz"
@@ -93,10 +133,13 @@ where
             || path.starts_with("/_/")
             || path == "/_"
         {
+            req.extensions_mut()
+                .insert(CallerContext::admin_bootstrap());
             let mut inner = self.inner.clone();
             return Box::pin(async move { inner.call(req).await });
         }
 
+        // ── Extract raw key from header ─────────────────────────
         let api_key = req
             .headers()
             .get("authorization")
@@ -110,16 +153,91 @@ where
                     .map(|s| s.to_string())
             });
 
-        match api_key {
-            Some(key) if self.config.valid_keys.contains(&key) => {
-                let mut inner = self.inner.clone();
-                Box::pin(async move { inner.call(req).await })
-            }
-            _ => {
+        let raw_key = match api_key {
+            Some(k) => k,
+            None => {
                 let response = unauthorized_response();
-                Box::pin(async move { Ok(response) })
+                return Box::pin(async move { Ok(response) });
             }
-        }
+        };
+
+        let config = self.config.clone();
+        let mut inner = self.inner.clone();
+
+        Box::pin(async move {
+            // ── Check bootstrap keys first ──────────────────────
+            if config.valid_keys.contains(&raw_key) {
+                req.extensions_mut()
+                    .insert(CallerContext::admin_bootstrap());
+                return inner.call(req).await;
+            }
+
+            // ── Check scoped keys via Redis ─────────────────────
+            if let Some(ref store) = config.state_store {
+                let key_hash = hash_api_key(&raw_key);
+
+                // Check cache first (30-second TTL)
+                {
+                    let cache = config.key_cache.read().await;
+                    if let Some(cached) = cache.get(&key_hash) {
+                        let age = chrono::Utc::now() - cached.cached_at;
+                        if age.num_seconds() < 30 && cached.active {
+                            req.extensions_mut().insert(cached.context.clone());
+                            return inner.call(req).await;
+                        }
+                    }
+                }
+
+                // Cache miss or stale → look up in Redis
+                match store.get_api_key_by_hash(&key_hash).await {
+                    Ok(Some(api_key)) if api_key.is_active() => {
+                        let ctx = CallerContext {
+                            key_id: api_key.id,
+                            key_name: api_key.name.clone(),
+                            role: api_key.role,
+                            scope: api_key.scope.clone(),
+                        };
+
+                        // Update cache
+                        {
+                            let mut cache = config.key_cache.write().await;
+                            cache.insert(
+                                key_hash.clone(),
+                                CachedKey {
+                                    context: ctx.clone(),
+                                    active: true,
+                                    cached_at: chrono::Utc::now(),
+                                },
+                            );
+                        }
+
+                        // Best-effort: update last_used_at
+                        let mut updated = api_key;
+                        updated.last_used_at = Some(chrono::Utc::now());
+                        let _ = store.update_api_key(&updated).await;
+
+                        req.extensions_mut().insert(ctx);
+                        return inner.call(req).await;
+                    }
+                    Ok(Some(_)) => {
+                        // Key exists but is revoked or expired
+                        return Ok(unauthorized_response());
+                    }
+                    Ok(None) => {
+                        // Not a scoped key either
+                        return Ok(unauthorized_response());
+                    }
+                    Err(_) => {
+                        // Redis error — fail open or closed?
+                        // Fail closed for security.
+                        return Ok(unauthorized_response());
+                    }
+                }
+            }
+
+            // ── No match ────────────────────────────────────────
+            Ok(unauthorized_response())
+        })
     }
 }
 

@@ -8,6 +8,7 @@ use crate::models::{
         CreatePromotionProposalRequest, ExperienceEvent, MergeResult,
         PromotionProposal, UpdateAgentIdentityRequest,
     },
+    api_key::ApiKey,
     digest::MemoryDigest,
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -497,6 +498,33 @@ pub trait GoalStore: Send + Sync {
     async fn delete_goal_profile(&self, id: Uuid) -> StorageResult<()>;
 }
 
+// ─── API Key Storage ───────────────────────────────────────────────
+
+/// Persistence for scoped API keys (RBAC).
+///
+/// Keys are stored with their SHA-256 hash — the raw key is never persisted.
+/// Lookup by hash enables O(1) authentication in the middleware.
+#[allow(async_fn_in_trait)]
+pub trait ApiKeyStore: Send + Sync {
+    /// Persist a new API key.
+    async fn save_api_key(&self, key: &ApiKey) -> StorageResult<()>;
+
+    /// Get a key by its ID.
+    async fn get_api_key(&self, id: Uuid) -> StorageResult<Option<ApiKey>>;
+
+    /// Look up a key by its SHA-256 hash (used during authentication).
+    async fn get_api_key_by_hash(&self, hash: &str) -> StorageResult<Option<ApiKey>>;
+
+    /// List all keys, ordered by created_at descending.
+    async fn list_api_keys(&self, limit: usize) -> StorageResult<Vec<ApiKey>>;
+
+    /// Update a key (e.g. revoke, update last_used_at).
+    async fn update_api_key(&self, key: &ApiKey) -> StorageResult<()>;
+
+    /// Delete a key permanently.
+    async fn delete_api_key(&self, id: Uuid) -> StorageResult<()>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -513,6 +541,7 @@ pub trait StateStore:
     + ClarificationStore
     + NarrativeStore
     + GoalStore
+    + ApiKeyStore
 {
 }
 
@@ -529,6 +558,7 @@ impl<T> StateStore for T where
         + ClarificationStore
         + NarrativeStore
         + GoalStore
+        + ApiKeyStore
 {
 }
 

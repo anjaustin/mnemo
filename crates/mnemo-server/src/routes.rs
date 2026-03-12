@@ -35,8 +35,11 @@ use mnemo_core::models::{
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
+use mnemo_core::models::api_key::{
+    ApiKeyRole, CallerContext, CreateApiKeyRequest,
+};
 use mnemo_core::traits::storage::{
-    AgentStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
+    AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
     NarrativeStore, RawVectorStore, SessionStore, SpanStore, UserStore, VectorStore,
 };
 
@@ -1289,6 +1292,19 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/memory/:user/digest",
             get(get_memory_digest).post(refresh_memory_digest),
+        )
+        // API key management (RBAC)
+        .route(
+            "/api/v1/keys",
+            post(create_api_key).get(list_api_keys),
+        )
+        .route(
+            "/api/v1/keys/:key_id",
+            delete(revoke_api_key),
+        )
+        .route(
+            "/api/v1/keys/:key_id/rotate",
+            post(rotate_api_key),
         )
         // Raw Vector API (external vector DB interface for AnythingLLM, etc.)
         .route(
@@ -9988,6 +10004,175 @@ async fn refresh_narrative(
     state.state_store.save_narrative(&narrative).await?;
 
     Ok((StatusCode::CREATED, Json(narrative)))
+}
+
+// ─── API Key Management (RBAC) ─────────────────────────────────────
+
+/// Extract the CallerContext injected by the auth middleware.
+/// Falls back to admin bootstrap if not present (auth disabled mode).
+fn caller_from_extension(caller: Option<Extension<CallerContext>>) -> CallerContext {
+    caller
+        .map(|Extension(c)| c)
+        .unwrap_or_else(CallerContext::admin_bootstrap)
+}
+
+async fn create_api_key(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Json(body): Json<CreateApiKeyRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    // Validate name
+    let name = body.name.trim().to_string();
+    if name.is_empty() || name.len() > 128 {
+        return Err(AppError(MnemoError::Validation(
+            "name must be 1-128 characters".into(),
+        )));
+    }
+
+    // Generate raw key + hash
+    let raw = mnemo_core::models::api_key::generate_raw_key();
+    let hash = mnemo_core::models::api_key::hash_api_key(&raw);
+    let prefix = mnemo_core::models::api_key::key_prefix(&raw);
+
+    let api_key = mnemo_core::models::api_key::ApiKey {
+        id: Uuid::now_v7(),
+        name,
+        key_hash: hash,
+        key_prefix: prefix,
+        role: body.role,
+        scope: body.scope,
+        created_by: Some(caller.key_name.clone()),
+        created_at: chrono::Utc::now(),
+        last_used_at: None,
+        expires_at: body.expires_at,
+        revoked: false,
+    };
+
+    state.state_store.save_api_key(&api_key).await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(mnemo_core::models::api_key::CreateApiKeyResponse {
+            raw_key: raw,
+            key: api_key,
+        }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct ListApiKeysParams {
+    #[serde(default = "default_api_key_limit")]
+    limit: usize,
+}
+
+fn default_api_key_limit() -> usize {
+    50
+}
+
+async fn list_api_keys(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Query(params): Query<ListApiKeysParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    let limit = params.limit.clamp(1, 200);
+    let keys = state.state_store.list_api_keys(limit).await?;
+
+    // Never expose key_hash in list responses
+    let sanitized: Vec<serde_json::Value> = keys
+        .into_iter()
+        .map(|k| {
+            serde_json::json!({
+                "id": k.id,
+                "name": k.name,
+                "key_prefix": k.key_prefix,
+                "role": k.role,
+                "scope": k.scope,
+                "created_by": k.created_by,
+                "created_at": k.created_at,
+                "last_used_at": k.last_used_at,
+                "expires_at": k.expires_at,
+                "revoked": k.revoked,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "keys": sanitized })))
+}
+
+async fn revoke_api_key(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(key_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    let Some(mut key) = state.state_store.get_api_key(key_id).await? else {
+        return Err(AppError(MnemoError::NotFound {
+            resource_type: "api_key".into(),
+            id: key_id.to_string(),
+        }));
+    };
+
+    key.revoked = true;
+    state.state_store.update_api_key(&key).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn rotate_api_key(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(key_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    let Some(mut old_key) = state.state_store.get_api_key(key_id).await? else {
+        return Err(AppError(MnemoError::NotFound {
+            resource_type: "api_key".into(),
+            id: key_id.to_string(),
+        }));
+    };
+
+    // Revoke the old key
+    old_key.revoked = true;
+    state.state_store.update_api_key(&old_key).await?;
+
+    // Create a new key with the same name/role/scope
+    let raw = mnemo_core::models::api_key::generate_raw_key();
+    let hash = mnemo_core::models::api_key::hash_api_key(&raw);
+    let prefix = mnemo_core::models::api_key::key_prefix(&raw);
+
+    let new_key = mnemo_core::models::api_key::ApiKey {
+        id: Uuid::now_v7(),
+        name: old_key.name.clone(),
+        key_hash: hash,
+        key_prefix: prefix,
+        role: old_key.role,
+        scope: old_key.scope.clone(),
+        created_by: Some(caller.key_name.clone()),
+        created_at: chrono::Utc::now(),
+        last_used_at: None,
+        expires_at: old_key.expires_at,
+        revoked: false,
+    };
+
+    state.state_store.save_api_key(&new_key).await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(mnemo_core::models::api_key::CreateApiKeyResponse {
+            raw_key: raw,
+            key: new_key,
+        }),
+    ))
 }
 
 #[cfg(test)]

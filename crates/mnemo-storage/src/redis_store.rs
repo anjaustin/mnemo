@@ -2036,3 +2036,111 @@ impl GoalStore for RedisStateStore {
         self.del(&key).await
     }
 }
+
+// ─── API Key Storage ───────────────────────────────────────────────
+//
+// Key schema:
+//   {prefix}api_key:{id}                → JSON ApiKey
+//   {prefix}api_keys                    → Sorted Set (score=created_at_ms, member=key_id)
+//   {prefix}api_key_hash:{sha256_hash}  → key UUID (hash → id lookup index)
+
+use mnemo_core::models::api_key::ApiKey as ApiKeyModel;
+
+impl ApiKeyStore for RedisStateStore {
+    async fn save_api_key(&self, key: &ApiKeyModel) -> Result<(), MnemoError> {
+        let pk = self.key(&["api_key", &key.id.to_string()]);
+        self.set_json(&pk, key).await?;
+
+        // Index: sorted set by created_at
+        let zset = self.key(&["api_keys"]);
+        let score = key.created_at.timestamp_millis() as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&zset)
+            .arg(score)
+            .arg(key.id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Index: hash → id lookup
+        let hash_key = self.key(&["api_key_hash", &key.key_hash]);
+        let mut conn = self.conn.clone();
+        conn.set::<_, _, ()>(&hash_key, key.id.to_string())
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_api_key(&self, id: Uuid) -> Result<Option<ApiKeyModel>, MnemoError> {
+        let pk = self.key(&["api_key", &id.to_string()]);
+        self.get_json::<ApiKeyModel>(&pk).await
+    }
+
+    async fn get_api_key_by_hash(&self, hash: &str) -> Result<Option<ApiKeyModel>, MnemoError> {
+        let hash_key = self.key(&["api_key_hash", hash]);
+        let mut conn = self.conn.clone();
+        let id_str: Option<String> = conn
+            .get(&hash_key)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        match id_str {
+            None => Ok(None),
+            Some(s) => {
+                let id: Uuid = s
+                    .parse()
+                    .map_err(|e| MnemoError::Redis(format!("bad api_key UUID: {e}")))?;
+                self.get_api_key(id).await
+            }
+        }
+    }
+
+    async fn list_api_keys(&self, limit: usize) -> Result<Vec<ApiKeyModel>, MnemoError> {
+        let zset = self.key(&["api_keys"]);
+        let mut conn = self.conn.clone();
+        let ids: Vec<String> = redis::cmd("ZREVRANGE")
+            .arg(&zset)
+            .arg(0isize)
+            .arg((limit as isize) - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut results = Vec::with_capacity(ids.len());
+        for id_str in ids {
+            let pk = self.key(&["api_key", &id_str]);
+            if let Some(key) = self.get_json::<ApiKeyModel>(&pk).await? {
+                results.push(key);
+            }
+        }
+        Ok(results)
+    }
+
+    async fn update_api_key(&self, key: &ApiKeyModel) -> Result<(), MnemoError> {
+        let pk = self.key(&["api_key", &key.id.to_string()]);
+        self.set_json(&pk, key).await
+    }
+
+    async fn delete_api_key(&self, id: Uuid) -> Result<(), MnemoError> {
+        // Load key first to clean up hash index
+        let pk = self.key(&["api_key", &id.to_string()]);
+        if let Some(key) = self.get_json::<ApiKeyModel>(&pk).await? {
+            let hash_key = self.key(&["api_key_hash", &key.key_hash]);
+            self.del(&hash_key).await?;
+        }
+
+        // Remove from sorted set
+        let zset = self.key(&["api_keys"]);
+        let mut conn = self.conn.clone();
+        redis::cmd("ZREM")
+            .arg(&zset)
+            .arg(id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        self.del(&pk).await
+    }
+}
