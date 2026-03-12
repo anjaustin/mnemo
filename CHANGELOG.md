@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-03-11
+
+### Added
+
+- **Confidence decay + revalidation** (`mnemo-core`, `mnemo-server`): Facts and entity edges decay in confidence over time unless reinforced by new evidence. `effective_edge_confidence()` applies `confidence * corroboration_boost * decay_factor * importance_protection`. `compute_edge_fisher_importance()` scores edges using corroboration rarity and connectivity. `GET /api/v1/memory/:user/stale` returns facts below revalidation threshold, ranked by importance. `POST /api/v1/memory/:user/revalidate` resets decay clock. `revalidation_needed` webhook event. 17 tests + 12 adversarial falsification tests.
+- **Self-healing memory** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Auto-detect low-confidence conflicts and generate targeted clarification questions. `ClarificationRequest` type with `Pending/Resolved/Expired/Dismissed` status lifecycle. `ClarificationStore` trait with Redis persistence (JSON + sorted set by severity). `POST /api/v1/memory/:user/clarifications` runs conflict radar and generates questions. `POST .../resolve` applies answer with optional winning edge invalidation. `POST .../dismiss` for irrelevant conflicts. `clarification_generated` and `clarification_resolved` webhook events. 14 tests + 10 adversarial falsification tests.
+- **Cross-session narrative summaries** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Evolving "story of the user" narratives that update after each session. `UserNarrative` type with versioned chapters (`NarrativeChapter` with period, summary, key_changes). `NarrativeStore` trait with Redis persistence. `GET /api/v1/memory/:user/narrative` returns current narrative. `POST /api/v1/memory/:user/narrative/refresh` generates/updates via LLM with incremental or full rebuild. `include_narrative: true` in context requests prepends narrative as preamble. `narrative_refreshed` webhook event. 18 tests + 13 adversarial falsification tests.
+- **Goal-conditioned memory** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Condition retrieval by active objective, not only semantic similarity. `GoalProfile` type with entity category boosts, edge label boosts, temporal bias, boost/suppress keywords. `GoalStore` trait with Redis persistence (JSON + sorted set + name index). CRUD endpoints at `/api/v1/memory/:user/goals`. `goal` parameter in context requests triggers relevance re-scoring via `compute_relevance_adjustment()`. `goal_applied` in context response. 18 tests + 12 adversarial falsification tests.
+- **Counterfactual memory** (`mnemo-core`, `mnemo-server`): Simulate retrieval under hypothetical assumptions without modifying state. `POST /api/v1/memory/:user/counterfactual` accepts `hypotheticals` array of fact overrides. `apply_hypotheticals()` engine replaces matching facts (case-insensitive entity+label) and injects novel hypotheticals. `CounterfactualDiff` tracks overridden facts, injected count, and novel additions. Read-only COW simulation. 12 tests + 11 adversarial falsification tests.
+
+### Changed
+
+- `mnemo-core` test count: 227 -> 364 (+137 tests).
+- Total workspace test count: ~553 -> ~702 (+149 tests).
+- `FactSummary` now derives `PartialEq` (needed for counterfactual diff tracking).
+- `StateStore` composite trait now includes `ClarificationStore`, `NarrativeStore`, `GoalStore`.
+- `MemoryWebhookEventType` enum expanded: `RevalidationNeeded`, `ClarificationGenerated`, `ClarificationResolved`, `NarrativeRefreshed`.
+- `MemoryContextRequest` extended with `include_narrative`, `goal` fields.
+- `MemoryContextResponse` extended with `narrative`, `goal_applied` fields.
+
 ## [0.5.0] — 2026-03-11
 
 ### Added

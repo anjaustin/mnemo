@@ -1,6 +1,6 @@
 # Mnemo 0.5.5 Roadmap — Autonomic Memory
 
-**Status**: Planning
+**Status**: SHIPPED (tagged v0.5.5)
 **Baseline**: v0.5.0 (13-feature mesa: GNN, EWC++, MCP, witness chain, semantic routing, hyperbolic HNSW, COW branching, DAG workflows, delta consensus, domain expansion, verified identity updates)
 **Theme**: Make Mnemo self-maintaining. Memory should heal itself, age gracefully, and narrate its own evolution — without human intervention.
 
