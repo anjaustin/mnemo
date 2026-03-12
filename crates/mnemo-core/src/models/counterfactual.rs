@@ -396,4 +396,203 @@ mod tests {
         assert_eq!(de.injected_count, 2);
         assert_eq!(de.novel_hypotheticals.len(), 1);
     }
+
+    // ─── Falsification / Adversarial Tests ─────────────────────────
+
+    #[test]
+    fn test_falsify_duplicate_hypotheticals_same_entity_attribute() {
+        // Two hypotheticals targeting the same entity+attribute — both should apply
+        // (the second one overwrites the first's replacement)
+        let facts = vec![make_fact("User", "brand", "User likes Nike", 0.8)];
+        let hypotheticals = vec![
+            HypotheticalFact {
+                entity: "User".into(),
+                attribute: "brand".into(),
+                value: "Adidas".into(),
+                confidence: 0.9,
+            },
+            HypotheticalFact {
+                entity: "User".into(),
+                attribute: "brand".into(),
+                value: "Puma".into(),
+                confidence: 0.95,
+            },
+        ];
+
+        let (result, diff) = apply_hypotheticals(facts, &hypotheticals);
+        // Both hypotheticals matched the same fact — each produced an override record
+        assert_eq!(diff.overridden_facts.len(), 2);
+        // The final value should be Puma (second hypothetical applied last)
+        let brand = result.iter().find(|f| f.label == "brand").unwrap();
+        assert!(brand.fact.contains("Puma"));
+    }
+
+    #[test]
+    fn test_falsify_hypothetical_with_zero_confidence() {
+        let facts = vec![make_fact("User", "pref", "prefers X", 0.8)];
+        let hypotheticals = vec![HypotheticalFact {
+            entity: "User".into(),
+            attribute: "pref".into(),
+            value: "Y".into(),
+            confidence: 0.0,
+        }];
+
+        let (result, diff) = apply_hypotheticals(facts, &hypotheticals);
+        assert_eq!(diff.overridden_facts.len(), 1);
+        let fact = result.iter().find(|f| f.label == "pref").unwrap();
+        assert_eq!(fact.relevance, 0.0);
+    }
+
+    #[test]
+    fn test_falsify_hypothetical_with_confidence_above_one() {
+        // Confidence > 1.0 should be passed through (clamping is caller's job)
+        let facts = vec![make_fact("User", "pref", "prefers X", 0.8)];
+        let hypotheticals = vec![HypotheticalFact {
+            entity: "User".into(),
+            attribute: "pref".into(),
+            value: "Y".into(),
+            confidence: 5.0,
+        }];
+
+        let (result, _) = apply_hypotheticals(facts, &hypotheticals);
+        let fact = result.iter().find(|f| f.label == "pref").unwrap();
+        assert_eq!(fact.relevance, 5.0);
+    }
+
+    #[test]
+    fn test_falsify_empty_entity_and_attribute() {
+        // Empty strings should still match if the fact has empty entity/label
+        let facts = vec![make_fact("", "", "empty fact", 0.5)];
+        let hypotheticals = vec![HypotheticalFact {
+            entity: "".into(),
+            attribute: "".into(),
+            value: "override".into(),
+            confidence: 0.9,
+        }];
+
+        let (_, diff) = apply_hypotheticals(facts, &hypotheticals);
+        assert_eq!(diff.overridden_facts.len(), 1);
+    }
+
+    #[test]
+    fn test_falsify_unicode_entities() {
+        let facts = vec![make_fact("Café", "préférence", "likes espresso", 0.7)];
+        let hypotheticals = vec![HypotheticalFact {
+            entity: "café".into(), // lowercase unicode
+            attribute: "préférence".into(),
+            value: "latte".into(),
+            confidence: 0.9,
+        }];
+
+        let (_, diff) = apply_hypotheticals(facts, &hypotheticals);
+        assert_eq!(diff.overridden_facts.len(), 1);
+    }
+
+    #[test]
+    fn test_falsify_many_hypotheticals_on_empty_facts() {
+        let facts: Vec<FactSummary> = vec![];
+        let hypotheticals: Vec<HypotheticalFact> = (0..100)
+            .map(|i| HypotheticalFact {
+                entity: format!("entity_{i}"),
+                attribute: format!("attr_{i}"),
+                value: format!("val_{i}"),
+                confidence: 0.5,
+            })
+            .collect();
+
+        let (result, diff) = apply_hypotheticals(facts, &hypotheticals);
+        // All should be novel since there are no existing facts
+        assert_eq!(result.len(), 100);
+        assert_eq!(diff.novel_hypotheticals.len(), 100);
+        assert_eq!(diff.overridden_facts.len(), 0);
+        assert_eq!(diff.injected_count, 100);
+    }
+
+    #[test]
+    fn test_falsify_rebuild_context_string_with_special_chars() {
+        let facts = vec![
+            make_fact("User", "quote", r#"User said "hello""#, 0.8),
+            make_fact("User", "html", "User likes <b>bold</b>", 0.7),
+        ];
+        let ctx = rebuild_context_string(&facts);
+        assert!(ctx.contains(r#"User said "hello""#));
+        assert!(ctx.contains("<b>bold</b>"));
+    }
+
+    #[test]
+    fn test_falsify_novel_hypothetical_deterministic_id() {
+        // Novel hypotheticals should get deterministic IDs based on index
+        let facts: Vec<FactSummary> = vec![];
+        let hypotheticals = vec![
+            HypotheticalFact {
+                entity: "A".into(),
+                attribute: "a".into(),
+                value: "1".into(),
+                confidence: 0.5,
+            },
+            HypotheticalFact {
+                entity: "B".into(),
+                attribute: "b".into(),
+                value: "2".into(),
+                confidence: 0.5,
+            },
+        ];
+
+        let (result, _) = apply_hypotheticals(facts, &hypotheticals);
+        // IDs should be deterministic and distinct
+        assert_ne!(result[0].id, result[1].id);
+        // Running again should produce the same IDs
+        let (result2, _) = apply_hypotheticals(vec![], &hypotheticals);
+        assert_eq!(result[0].id, result2[0].id);
+        assert_eq!(result[1].id, result2[1].id);
+    }
+
+    #[test]
+    fn test_falsify_overridden_fact_preserves_original_data() {
+        let original = make_fact("User", "brand", "User prefers Nike", 0.8);
+        let original_id = original.id;
+        let original_relevance = original.relevance;
+
+        let facts = vec![original];
+        let hypotheticals = vec![HypotheticalFact {
+            entity: "User".into(),
+            attribute: "brand".into(),
+            value: "Adidas".into(),
+            confidence: 0.95,
+        }];
+
+        let (_, diff) = apply_hypotheticals(facts, &hypotheticals);
+        // The override record should contain the ORIGINAL fact data
+        assert_eq!(diff.overridden_facts[0].original.id, original_id);
+        assert_eq!(diff.overridden_facts[0].original.fact, "User prefers Nike");
+        assert_eq!(
+            diff.overridden_facts[0].original.relevance,
+            original_relevance
+        );
+    }
+
+    #[test]
+    fn test_falsify_counterfactual_request_missing_hypotheticals() {
+        // Serde should reject request with no hypotheticals field
+        let json = r#"{"query": "test"}"#;
+        let result = serde_json::from_str::<CounterfactualRequest>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_falsify_hypothetical_very_long_value() {
+        let long_value = "x".repeat(10_000);
+        let facts = vec![make_fact("User", "bio", "short bio", 0.5)];
+        let hypotheticals = vec![HypotheticalFact {
+            entity: "User".into(),
+            attribute: "bio".into(),
+            value: long_value.clone(),
+            confidence: 0.9,
+        }];
+
+        let (result, diff) = apply_hypotheticals(facts, &hypotheticals);
+        assert_eq!(diff.overridden_facts.len(), 1);
+        let fact = result.iter().find(|f| f.label == "bio").unwrap();
+        assert!(fact.fact.contains(&long_value));
+    }
 }
