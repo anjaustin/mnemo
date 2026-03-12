@@ -11,29 +11,48 @@ Your AI Agent
      │
      │  POST /api/v1/sessions/:id/episodes   (ingest)
      │  POST /api/v1/users/:id/context        (retrieve)
+     │  MCP tools: mnemo_remember / mnemo_recall
      │
      ▼
-┌────────────────────────────────────────────┐
-│              Mnemo Server                   │
-│                                             │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
-│  │  REST API │  │ Ingest   │  │ Retrieval│ │
-│  │  (Axum)  │  │ Worker   │  │ Engine   │ │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘ │
-│       │              │              │       │
-│  ┌────▼──────────────▼──────────────▼────┐ │
-│  │          Core Domain Layer             │ │
-│  │  (Models, Traits, Error Handling)      │ │
-│  └────┬─────────────────────────────┬────┘ │
-│       │                             │       │
-│  ┌────▼─────┐              ┌───────▼─────┐ │
-│  │  Redis   │              │   Qdrant    │ │
-│  │  (State) │              │  (Vectors)  │ │
-│  └──────────┘              └─────────────┘ │
-└────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                    Mnemo Server                       │
+│                                                      │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
+│  │  REST API │  │ Ingest   │  │ Retrieval│           │
+│  │  (Axum)  │  │ Worker   │  │ Engine   │           │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘           │
+│       │              │              │                 │
+│  ┌────▼──────────────▼──────────────▼──────────────┐ │
+│  │            Core Domain Layer                     │ │
+│  │  (Models, Traits, Error Handling)                │ │
+│  └────┬──────────────┬──────────────┬──────────────┘ │
+│       │              │              │                 │
+│  ┌────▼─────┐  ┌─────▼─────┐  ┌────▼──────┐         │
+│  │  Redis   │  │  Qdrant   │  │  GNN      │         │
+│  │  (State) │  │ (Vectors) │  │ (Rerank)  │         │
+│  └──────────┘  └───────────┘  └───────────┘         │
+│                                                      │
+│  ┌────────────┐                                      │
+│  │  MCP Server│  (stdio / SSE transport)             │
+│  └────────────┘                                      │
+└──────────────────────────────────────────────────────┘
 ```
 
-Mnemo is a single Rust binary. It connects to two external services: Redis for structured state and Qdrant for vector embeddings. There is no Neo4j, no JVM, no garbage collector.
+### Workspace Crates (v0.5.5)
+
+| Crate | Purpose |
+|-------|---------|
+| `mnemo-core` | Domain models (14 modules), storage/LLM traits, error types |
+| `mnemo-server` | Axum HTTP server, routes, AppState, dashboard SPA |
+| `mnemo-storage` | Redis state store + Qdrant vector store implementations |
+| `mnemo-graph` | Graph traversal, community detection, shortest path |
+| `mnemo-ingest` | Background episode processing worker with sleep-time compute |
+| `mnemo-retrieval` | Hybrid retrieval pipeline (semantic + graph + temporal) |
+| `mnemo-llm` | LLM provider abstraction (Anthropic, OpenAI, Ollama, Liquid, local embeddings) |
+| `mnemo-gnn` | GNN-enhanced retrieval re-ranking (GAT/GCN/GraphSAGE) |
+| `mnemo-mcp` | Model Context Protocol server (stdio + SSE transport) |
+
+Mnemo compiles to a single Rust binary (plus the `mnemo-mcp-server` binary for MCP transport). It connects to two external services: Redis for structured state and Qdrant for vector embeddings. There is no Neo4j, no JVM, no garbage collector.
 
 ---
 
@@ -209,7 +228,7 @@ If extraction fails (LLM timeout, parse error, etc.), the episode is marked `fai
 
 ## Retrieval Strategy
 
-When your agent calls `POST /api/v1/memory/:user/context` (or the lower-level `POST /api/v1/users/:id/context`), Mnemo runs a seven-step hybrid retrieval pipeline:
+When your agent calls `POST /api/v1/memory/:user/context` (or the lower-level `POST /api/v1/users/:id/context`), Mnemo runs a multi-step hybrid retrieval pipeline. The pipeline now supports goal-conditioned retrieval, semantic routing, GNN re-ranking, and narrative context (v0.5.5):
 
 ### 1. Query Embedding
 
@@ -236,26 +255,65 @@ For the top 3 matched entities, Mnemo traverses their outgoing edges to find con
 
 If `temporal_filter` is set, edges are filtered by validity at that point in time using the bi-temporal `valid_at` / `invalid_at` fields. Otherwise, only currently valid edges are included.
 
-### 6. Reranking (RRF or MMR)
+### 6. Semantic Routing (v0.5.0)
 
-Results from the parallel searches are merged and reranked using one of two strategies, configured via `reranker` in `config/default.toml` (or `[retrieval]` section):
+When `MNEMO_SEMANTIC_ROUTING_ENABLED=true`, an automatic classifier routes the query to the optimal retrieval strategy based on query semantics:
+
+- **head mode** — "What did we discuss yesterday?" (recency-focused)
+- **graph-focused** — "What are Alice's core beliefs?" (entity-centric)
+- **hybrid** — default fallback
+
+The routing decision is returned in the response as `routing_decision: { selected_mode, confidence, alternatives }`.
+
+### 7. Reranking (RRF, MMR, or GNN)
+
+Results from the parallel searches are merged and reranked using one of three strategies:
 
 - **`rrf` (Reciprocal Rank Fusion)** — Default. Boosts candidates that appear in multiple ranked lists (entity + edge + episode). Effective for most workloads where relevance diversity is less important than consensus.
 - **`mmr` (Maximal Marginal Relevance)** — Penalises near-duplicate results. Useful when queries tend to surface many semantically similar facts that would otherwise crowd the context window.
+- **`gnn` (Graph Neural Network re-ranking, v0.5.0)** — When `MNEMO_GNN_ENABLED=true`, a lightweight GNN (`mnemo-gnn` crate) operates on the subgraph of candidate results. Multi-head attention learns which graph neighbors matter most for a given query, improving over time via implicit feedback (`POST /api/v1/memory/feedback`). Target: <1ms additional latency.
 
-### 7. Context Assembly
+### 8. Goal-Conditioned Filtering (v0.5.5)
 
-Reranked results are assembled into a token-budgeted string with three sections:
+When the request includes a `goal` parameter (e.g. `goal=resolve_ticket`), Mnemo looks up the matching `GoalProfile` and applies goal-specific retrieval weights: entity type preferences, label boosts, recency bias, and max fact limits. The `goal_applied` flag in the response confirms the goal was active.
+
+### 9. Context Assembly
+
+Reranked results are assembled into a token-budgeted string with up to five sections:
 
 1. **Known entities** — Name, type, and summary
-2. **Current facts** — Natural language descriptions of relationships
+2. **Current facts** — Natural language descriptions of relationships (with confidence scores from v0.5.5 decay model)
 3. **Relevant conversation history** — Episode previews with timestamps
+4. **Narrative summary** (v0.5.5) — Cross-session "story of the user" when `include_narrative=true`
+5. **Stale facts needing revalidation** (v0.5.5) — Facts below confidence threshold flagged for attention
 
 Section headers are counted against the `max_tokens` budget. Empty sections are never included.
 
 ---
 
 ## Storage Architecture
+
+### Storage Traits
+
+The `StateStore` composite trait combines 11 sub-traits, all implemented by `RedisStateStore`:
+
+| Trait | Purpose |
+|-------|---------|
+| `UserStore` | User CRUD, external ID lookup |
+| `SessionStore` | Session lifecycle |
+| `EpisodeStore` | Episode CRUD, pending queue, batch create, claim/requeue |
+| `EntityStore` | Entity CRUD, name-based dedup |
+| `EdgeStore` | Edge CRUD, adjacency queries, conflict detection |
+| `AgentStore` | Agent identity, experience events, promotions, COW branching, forking |
+| `DigestStore` | Sleep-time memory digest persistence |
+| `SpanStore` | LLM call span persistence (7-day TTL) |
+| `ClarificationStore` | Self-healing memory clarification requests (v0.5.5) |
+| `NarrativeStore` | Cross-session narrative summaries (v0.5.5) |
+| `GoalStore` | Goal-conditioned retrieval profiles (v0.5.5) |
+
+Separate traits for vector storage:
+- `VectorStore` — Qdrant operations for entity/edge/episode embeddings, payload updates
+- `RawVectorStore` — Namespace-based vector storage for external integrations (e.g. AnythingLLM)
 
 ### Redis (State)
 
@@ -289,12 +347,25 @@ All structured data lives in Redis using a consistent key schema:
 | `mnemo:agent_identity_versions:{agent_id}` | Sorted Set | Agent identity version history |
 | `mnemo:agent_experiences:{agent_id}` | Sorted Set | Agent experience event log |
 | `mnemo:agent_promotions:{agent_id}` | Sorted Set | Promotion proposals per agent |
+| `mnemo:agent_branches:{agent_id}` | Sorted Set | COW identity branches (v0.5.0) |
+| `mnemo:digest:{user_id}` | JSON | Memory digest per user (v0.5.0) |
+| `mnemo:digests` | Sorted Set | All digests index |
+| `mnemo:span:{id}` | JSON + EXPIRE | LLM call span (7-day TTL) (v0.5.0) |
+| `mnemo:spans` | Sorted Set | Global span index |
+| `mnemo:spans_request:{request_id}` | Sorted Set | Spans by request correlation ID |
+| `mnemo:spans_user:{user_id}` | Sorted Set | Spans by user |
+| `mnemo:clarification:{id}` | JSON | Self-healing clarification request (v0.5.5) |
+| `mnemo:user_clarifications:{user_id}` | Sorted Set | User's clarifications |
+| `mnemo:narrative:{user_id}` | JSON | Cross-session narrative (v0.5.5) |
+| `mnemo:goal_profile:{id}` | JSON | Goal-conditioned retrieval profile (v0.5.5) |
+| `mnemo:user_goals:{user_id}` | Sorted Set | User's goal profiles |
+| `mnemo:global_goals` | Sorted Set | Global (shared) goal profiles |
 
 Sorted sets are scored by timestamp for time-ordered pagination. Adjacency lists are scored by `valid_at` for temporal ordering.
 
 ### Qdrant (Vectors)
 
-Three collections, each with `user_id` in the payload for tenant filtering:
+Three core collections, each with `user_id` in the payload for tenant filtering:
 
 | Collection | Content | Payload Fields |
 |---|---|---|
@@ -302,7 +373,9 @@ Three collections, each with `user_id` in the payload for tenant filtering:
 | `mnemo_edges` | Fact description embeddings | `user_id`, `label`, `fact` |
 | `mnemo_episodes` | Episode content embeddings | `user_id`, `session_id`, `processing_status`, `created_at` |
 
-All collections use cosine distance. Dimensions match the configured embedding model (default: 1536 for `text-embedding-3-small`).
+Additionally, `RawVectorStore` creates dynamically-named collections for external integrations (namespace-based, fully isolated from the above).
+
+All collections use cosine distance. Dimensions match the configured embedding model (default: 384 for `AllMiniLML6V2` local embeddings; 1536 for `text-embedding-3-small` via OpenAI).
 
 All payload fields used in filters have dedicated Qdrant payload indexes (created at startup via `CreateFieldIndexCollectionBuilder`). This ensures ANN searches with `user_id` filters are O(1) per-collection rather than full-collection scans.
 
@@ -352,10 +425,11 @@ Mnemo separates the **extraction LLM** (entity/relationship extraction from epis
 |------|---------|-----------------|
 | LLM provider | `MNEMO_LLM_PROVIDER` | `anthropic`, `openai`, `ollama`, `liquid` |
 | LLM API key | `MNEMO_LLM_API_KEY` | provider key |
-| LLM model | `MNEMO_LLM_MODEL` | e.g. `claude-haiku-4-5` |
-| Embedding base URL | `MNEMO_EMBEDDING_BASE_URL` | OpenAI-compatible endpoint |
-| Embedding model | `MNEMO_EMBEDDING_MODEL` | e.g. `nomic-embed-text`, `text-embedding-3-small` |
-| Embedding dimensions | `MNEMO_EMBEDDING_DIMENSIONS` | integer matching the model |
+| LLM model | `MNEMO_LLM_MODEL` | e.g. `claude-haiku-4-20250514` |
+| Embedding provider | `MNEMO_EMBEDDING_PROVIDER` | `local` (fastembed), `openai`, `ollama` |
+| Embedding base URL | `MNEMO_EMBEDDING_BASE_URL` | OpenAI-compatible endpoint (when not `local`) |
+| Embedding model | `MNEMO_EMBEDDING_MODEL` | e.g. `AllMiniLML6V2`, `nomic-embed-text`, `text-embedding-3-small` |
+| Embedding dimensions | `MNEMO_EMBEDDING_DIMENSIONS` | integer matching the model (384 for AllMiniLML6V2) |
 
 ### Inference Policy
 
@@ -363,7 +437,11 @@ Mnemo separates the **extraction LLM** (entity/relationship extraction from epis
 
 **Local / offline:** Use **Liquid AI LFM2-24B-A2B** exclusively via Ollama (`MNEMO_LLM_PROVIDER=ollama`, `MNEMO_LLM_MODEL=hf.co/LiquidAI/LFM2-24B-A2B-GGUF`). Do not use other local models for extraction — LFM2-24B is the only validated local model for this workload.
 
-**Embeddings:** Use `nomic-embed-text` via Ollama for local/offline. Set `MNEMO_EMBEDDING_DIMENSIONS=768`. For production with API access, `text-embedding-3-small` (1536 dims) via OpenAI is the default.
+**Embeddings (local, recommended):** Use `MNEMO_EMBEDDING_PROVIDER=local` with `MNEMO_EMBEDDING_MODEL=AllMiniLML6V2` and `MNEMO_EMBEDDING_DIMENSIONS=384`. This uses the built-in fastembed library — no external API needed, no API key, works offline. This is the production default.
+
+**Embeddings (Ollama):** Use `nomic-embed-text` via Ollama. Set `MNEMO_EMBEDDING_DIMENSIONS=768`.
+
+**Embeddings (OpenAI):** `text-embedding-3-small` (1536 dims) via OpenAI for highest quality when API access is available.
 
 ### Example: Local-only stack
 
@@ -419,3 +497,39 @@ A Helm chart is not yet published. The architecture is fully stateless (all stat
 - Redis: Use Redis Cluster for >100K users
 - Qdrant: Use Qdrant's distributed mode for >10M vectors
 - Ingestion throughput: Scales with replica count (atomic episode claiming)
+
+---
+
+## Version History
+
+### v0.4.0 — Agent Identity Substrate
+
+Added agent-level identity layer with versioned profiles, experience events with time-decay, promotion proposals with approval gating, witness chain audit logs, and webhook delivery system with circuit breaker and retry.
+
+### v0.5.0 — Self-Learning Memory Control Plane (13 features)
+
+| # | Feature | Crate |
+|---|---------|-------|
+| 1 | GNN-enhanced retrieval re-ranking | `mnemo-gnn` (new) |
+| 2 | SONA/EWC++ experience weight consolidation | `mnemo-core`, `mnemo-server` |
+| 3 | Temporal tensor compression | `mnemo-retrieval`, `mnemo-server` |
+| 4 | Coherence scoring + digest integration | `mnemo-retrieval`, `mnemo-core` |
+| 5 | MCP server (Model Context Protocol) | `mnemo-mcp` (new) |
+| 6 | Witness chain tamper-proof audit | `mnemo-core`, `mnemo-storage` |
+| 7 | Semantic routing for retrieval strategy | `mnemo-retrieval` |
+| 8 | Hyperbolic HNSW for entity hierarchy | `mnemo-retrieval` |
+| 9 | COW branching for agent identity A/B testing | `mnemo-core`, `mnemo-storage` |
+| 10 | DAG workflows for consolidation pipeline | `mnemo-ingest` |
+| 11 | Delta consensus (CRDT multi-node sync) | `mnemo-core` |
+| 12 | Domain expansion / transfer learning | `mnemo-core`, `mnemo-storage` |
+| 13 | Verified/proof-carrying identity updates | `mnemo-core` |
+
+### v0.5.5 — Autonomic Memory (5 features)
+
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | Confidence decay + revalidation | Facts decay over time via configurable curves; Fisher importance protects load-bearing facts; stale facts flagged for revalidation |
+| 2 | Self-healing memory | Auto-detect low-confidence conflicts, generate targeted clarification questions, reconcile graph state after answers |
+| 3 | Cross-session narrative summaries | Evolving "story of the user" with versioned chapters, accessible via API and context retrieval |
+| 4 | Goal-conditioned memory | Retrieval strategy conditioned by active objective (e.g. `resolve_ticket`, `plan_trip`); goal profiles with entity/label weights |
+| 5 | Counterfactual memory | Simulate retrieval under hypothetical fact changes; diff current vs. hypothetical context for planning agents |

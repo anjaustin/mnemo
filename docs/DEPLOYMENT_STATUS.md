@@ -1,5 +1,7 @@
 # Mnemo Deployment Status
 
+> **Note**: The live fleet below was validated at v0.4.0. The codebase is now at **v0.5.5** (tagged and released). The fleet has not been upgraded to v0.5.5 yet — a redeployment is needed to bring the live fleet current. New GHCR images should be built from v0.5.5 before revalidation.
+
 Current production-style deployment baseline for Phase 2 cloud falsification.
 
 ## Live Fleet
@@ -43,11 +45,15 @@ Each provider uses its own `MNEMO_QDRANT_PREFIX` to avoid vector-dimension or co
 
 The live fleet was originally validated on a temporary `ttl.sh` image. All deploy guides and IaC templates have been updated to reference the durable GHCR images:
 
-- `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0`
+- `ghcr.io/anjaustin/mnemo/mnemo-server:0.4.0` (fleet-validated)
 - `ghcr.io/anjaustin/mnemo/mnemo-server:0.4`
 - `ghcr.io/anjaustin/mnemo/mnemo-server:latest`
 
-The fleet status table above reflects the image used at original validation time. New deployments should use the GHCR images above.
+**Pending**: Build and publish v0.5.5 images:
+- `ghcr.io/anjaustin/mnemo/mnemo-server:0.5.5`
+- `ghcr.io/anjaustin/mnemo/mnemo-server:0.5`
+
+The fleet status table above reflects the image used at original validation time (v0.4.0). New deployments should use the latest GHCR images once v0.5.5 is published.
 
 ## Revalidation Commands
 

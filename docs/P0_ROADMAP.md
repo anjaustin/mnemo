@@ -1,16 +1,18 @@
 # Mnemo P0 Roadmap
 
+**Status: ALL 6 ITEMS COMPLETE** — shipped across v0.4.0 through v0.5.5. This document is retained as a historical record of the capability gaps and how they were addressed.
+
 Six capability gaps that determine whether Mnemo wins the memory control plane category or stays a technically impressive niche tool. Ordered by execution priority.
 
 ---
 
-## 1. Sleep-Time Compute
+## 1. Sleep-Time Compute ✅ COMPLETE
 
 ### What it is
 A background consolidation pass that runs when the system is not actively serving user requests — proactively summarizing, merging, and re-ranking memory without waiting for a query to trigger it. Letta is the only competitor with this. It is a meaningful differentiation claim.
 
-### Current state
-`mnemo-ingest` has a continuous background worker (`crates/mnemo-ingest/src/lib.rs`) that polls for pending episodes and summarizes them. This is demand-driven — it only processes what was explicitly enqueued. There is no idle-triggered or scheduled consolidation pass.
+### Shipped state
+Idle-triggered consolidation scheduler in `IngestWorker` with configurable idle window (`MNEMO_SLEEP_IDLE_WINDOW_SECONDS`, min 30s, default 300s). `DigestStore` trait with Redis persistence. Memory digests accessible via `GET /api/v1/memory/:user/digest` and `POST /api/v1/memory/:user/digest`. Proactive re-ranking writes relevance scores to Qdrant payloads during idle windows. Structured JSON digest output with topic extraction. 702+ tests passing.
 
 ### What needs to be built
 
@@ -45,13 +47,13 @@ A background consolidation pass that runs when the system is not actively servin
 
 ---
 
-## 2. Knowledge Graph (First-Class, Exposed)
+## 2. Knowledge Graph (First-Class, Exposed) ✅ COMPLETE
 
 ### What it is
 A traversable, queryable graph of entities and relationships extracted from memory — not just stored as embedding blobs. Zep and Weaviate have this. We have the plumbing but it is not wired to the public API or operator UX.
 
-### Current state
-`mnemo-graph` crate exists with graph traversal and community detection. `mnemo-storage` has full entity/edge CRUD in Redis with adjacency sets. `crates/mnemo-core/src/models/` has `Entity` and `Edge` types. None of this is exposed via public API routes or visible in the operator dashboard.
+### Shipped state
+7 graph API endpoints: list entities (with type/name filter), get entity detail, list edges (with source/target filter), 1-hop neighbors, shortest path (BFS with max_depth), community detection. Graph drilldown in operator dashboard with D3 force layout. Batch edge loading for community detection. 12+ integration tests. Full SDK coverage in both Python and TypeScript.
 
 ### What needs to be built
 
@@ -93,15 +95,13 @@ A traversable, queryable graph of entities and relationships extracted from memo
 
 ---
 
-## 3. LLM Call Tracing (Span-Level)
+## 3. LLM Call Tracing (Span-Level) ✅ COMPLETE
 
 ### What it is
 Capturing the full LLM call span for every extraction, summarization, and context-assembly call: prompt in, completion out, model, token counts (prompt + completion), latency ms, and error if any. We have request IDs and token estimates but not call-level spans. LangSmith wins this category today.
 
-### Current state
-- `x-mnemo-request-id` is propagated through routes and stored on audit rows and episodes.
-- Token counts are estimated post-hoc via `estimate_tokens()` — not from actual API responses.
-- No span capture for individual LLM calls. No prompt or completion logging.
+### Shipped state
+`LlmSpan` model in `mnemo-core`. `SpanStore` trait with Redis persistence (7-day TTL). 4 instrumented call sites in ingest worker (extract, embed_episode, session_summarize, digest). Real token counts from API responses via `TokenUsage` struct and `extract_with_usage()`/`summarize_with_usage()` on `LlmProvider` trait. Span APIs: `GET /api/v1/spans/:request_id`, `GET /api/v1/spans/user/:user_id`. Dashboard integration with user lookup. 8+ integration tests.
 
 ### What needs to be built
 
@@ -143,13 +143,15 @@ Capturing the full LLM call span for every extraction, summarization, and contex
 
 ---
 
-## 4. SOC 2 Compliance Posture
+## 4. SOC 2 Compliance Posture ✅ COMPLETE (infrastructure)
 
 ### What it is
 SOC 2 Type II certification covering Security, Availability, and Confidentiality. This is the enterprise procurement gate. Mem0, Zep, Pinecone, Weaviate, and LangSmith all have it. We do not.
 
-### Current state
-We have more compliance infrastructure than we are giving ourselves credit for:
+### Shipped state
+Audit export (`GET /api/v1/audit/export`) with SIEM-ready output. Governance audit rows with per-action timestamps. Webhook delivery audit with signed payloads and replay. Per-user memory policies with retention write guards. Witness chain tamper-proof audit with SHA256 hash chain and `verify` endpoint (v0.5.0). `x-mnemo-request-id` traceability. Formal SOC 2 auditor engagement is the remaining step (operational, not code).
+
+### Previous state (retained for context):
 - `GET /api/v1/audit/export` — unified governance + webhook audit log with SIEM-ready output, explicitly designed for auditors (`docs/API.md:68`).
 - Governance audit rows with per-action timestamps, user IDs, request IDs, and change details.
 - Webhook delivery audit with signed payloads and replay capability.
@@ -203,13 +205,13 @@ What is missing is the posture documentation, controls mapping, and the operatio
 
 ---
 
-## 5. One-Line Install
+## 5. One-Line Install ✅ COMPLETE
 
 ### What it is
 A developer should be able to go from zero to a running Mnemo instance in under two minutes, with a single command. Every competitor has this. We do not. This is the first impression gate for developer adoption.
 
-### Current state
-Getting Mnemo running requires: clone the repo, install Rust, install Redis Stack, install Qdrant, configure environment variables, and `cargo run`. That is six steps with three external dependencies before you can call the API.
+### Shipped state
+`docker compose up` brings up Mnemo + Redis Stack + Qdrant with local embeddings (no API key needed). Published GHCR images at `ghcr.io/anjaustin/mnemo/mnemo-server:{version}`. Deployed and validated across 8 cloud providers (Render, Northflank, Railway, DigitalOcean, Vultr, AWS, GCP, Linode). Quickstart smoke test scripts in `tests/`.
 
 ### What needs to be built
 
@@ -249,16 +251,13 @@ Getting Mnemo running requires: clone the repo, install Rust, install Redis Stac
 
 ---
 
-## 6. SDKs (Python + TypeScript)
+## 6. SDKs (Python + TypeScript) ✅ COMPLETE
 
 ### What it is
 Published, installable, documented SDKs that let developers integrate Mnemo in one line. Every competitor has this. We have a Python SDK in `sdk/python/` but it is not published to PyPI. We have no TypeScript SDK.
 
-### Current state
-- `sdk/python/mnemo/` exists with sync client, async client, LangChain extension, LlamaIndex extension, and tests.
-- Package name: `mnemo-client`, version `0.4.0`.
-- Not published to PyPI. No `pip install mnemo-client` works today.
-- No TypeScript/JavaScript SDK exists anywhere in the repo.
+### Shipped state
+Python SDK (`sdk/python/`) with sync client, async client, LangChain extension, LlamaIndex adapter (36 tests, BaseChatStore compatible), and full endpoint coverage including graph, spans, webhooks, governance, and audit APIs. TypeScript SDK (`sdk/typescript/`) with 20+ typed methods, zero runtime dependencies (native fetch). Both SDKs falsified against real API responses with all field name mismatches fixed. PyPI publish workflow ready; npm publish workflow ready. `npm`/`node` not available on dev machine — TS SDK CI-validated.
 
 ### What needs to be built
 
@@ -318,20 +317,20 @@ Published, installable, documented SDKs that let developers integrate Mnemo in o
 | 5 | One-line install | Critical — developer adoption gate | Low-Medium | Moderate (deploy/, package-ghcr.yml) |
 | 6 | SDKs (Python + TypeScript) | Critical — ecosystem gate | Medium | Strong for Python, zero for TypeScript |
 
-## Feature Table Impact
+## Feature Table (Final State)
 
-After all six are shipped, the feature table changes:
+All six P0 items shipped. Current feature table:
 
-| Feature | Before | After |
-|---|---|---|
-| Sleep-time / offline compute | `❌` | `✅` |
-| Knowledge graph / entity relations | `⚠️` | `✅` |
-| LLM call tracing / span visibility | `⚠️` | `✅` |
-| SOC 2 / HIPAA compliance | `❌` | `✅` (SOC 2) / `⚠️` (HIPAA) |
-| One-line / quick install | `❌` | `✅` |
-| Python SDK | `❌` | `✅` |
-| JS/TS SDK | `❌` | `✅` |
-| LlamaIndex adapter | `❌` | `✅` (BaseChatStore, server-side keys, 36 tests) |
-| Retrieval benchmarks published | `❌` | `⚠️` (partial, from graph/span data) |
+| Feature | Status |
+|---|---|
+| Sleep-time / offline compute | `✅` |
+| Knowledge graph / entity relations | `✅` |
+| LLM call tracing / span visibility | `✅` |
+| SOC 2 compliance infrastructure | `✅` (auditor engagement pending) |
+| One-line / quick install | `✅` |
+| Python SDK | `✅` |
+| JS/TS SDK | `✅` |
+| LlamaIndex adapter | `✅` (BaseChatStore, server-side keys, 36 tests) |
+| Retrieval benchmarks published | `⚠️` (partial, from graph/span data) |
 
-Completing this roadmap closes the five most critical `❌` gaps and flips three `⚠️` entries to `✅`. The remaining moat gaps after that are HIPAA certification and benchmark publications — both achievable in a follow-on sprint.
+The remaining moat gaps are HIPAA certification and benchmark publications — both achievable in a follow-on sprint.

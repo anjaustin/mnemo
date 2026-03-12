@@ -1,6 +1,6 @@
 # Mnemo 0.5.0 Roadmap — Self-Learning Memory Control Plane
 
-**Status**: In Progress
+**Status**: SHIPPED (tagged v0.5.0 at `76a8507`)
 **Baseline**: v0.4.0 (Agent Identity Substrate complete)
 **Inspiration**: Architecture patterns from [RuVector](https://github.com/anjaustin/ruvector) — self-learning vector database with GNN re-ranking, SONA optimization, and graph intelligence.
 

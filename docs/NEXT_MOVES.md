@@ -1,5 +1,7 @@
 # Next Moves
 
+> **Scope**: This document covers v0.4.0-era work items from the P0 falsification audit. All items listed below have been completed as part of v0.4.0 through v0.5.0 development. For v0.5.5 features (confidence decay, self-healing memory, narratives, goal-conditioned memory, counterfactual memory), see `docs/MNEMO_0.5.5.md`.
+
 Post-P0 work items surfaced by the falsification audit (`docs/P0_VALIDATION.md`),
 CI observations, and natural follow-ons. Ordered by priority within each tier.
 
