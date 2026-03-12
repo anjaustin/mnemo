@@ -1883,3 +1883,156 @@ impl NarrativeStore for RedisStateStore {
         self.del(&key).await
     }
 }
+
+// ─── GoalStore ────────────────────────────────────────────────────
+
+use mnemo_core::models::goal::GoalProfile;
+
+impl GoalStore for RedisStateStore {
+    async fn save_goal_profile(&self, profile: &GoalProfile) -> Result<(), MnemoError> {
+        let key = self.key(&["goal", &profile.id.to_string()]);
+        self.set_json(&key, profile).await?;
+
+        // Index by user_id (or "global" for system-wide profiles)
+        let owner = profile
+            .user_id
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| "global".to_string());
+        let zset_key = self.key(&["user_goals", &owner]);
+        let score = profile.created_at.timestamp_millis() as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&zset_key)
+            .arg(score)
+            .arg(profile.id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Also index by name for fast lookup
+        let name_key = self.key(&["goal_name", &owner, &profile.name]);
+        let mut conn = self.conn.clone();
+        conn.set::<_, _, ()>(&name_key, profile.id.to_string())
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_goal_profile(&self, id: Uuid) -> Result<Option<GoalProfile>, MnemoError> {
+        let key = self.key(&["goal", &id.to_string()]);
+        self.get_json::<GoalProfile>(&key).await
+    }
+
+    async fn get_goal_profile_by_name(
+        &self,
+        user_id: Uuid,
+        name: &str,
+    ) -> Result<Option<GoalProfile>, MnemoError> {
+        // Check user-specific first
+        let user_name_key = self.key(&["goal_name", &user_id.to_string(), name]);
+        let mut conn = self.conn.clone();
+        let user_id_result: Option<String> = conn
+            .get(&user_name_key)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        if let Some(id_str) = user_id_result {
+            if let Ok(id) = Uuid::parse_str(&id_str) {
+                if let Some(profile) = self.get_goal_profile(id).await? {
+                    return Ok(Some(profile));
+                }
+            }
+        }
+
+        // Fallback to global
+        let global_name_key = self.key(&["goal_name", "global", name]);
+        let mut conn = self.conn.clone();
+        let global_id_result: Option<String> = conn
+            .get(&global_name_key)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        if let Some(id_str) = global_id_result {
+            if let Ok(id) = Uuid::parse_str(&id_str) {
+                return self.get_goal_profile(id).await;
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn list_goal_profiles(
+        &self,
+        user_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<GoalProfile>, MnemoError> {
+        let clamped = limit.min(500) as isize;
+        let mut results = Vec::new();
+
+        // Fetch user-specific goals
+        let user_zset = self.key(&["user_goals", &user_id.to_string()]);
+        let mut conn = self.conn.clone();
+        let user_ids: Vec<String> = redis::cmd("ZREVRANGE")
+            .arg(&user_zset)
+            .arg(0)
+            .arg(clamped - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        for id_str in &user_ids {
+            let key = self.key(&["goal", id_str]);
+            if let Some(profile) = self.get_json::<GoalProfile>(&key).await? {
+                results.push(profile);
+            }
+        }
+
+        // Also fetch global goals
+        let global_zset = self.key(&["user_goals", "global"]);
+        let mut conn = self.conn.clone();
+        let global_ids: Vec<String> = redis::cmd("ZREVRANGE")
+            .arg(&global_zset)
+            .arg(0)
+            .arg(clamped - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        for id_str in &global_ids {
+            let key = self.key(&["goal", id_str]);
+            if let Some(profile) = self.get_json::<GoalProfile>(&key).await? {
+                results.push(profile);
+            }
+        }
+
+        results.truncate(limit);
+        Ok(results)
+    }
+
+    async fn delete_goal_profile(&self, id: Uuid) -> Result<(), MnemoError> {
+        let key = self.key(&["goal", &id.to_string()]);
+
+        if let Some(profile) = self.get_json::<GoalProfile>(&key).await? {
+            // Clean up indexes
+            let owner = profile
+                .user_id
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| "global".to_string());
+
+            let zset_key = self.key(&["user_goals", &owner]);
+            let mut conn = self.conn.clone();
+            redis::cmd("ZREM")
+                .arg(&zset_key)
+                .arg(id.to_string())
+                .query_async::<()>(&mut conn)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+            let name_key = self.key(&["goal_name", &owner, &profile.name]);
+            self.del(&name_key).await?;
+        }
+
+        self.del(&key).await
+    }
+}

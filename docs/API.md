@@ -830,6 +830,65 @@ the response as a `narrative` field alongside the context block.
 
 **Webhook event**: `narrative_refreshed` is emitted when a narrative is generated.
 
+### `GET /api/v1/memory/:user/goals`
+
+List goal profiles for a user. Returns both user-specific and global (system-wide)
+profiles. Goal profiles define how retrieval weights should be adjusted when
+the agent is pursuing a specific objective.
+
+| Query Param | Default | Description |
+|-------------|---------|-------------|
+| `limit` | `50` | Maximum number of profiles to return (max 200) |
+
+### `POST /api/v1/memory/:user/goals`
+
+Create a new goal profile for a user. Goal names must be unique per user.
+
+```json
+// Request
+{
+  "name": "resolve_ticket",
+  "description": "Focus on support issues and recent complaints",
+  "entity_category_boosts": {"complaint": 2.0, "preference": 0.5},
+  "edge_label_boosts": {"filed_by": 1.5, "resolved_by": 1.8},
+  "temporal_bias": 0.7,
+  "recency_window_days": 30,
+  "boost_keywords": ["urgent", "escalated"],
+  "suppress_keywords": ["spam", "test"]
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `name` | required | Unique goal name |
+| `description` | `""` | Human-readable description |
+| `entity_category_boosts` | `{}` | Category-to-multiplier map (>1.0 = boost, <1.0 = suppress) |
+| `edge_label_boosts` | `{}` | Edge label-to-multiplier map |
+| `temporal_bias` | `0.0` | -1.0 (historical) to 1.0 (recent). Clamped. |
+| `recency_window_days` | `0` | Facts older than this may get suppressed |
+| `boost_keywords` | `[]` | Keywords that boost matching facts (case-insensitive) |
+| `suppress_keywords` | `[]` | Keywords that suppress matching facts |
+
+Returns `201 Created` with the goal profile.
+
+### `GET /api/v1/memory/:user/goals/:id`
+
+Get a specific goal profile by ID.
+
+### `PUT /api/v1/memory/:user/goals/:id`
+
+Update an existing goal profile. All fields are optional — only provided
+fields are updated. The `temporal_bias` is clamped to [-1.0, 1.0].
+
+### `DELETE /api/v1/memory/:user/goals/:id`
+
+Delete a goal profile. Returns `204 No Content`.
+
+**Context integration**: The `POST /api/v1/memory/:user/context` endpoint accepts
+an optional `goal` field (string). When set, Mnemo looks up the matching goal
+profile and re-scores context facts using the profile's relevance adjustments.
+The response includes a `goal_applied` field indicating which goal was used.
+
 ### `POST /api/v1/memory/:user/causal_recall`
 
 Explain why memory was retrieved by returning fact-to-episode lineage chains.

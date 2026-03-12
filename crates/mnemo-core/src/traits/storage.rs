@@ -424,6 +424,7 @@ pub trait SpanStore: Send + Sync {
 }
 
 use crate::models::clarification::ClarificationRequest;
+use crate::models::goal::GoalProfile;
 use crate::models::narrative::UserNarrative;
 
 /// Persistence for self-healing memory clarification requests.
@@ -466,6 +467,36 @@ pub trait NarrativeStore: Send + Sync {
     async fn delete_narrative(&self, user_id: Uuid) -> StorageResult<()>;
 }
 
+// ─── Goal Storage ──────────────────────────────────────────────────
+
+/// Persistence for goal-conditioned retrieval profiles.
+#[allow(async_fn_in_trait)]
+pub trait GoalStore: Send + Sync {
+    /// Save a new or updated goal profile.
+    async fn save_goal_profile(&self, profile: &GoalProfile) -> StorageResult<()>;
+
+    /// Get a goal profile by ID.
+    async fn get_goal_profile(&self, id: Uuid) -> StorageResult<Option<GoalProfile>>;
+
+    /// Get a goal profile by name within a user's scope.
+    /// Checks user-specific goals first, then global (user_id=None) goals.
+    async fn get_goal_profile_by_name(
+        &self,
+        user_id: Uuid,
+        name: &str,
+    ) -> StorageResult<Option<GoalProfile>>;
+
+    /// List goal profiles for a user (includes both user-specific and global profiles).
+    async fn list_goal_profiles(
+        &self,
+        user_id: Uuid,
+        limit: usize,
+    ) -> StorageResult<Vec<GoalProfile>>;
+
+    /// Delete a goal profile.
+    async fn delete_goal_profile(&self, id: Uuid) -> StorageResult<()>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -481,6 +512,7 @@ pub trait StateStore:
     + SpanStore
     + ClarificationStore
     + NarrativeStore
+    + GoalStore
 {
 }
 
@@ -496,6 +528,7 @@ impl<T> StateStore for T where
         + SpanStore
         + ClarificationStore
         + NarrativeStore
+        + GoalStore
 {
 }
 

@@ -36,8 +36,8 @@ use mnemo_core::models::{
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::storage::{
-    AgentStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, NarrativeStore,
-    RawVectorStore, SessionStore, SpanStore, UserStore, VectorStore,
+    AgentStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
+    NarrativeStore, RawVectorStore, SessionStore, SpanStore, UserStore, VectorStore,
 };
 
 use mnemo_retrieval::Reranker;
@@ -1126,6 +1126,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/memory/:user/clarifications/:id/dismiss",
             post(dismiss_clarification),
+        )
+        // Goal-conditioned retrieval
+        .route(
+            "/api/v1/memory/:user/goals",
+            get(list_goal_profiles).post(create_goal_profile),
+        )
+        .route(
+            "/api/v1/memory/:user/goals/:id",
+            get(get_goal_profile).put(update_goal_profile).delete(delete_goal_profile),
         )
         // Narrative summaries
         .route(
@@ -3758,6 +3767,10 @@ struct MemoryContextRequest {
     /// If true, prepend the user's narrative summary as a preamble block in the context.
     #[serde(default)]
     include_narrative: bool,
+    /// Optional retrieval goal — conditions retrieval weights based on the agent's
+    /// current objective (e.g., "resolve_ticket", "plan_trip").
+    #[serde(default)]
+    goal: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -3836,6 +3849,9 @@ struct MemoryContextResponse {
     /// The user's narrative summary, included when `include_narrative: true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     narrative: Option<mnemo_core::models::narrative::UserNarrative>,
+    /// The goal profile applied (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    goal_applied: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -4229,6 +4245,8 @@ async fn get_memory_context(
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
     let include_narrative = req.include_narrative;
+    let goal_name = req.goal.clone();
+    // goal_name is used below after context assembly to adjust relevance
 
     let user_identifier = user.trim().to_string();
     let user = find_user_by_identifier(&state, user_identifier.as_str()).await?;
@@ -4456,8 +4474,38 @@ async fn get_memory_context(
     });
 
     // Optionally include the user's narrative summary
+    // Optionally include the user's narrative summary
     let narrative = if include_narrative {
         state.state_store.get_narrative(user.id).await.ok().flatten()
+    } else {
+        None
+    };
+
+    // Goal-conditioned retrieval: if a goal is specified, look up its profile
+    // and re-score the context facts using the goal's relevance adjustments.
+    let goal_applied = if let Some(ref gn) = goal_name {
+        if let Ok(Some(profile)) = state
+            .state_store
+            .get_goal_profile_by_name(user.id, gn)
+            .await
+        {
+            // Re-score facts by applying goal profile adjustments
+            for fact in &mut context.facts {
+                let adjustment = profile.compute_relevance_adjustment(
+                    None,                   // category not on FactSummary
+                    Some(fact.label.as_str()),
+                    &fact.fact,
+                );
+                fact.relevance *= adjustment;
+            }
+            // Re-sort facts by adjusted relevance (descending)
+            context
+                .facts
+                .sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+            Some(profile.name.clone())
+        } else {
+            Some(gn.clone()) // goal specified but no profile found — pass through
+        }
     } else {
         None
     };
@@ -4476,6 +4524,7 @@ async fn get_memory_context(
         head,
         metadata_filter_diagnostics,
         narrative,
+        goal_applied,
     }))
 }
 
@@ -9585,6 +9634,133 @@ async fn dismiss_clarification(
     state.state_store.save_clarification(&clarification).await?;
 
     Ok(Json(clarification))
+}
+
+// ─── Goal-Conditioned Retrieval ───────────────────────────────────
+
+/// `GET /api/v1/memory/:user/goals`
+///
+/// List goal profiles for a user (includes both user-specific and global profiles).
+async fn list_goal_profiles(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Query(params): Query<GoalListParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let limit = params.limit.unwrap_or(50).min(200) as usize;
+
+    let profiles = state
+        .state_store
+        .list_goal_profiles(user.id, limit)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "user_id": user.id,
+        "count": profiles.len(),
+        "goals": profiles,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct GoalListParams {
+    limit: Option<u32>,
+}
+
+/// `POST /api/v1/memory/:user/goals`
+///
+/// Create a new goal profile for a user.
+async fn create_goal_profile(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<mnemo_core::models::goal::CreateGoalProfileRequest>,
+) -> Result<(StatusCode, Json<mnemo_core::models::goal::GoalProfile>), AppError> {
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    if req.name.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "goal name is required".into(),
+        )));
+    }
+
+    // Check for duplicate name
+    if state
+        .state_store
+        .get_goal_profile_by_name(user.id, &req.name)
+        .await?
+        .is_some()
+    {
+        return Err(AppError(MnemoError::Validation(format!(
+            "goal profile '{}' already exists",
+            req.name
+        ))));
+    }
+
+    let mut profile = mnemo_core::models::goal::GoalProfile::new(req.name, Some(user.id));
+    profile.description = req.description;
+    profile.entity_category_boosts = req.entity_category_boosts;
+    profile.edge_label_boosts = req.edge_label_boosts;
+    profile.temporal_bias = req.temporal_bias;
+    profile.recency_window_days = req.recency_window_days;
+    profile.boost_keywords = req.boost_keywords;
+    profile.suppress_keywords = req.suppress_keywords;
+    profile.clamp_temporal_bias();
+
+    state.state_store.save_goal_profile(&profile).await?;
+
+    Ok((StatusCode::CREATED, Json(profile)))
+}
+
+/// `GET /api/v1/memory/:user/goals/:id`
+///
+/// Get a specific goal profile by ID.
+async fn get_goal_profile(
+    State(state): State<AppState>,
+    Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
+) -> Result<Json<mnemo_core::models::goal::GoalProfile>, AppError> {
+    let profile = state
+        .state_store
+        .get_goal_profile(goal_id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "goal_profile".into(),
+            id: goal_id.to_string(),
+        })?;
+
+    Ok(Json(profile))
+}
+
+/// `PUT /api/v1/memory/:user/goals/:id`
+///
+/// Update an existing goal profile.
+async fn update_goal_profile(
+    State(state): State<AppState>,
+    Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
+    Json(req): Json<mnemo_core::models::goal::UpdateGoalProfileRequest>,
+) -> Result<Json<mnemo_core::models::goal::GoalProfile>, AppError> {
+    let profile = state
+        .state_store
+        .get_goal_profile(goal_id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "goal_profile".into(),
+            id: goal_id.to_string(),
+        })?;
+
+    let updated = profile.apply_update(req);
+    state.state_store.save_goal_profile(&updated).await?;
+
+    Ok(Json(updated))
+}
+
+/// `DELETE /api/v1/memory/:user/goals/:id`
+///
+/// Delete a goal profile.
+async fn delete_goal_profile(
+    State(state): State<AppState>,
+    Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
+) -> Result<StatusCode, AppError> {
+    state.state_store.delete_goal_profile(goal_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─── Narrative Summaries ──────────────────────────────────────────

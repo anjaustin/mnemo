@@ -5,6 +5,7 @@ pub mod digest;
 pub mod edge;
 pub mod entity;
 pub mod episode;
+pub mod goal;
 pub mod narrative;
 pub mod session;
 pub mod span;
