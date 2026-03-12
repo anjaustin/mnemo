@@ -13,4 +13,5 @@ pub mod narrative;
 pub mod session;
 pub mod span;
 pub mod user;
+pub mod view;
 pub mod webhook_event;

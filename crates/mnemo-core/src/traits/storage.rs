@@ -10,6 +10,7 @@ use crate::models::{
     },
     api_key::ApiKey,
     digest::MemoryDigest,
+    view::MemoryView,
     edge::{Edge, EdgeFilter},
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams},
@@ -525,6 +526,26 @@ pub trait ApiKeyStore: Send + Sync {
     async fn delete_api_key(&self, id: Uuid) -> StorageResult<()>;
 }
 
+// ─── Memory View Storage ───────────────────────────────────────────
+
+#[allow(async_fn_in_trait)]
+pub trait ViewStore: Send + Sync {
+    /// Save a new memory view definition.
+    async fn save_view(&self, view: &MemoryView) -> StorageResult<()>;
+
+    /// Get a view by name.
+    async fn get_view(&self, name: &str) -> StorageResult<Option<MemoryView>>;
+
+    /// List all views, ordered by name.
+    async fn list_views(&self) -> StorageResult<Vec<MemoryView>>;
+
+    /// Update a view definition.
+    async fn update_view(&self, view: &MemoryView) -> StorageResult<()>;
+
+    /// Delete a view by name.
+    async fn delete_view(&self, name: &str) -> StorageResult<()>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -542,6 +563,7 @@ pub trait StateStore:
     + NarrativeStore
     + GoalStore
     + ApiKeyStore
+    + ViewStore
 {
 }
 
@@ -559,6 +581,7 @@ impl<T> StateStore for T where
         + NarrativeStore
         + GoalStore
         + ApiKeyStore
+        + ViewStore
 {
 }
 

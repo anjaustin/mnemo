@@ -58,6 +58,9 @@ pub struct EntitySummary {
     pub id: Uuid,
     pub name: String,
     pub entity_type: String,
+    /// Classification level of this entity (for view-scoped filtering).
+    #[serde(default)]
+    pub classification: super::classification::Classification,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// Relevance score from retrieval (0.0–1.0).
@@ -72,6 +75,9 @@ pub struct FactSummary {
     pub target_entity: String,
     pub label: String,
     pub fact: String,
+    /// Classification level of this fact/edge (for view-scoped filtering).
+    #[serde(default)]
+    pub classification: super::classification::Classification,
     pub valid_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invalid_at: Option<DateTime<Utc>>,
@@ -403,6 +409,7 @@ mod tests {
             id: Uuid::now_v7(),
             name: "Kendra".to_string(),
             entity_type: "person".to_string(),
+            classification: Default::default(),
             summary: Some("A customer who likes athletic shoes".to_string()),
             relevance: 0.95,
         });
@@ -412,6 +419,7 @@ mod tests {
             target_entity: "Nike shoes".to_string(),
             label: "prefers".to_string(),
             fact: "Kendra now prefers Nike shoes after switching from Adidas".to_string(),
+            classification: Default::default(),
             valid_at: Utc::now(),
             invalid_at: None,
             relevance: 0.92,
@@ -436,6 +444,7 @@ mod tests {
                 target_entity: format!("Target{}", i),
                 label: "related_to".to_string(),
                 fact: format!("Entity{} has a very long and detailed relationship with Target{} that includes many specific details about their interaction history", i, i),
+                classification: Default::default(),
                 valid_at: Utc::now(),
                 invalid_at: None,
                 relevance: 0.5,

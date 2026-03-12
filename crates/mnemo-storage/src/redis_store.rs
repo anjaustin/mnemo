@@ -2144,3 +2144,71 @@ impl ApiKeyStore for RedisStateStore {
         self.del(&pk).await
     }
 }
+
+// ─── ViewStore ─────────────────────────────────────────────────────
+
+use mnemo_core::models::view::MemoryView;
+use mnemo_core::traits::storage::ViewStore;
+
+impl ViewStore for RedisStateStore {
+    async fn save_view(&self, view: &MemoryView) -> StorageResult<()> {
+        let pk = self.key(&["memory_view", &view.name]);
+        self.set_json(&pk, view).await?;
+
+        // Sorted set for listing (score = created_at millis)
+        let idx = self.key(&["memory_views"]);
+        let score = view.created_at.timestamp_millis() as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&idx)
+            .arg(score)
+            .arg(&pk)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn get_view(&self, name: &str) -> StorageResult<Option<MemoryView>> {
+        let pk = self.key(&["memory_view", name]);
+        self.get_json::<MemoryView>(&pk).await
+    }
+
+    async fn list_views(&self) -> StorageResult<Vec<MemoryView>> {
+        let idx = self.key(&["memory_views"]);
+        let mut conn = self.conn.clone();
+        let keys: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(&idx)
+            .arg("-inf")
+            .arg("+inf")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut views = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(v) = self.get_json::<MemoryView>(&key).await? {
+                views.push(v);
+            }
+        }
+        Ok(views)
+    }
+
+    async fn update_view(&self, view: &MemoryView) -> StorageResult<()> {
+        let pk = self.key(&["memory_view", &view.name]);
+        self.set_json(&pk, view).await
+    }
+
+    async fn delete_view(&self, name: &str) -> StorageResult<()> {
+        let pk = self.key(&["memory_view", name]);
+        let idx = self.key(&["memory_views"]);
+        let mut conn = self.conn.clone();
+        redis::cmd("ZREM")
+            .arg(&idx)
+            .arg(&pk)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        self.del(&pk).await
+    }
+}

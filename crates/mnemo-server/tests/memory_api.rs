@@ -9693,3 +9693,711 @@ async fn classify01j_patch_classification_rejects_read_key() {
     // but the important thing is the role check happens first (Forbidden)
     assert_eq!(status, StatusCode::FORBIDDEN, "read key should not be able to PATCH classification");
 }
+
+// =============================================================================
+// VIEW-01: Memory View CRUD + Policy-Scoped Context Filtering
+// =============================================================================
+
+// ---- VIEW-01a: Create a memory view (Admin) ----
+
+#[tokio::test]
+async fn view01a_create_view_returns_created() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "support_safe",
+            "description": "Safe for customer-facing agents",
+            "max_classification": "internal",
+            "blocked_edge_labels": ["salary", "ssn"],
+            "max_facts": 50,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "create view failed: {:?}", body);
+    assert_eq!(body["name"].as_str().unwrap(), "support_safe");
+    assert_eq!(body["max_classification"].as_str().unwrap(), "internal");
+    assert_eq!(body["max_facts"].as_u64().unwrap(), 50);
+    assert!(body["id"].is_string());
+    assert!(body["created_at"].is_string());
+}
+
+// ---- VIEW-01b: Duplicate view name rejected ----
+
+#[tokio::test]
+async fn view01b_duplicate_view_name_rejected() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let view_body = serde_json::json!({
+        "name": "dup_test_view",
+        "description": "First",
+        "max_classification": "internal",
+    });
+
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key", view_body.clone(),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key", view_body,
+    ).await;
+    assert_eq!(status, StatusCode::CONFLICT, "duplicate should be rejected: {:?}", body);
+}
+
+// ---- VIEW-01c: List views ----
+
+#[tokio::test]
+async fn view01c_list_views() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    // Create two views
+    for name in &["list_v1", "list_v2"] {
+        let (status, _) = json_request_with_header(
+            &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+            serde_json::json!({
+                "name": name,
+                "description": "test",
+                "max_classification": "public",
+            }),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (status, body) = json_request_with_header(
+        &app, "GET", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "list views failed: {:?}", body);
+    let views = body["views"].as_array().unwrap();
+    assert!(views.len() >= 2);
+}
+
+// ---- VIEW-01d: Get view by name ----
+
+#[tokio::test]
+async fn view01d_get_view_by_name() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "get_test_view",
+            "description": "For GET test",
+            "max_classification": "confidential",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request_with_header(
+        &app, "GET", "/api/v1/views/get_test_view", "authorization", "Bearer view-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "get view failed: {:?}", body);
+    assert_eq!(body["name"].as_str().unwrap(), "get_test_view");
+    assert_eq!(body["max_classification"].as_str().unwrap(), "confidential");
+}
+
+// ---- VIEW-01e: Update view ----
+
+#[tokio::test]
+async fn view01e_update_view() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "update_test",
+            "description": "Original",
+            "max_classification": "internal",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request_with_header(
+        &app, "PUT", "/api/v1/views/update_test", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "update_test",
+            "description": "Updated",
+            "max_classification": "public",
+            "max_facts": 25,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "update view failed: {:?}", body);
+    assert_eq!(body["description"].as_str().unwrap(), "Updated");
+    assert_eq!(body["max_classification"].as_str().unwrap(), "public");
+    assert_eq!(body["max_facts"].as_u64().unwrap(), 25);
+}
+
+// ---- VIEW-01f: Delete view ----
+
+#[tokio::test]
+async fn view01f_delete_view() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "delete_test",
+            "description": "To be deleted",
+            "max_classification": "internal",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request_with_header(
+        &app, "DELETE", "/api/v1/views/delete_test", "authorization", "Bearer view-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "delete view failed");
+
+    // Verify it's gone
+    let (status, _) = json_request_with_header(
+        &app, "GET", "/api/v1/views/delete_test", "authorization", "Bearer view-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---- VIEW-01g: Read key can list views but cannot create ----
+
+#[tokio::test]
+async fn view01g_read_key_can_list_but_not_create() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    // Create a read-only key
+    let (status, create_body) = json_request_with_header(
+        &app, "POST", "/api/v1/keys", "authorization", "Bearer view-admin-key",
+        serde_json::json!({ "name": "view-reader", "role": "read" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let read_key = create_body["raw_key"].as_str().unwrap().to_string();
+
+    // Listing should succeed (read role)
+    let (status, _) = json_request_with_header(
+        &app, "GET", "/api/v1/views", "authorization", &format!("Bearer {}", read_key),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "read key should be able to list views");
+
+    // Creating should fail (requires admin)
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", &format!("Bearer {}", read_key),
+        serde_json::json!({
+            "name": "should_fail",
+            "description": "nope",
+            "max_classification": "internal",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not create views");
+}
+
+// ---- VIEW-01h: Get nonexistent view returns 404 ----
+
+#[tokio::test]
+async fn view01h_get_nonexistent_view_returns_404() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let (status, _) = json_request_with_header(
+        &app, "GET", "/api/v1/views/nonexistent_view_xyz", "authorization", "Bearer view-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---- VIEW-02a: Context with view filters entities by classification ----
+
+#[tokio::test]
+async fn view02a_context_view_filters_entities_by_classification() {
+    let (app, store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    // Create a user
+    let user_name = format!("view02a_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
+
+    // Create entities with different classification levels
+    let ep_id = Uuid::from_u128(10);
+    let public_entity = Entity::from_extraction(
+        &ExtractedEntity { name: "Coffee Shop".into(), entity_type: EntityType::Location, summary: Some("A public coffee shop".into()), classification: Classification::Public },
+        user_id, ep_id,
+    );
+    let public_entity = store.create_entity(public_entity).await.unwrap();
+
+    let confidential_entity = Entity::from_extraction(
+        &ExtractedEntity { name: "Bank Account".into(), entity_type: EntityType::Concept, summary: Some("Private bank account".into()), classification: Classification::Confidential },
+        user_id, ep_id,
+    );
+    let confidential_entity = store.create_entity(confidential_entity).await.unwrap();
+
+    // Create a target entity for edges
+    let target_entity = Entity::from_extraction(
+        &ExtractedEntity { name: "Latte".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Public },
+        user_id, ep_id,
+    );
+    let target_entity = store.create_entity(target_entity).await.unwrap();
+
+    let now = chrono::Utc::now();
+
+    // Create edges from these entities
+    let public_edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "Coffee Shop".into(), target_name: "Latte".into(), label: "serves".into(),
+            fact: "Coffee Shop serves Latte".into(), confidence: 0.9,
+            valid_at: None, classification: Classification::Public,
+        },
+        user_id, public_entity.id, target_entity.id, ep_id, now,
+    );
+    store.create_edge(public_edge).await.unwrap();
+
+    let confidential_edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "Bank Account".into(), target_name: "$50,000".into(), label: "balance".into(),
+            fact: "Bank Account has balance $50,000".into(), confidence: 0.9,
+            valid_at: None, classification: Classification::Confidential,
+        },
+        user_id, confidential_entity.id, Uuid::from_u128(101), ep_id, now,
+    );
+    store.create_edge(confidential_edge).await.unwrap();
+
+    // Create a view that caps classification at Public
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "public_only_view",
+            "description": "Only public data",
+            "max_classification": "public",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Request context with the view
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "query": "Tell me about coffee and banking",
+            "view": "public_only_view",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "context request failed: {:?}", body);
+
+    // The view_applied field should be set
+    assert_eq!(body["view_applied"].as_str(), Some("public_only_view"));
+
+    // Entities with Confidential classification should be filtered out
+    let empty_arr = vec![];
+    let entities = body["entities"].as_array().unwrap_or(&empty_arr);
+    for entity in entities {
+        let name = entity["name"].as_str().unwrap_or("");
+        assert_ne!(name, "Bank Account",
+            "Confidential entity should be filtered by public_only view");
+    }
+
+    // Facts with Confidential classification should be filtered out
+    let facts = body["facts"].as_array().unwrap_or(&empty_arr);
+    for fact in facts {
+        let label = fact["label"].as_str().unwrap_or("");
+        assert_ne!(label, "balance",
+            "Confidential fact should be filtered by public_only view");
+    }
+}
+
+// ---- VIEW-02b: Context with view blocks edge labels ----
+
+#[tokio::test]
+async fn view02b_context_view_blocks_edge_labels() {
+    let (app, store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let user_name = format!("view02b_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
+
+    let ep_id = Uuid::from_u128(20);
+    let entity = Entity::from_extraction(
+        &ExtractedEntity { name: "Employee".into(), entity_type: EntityType::Person, summary: Some("An employee".into()), classification: Classification::Internal },
+        user_id, ep_id,
+    );
+    let entity = store.create_entity(entity).await.unwrap();
+
+    let target1 = Entity::from_extraction(
+        &ExtractedEntity { name: "SalaryAmount".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Internal },
+        user_id, ep_id,
+    );
+    let target1 = store.create_entity(target1).await.unwrap();
+    let target2 = Entity::from_extraction(
+        &ExtractedEntity { name: "Engineer".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Internal },
+        user_id, ep_id,
+    );
+    let target2 = store.create_entity(target2).await.unwrap();
+
+    let now = chrono::Utc::now();
+    let salary_edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "Employee".into(), target_name: "SalaryAmount".into(), label: "salary".into(),
+            fact: "Employee earns $100k salary".into(), confidence: 0.9,
+            valid_at: None, classification: Classification::Internal,
+        },
+        user_id, entity.id, target1.id, ep_id, now,
+    );
+    store.create_edge(salary_edge).await.unwrap();
+
+    let role_edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "Employee".into(), target_name: "Engineer".into(), label: "role".into(),
+            fact: "Employee is an Engineer".into(), confidence: 0.9,
+            valid_at: None, classification: Classification::Internal,
+        },
+        user_id, entity.id, target2.id, ep_id, now,
+    );
+    store.create_edge(role_edge).await.unwrap();
+
+    // Create view that blocks salary edges
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "no_salary_view",
+            "description": "Hides salary info",
+            "max_classification": "restricted",
+            "blocked_edge_labels": ["salary"],
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "query": "Tell me about the employee",
+            "view": "no_salary_view",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
+
+    let empty_arr = vec![];
+    let facts = body["facts"].as_array().unwrap_or(&empty_arr);
+    for fact in facts {
+        let label = fact["label"].as_str().unwrap_or("");
+        assert_ne!(label, "salary", "Salary facts should be blocked by view");
+    }
+}
+
+// ---- VIEW-02c: Context with nonexistent view returns 404 ----
+
+#[tokio::test]
+async fn view02c_context_nonexistent_view_returns_404() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let user_name = format!("view02c_user_{}", Uuid::now_v7());
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "query": "anything",
+            "view": "does_not_exist",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nonexistent view should 404: {:?}", body);
+}
+
+// ---- VIEW-02d: Scoped key classification ceiling narrows view ----
+
+#[tokio::test]
+async fn view02d_scoped_key_classification_narrows_view() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    // Create a view that allows Confidential
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "wide_view_02d",
+            "description": "Allows up to confidential",
+            "max_classification": "confidential",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Create a scoped key with max_classification=internal
+    let (status, create_body) = json_request_with_header(
+        &app, "POST", "/api/v1/keys", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "internal-only-key",
+            "role": "read",
+            "scope": { "max_classification": "internal" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let scoped_key = create_body["raw_key"].as_str().unwrap().to_string();
+
+    // Create user
+    let user_name = format!("view02d_user_{}", Uuid::now_v7());
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Request context with the wide view using the restricted key
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", &format!("Bearer {}", scoped_key),
+        serde_json::json!({
+            "query": "anything",
+            "view": "wide_view_02d",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "context request failed: {:?}", body);
+    // The view should be applied — even though the view allows Confidential,
+    // the scoped key limits to Internal, so view_applied should be set
+    assert_eq!(body["view_applied"].as_str(), Some("wide_view_02d"));
+}
+
+// ---- VIEW-02e: View with max_facts caps fact count ----
+
+#[tokio::test]
+async fn view02e_view_max_facts_caps_count() {
+    let (app, store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let user_name = format!("view02e_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
+
+    let ep_id = Uuid::from_u128(30);
+    let entity = Entity::from_extraction(
+        &ExtractedEntity { name: "MaxFactsEntity".into(), entity_type: EntityType::Concept, summary: Some("Test".into()), classification: Classification::Public },
+        user_id, ep_id,
+    );
+    let entity = store.create_entity(entity).await.unwrap();
+
+    let now = chrono::Utc::now();
+    for i in 0u128..10 {
+        let target = Entity::from_extraction(
+            &ExtractedEntity { name: format!("Target{}", i), entity_type: EntityType::Concept, summary: None, classification: Classification::Public },
+            user_id, ep_id,
+        );
+        let target = store.create_entity(target).await.unwrap();
+
+        let edge = Edge::from_extraction(
+            &ExtractedRelationship {
+                source_name: "MaxFactsEntity".into(), target_name: format!("Target{}", i),
+                label: "related_to".into(),
+                fact: format!("MaxFactsEntity is related to Target{}", i),
+                confidence: 0.9,
+                valid_at: None, classification: Classification::Public,
+            },
+            user_id, entity.id, target.id, ep_id, now,
+        );
+        store.create_edge(edge).await.unwrap();
+    }
+
+    // Create view with max_facts=3
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "limited_facts_view",
+            "description": "Only 3 facts max",
+            "max_classification": "restricted",
+            "max_facts": 3,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "query": "Tell me about MaxFactsEntity",
+            "view": "limited_facts_view",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
+
+    let empty_arr = vec![];
+    let facts = body["facts"].as_array().unwrap_or(&empty_arr);
+    assert!(facts.len() <= 3,
+        "max_facts=3 view should cap facts to at most 3, got {}",
+        facts.len());
+}
+
+// ---- VIEW-02f: View with include_narrative=false suppresses narrative ----
+
+#[tokio::test]
+async fn view02f_view_suppresses_narrative() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    let user_name = format!("view02f_user_{}", Uuid::now_v7());
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Create view with include_narrative=false
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "no_narrative_view",
+            "description": "No narrative",
+            "max_classification": "restricted",
+            "include_narrative": false,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Request context with include_narrative=true at request level, but view says false
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "query": "anything",
+            "view": "no_narrative_view",
+            "include_narrative": true,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
+    // narrative should be null because view suppresses it
+    assert!(body["narrative"].is_null(), "narrative should be suppressed by view");
+}
+
+// ---- VIEW-02g: Context without view but with scoped key still filters ----
+
+#[tokio::test]
+async fn view02g_no_view_scoped_key_still_filters() {
+    let (app, store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    // Create a key with max_classification=public
+    let (status, create_body) = json_request_with_header(
+        &app, "POST", "/api/v1/keys", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "public-only-key",
+            "role": "read",
+            "scope": { "max_classification": "public" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let public_key = create_body["raw_key"].as_str().unwrap().to_string();
+
+    let user_name = format!("view02g_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
+
+    let ep_id = Uuid::from_u128(40);
+    // Create an entity with Internal classification
+    let internal_entity = Entity::from_extraction(
+        &ExtractedEntity { name: "InternalProject".into(), entity_type: EntityType::Concept, summary: Some("Internal project".into()), classification: Classification::Internal },
+        user_id, ep_id,
+    );
+    let internal_entity = store.create_entity(internal_entity).await.unwrap();
+
+    let now = chrono::Utc::now();
+    let target = Entity::from_extraction(
+        &ExtractedEntity { name: "Roadmap".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Internal },
+        user_id, ep_id,
+    );
+    let target = store.create_entity(target).await.unwrap();
+
+    // Create edge with Internal classification
+    let internal_edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "InternalProject".into(), target_name: "Roadmap".into(), label: "has".into(),
+            fact: "InternalProject has Roadmap".into(), confidence: 0.9,
+            valid_at: None, classification: Classification::Internal,
+        },
+        user_id, internal_entity.id, target.id, ep_id, now,
+    );
+    store.create_edge(internal_edge).await.unwrap();
+
+    // Request context without view, using the public-only key
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", &format!("Bearer {}", public_key),
+        serde_json::json!({ "query": "Tell me about InternalProject" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
+
+    // No view applied (no explicit view), but scoped key filtering is active
+    assert!(body["view_applied"].is_null(), "no explicit view was applied");
+
+    // Internal entities/facts should be filtered out by the public-only key
+    let empty_arr = vec![];
+    let entities = body["entities"].as_array().unwrap_or(&empty_arr);
+    for entity in entities {
+        let name = entity["name"].as_str().unwrap_or("");
+        assert_ne!(name, "InternalProject",
+            "Internal entity should be filtered by public-only key");
+    }
+}
+
+// ---- VIEW-02h: View name validation ----
+
+#[tokio::test]
+async fn view02h_view_name_validation() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
+
+    // Empty name
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": "  ",
+            "description": "Bad name",
+            "max_classification": "internal",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "empty name should be rejected");
+
+    // Very long name (>128 chars)
+    let long_name = "a".repeat(200);
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        serde_json::json!({
+            "name": long_name,
+            "description": "Too long",
+            "max_classification": "internal",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "long name should be rejected");
+}

@@ -39,9 +39,10 @@ use mnemo_core::models::api_key::{
     ApiKeyRole, CallerContext, CreateApiKeyRequest,
 };
 use mnemo_core::models::classification::Classification;
+use mnemo_core::models::view::{CreateViewRequest, ViewConstraints};
 use mnemo_core::traits::storage::{
     AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
-    NarrativeStore, RawVectorStore, SessionStore, SpanStore, UserStore, VectorStore,
+    NarrativeStore, RawVectorStore, SessionStore, SpanStore, UserStore, VectorStore, ViewStore,
 };
 
 use mnemo_retrieval::Reranker;
@@ -1314,6 +1315,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/keys/:key_id/rotate",
             post(rotate_api_key),
+        )
+        // Memory views (policy-scoped context lenses)
+        .route(
+            "/api/v1/views",
+            post(create_view).get(list_views),
+        )
+        .route(
+            "/api/v1/views/:name",
+            get(get_view).put(update_view).delete(delete_view),
         )
         // Raw Vector API (external vector DB interface for AnythingLLM, etc.)
         .route(
@@ -3863,6 +3873,11 @@ struct MemoryContextRequest {
     /// current objective (e.g., "resolve_ticket", "plan_trip").
     #[serde(default)]
     goal: Option<String>,
+    /// Optional memory view name — applies policy-scoped constraints
+    /// (classification ceiling, entity type whitelist, edge label blacklist,
+    /// temporal scope, fact count cap) during context assembly.
+    #[serde(default)]
+    view: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -3944,6 +3959,9 @@ struct MemoryContextResponse {
     /// The goal profile applied (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     goal_applied: Option<String>,
+    /// The memory view applied (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    view_applied: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -4330,14 +4348,17 @@ async fn get_import_job(
 async fn get_memory_context(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     Path(user): Path<String>,
     Json(req): Json<MemoryContextRequest>,
 ) -> Result<Json<MemoryContextResponse>, AppError> {
     let request_id = request_id_from_extension(ctx);
+    let caller = caller_from_extension(caller);
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
     let include_narrative = req.include_narrative;
+    let requested_view_name = req.view.clone();
     let goal_name = req.goal.clone();
     // goal_name is used below after context assembly to adjust relevance
 
@@ -4388,7 +4409,7 @@ async fn get_memory_context(
             &state,
             user.id,
             "policy_override_memory_context",
-            request_id,
+            request_id.clone(),
             serde_json::json!({
                 "requested_contract": req.contract,
                 "requested_retrieval_policy": req.retrieval_policy,
@@ -4556,6 +4577,72 @@ async fn get_memory_context(
         .episodes
         .retain(|episode| is_episode_summary_within_retention(&policy, episode));
 
+    // ─── View-scoped filtering ─────────────────────────────────────
+    // Resolve the view (if specified), build ViewConstraints capped by the
+    // caller's classification ceiling, and filter entities/facts accordingly.
+    let view_constraints = if let Some(ref view_name) = requested_view_name {
+        let view = state
+            .state_store
+            .get_view(view_name)
+            .await?
+            .ok_or_else(|| {
+                AppError(MnemoError::NotFound {
+                    resource_type: "memory_view".into(),
+                    id: view_name.clone(),
+                })
+            })?;
+        Some(ViewConstraints::from_view(&view, caller.max_classification()))
+    } else {
+        // No explicit view — apply caller's classification ceiling as default
+        let caller_max = caller.max_classification();
+        if caller_max < Classification::Restricted {
+            // Only build constraints if the caller actually has a ceiling below max
+            Some(ViewConstraints::default_for_caller(caller_max))
+        } else {
+            None // admin/bootstrap with no view — no filtering needed
+        }
+    };
+
+    let view_applied = if let Some(ref vc) = view_constraints {
+        // Filter entities by classification + allowed types
+        context
+            .entities
+            .retain(|e| vc.allows_entity(e.classification, &e.entity_type));
+
+        // Filter facts by classification + blocked labels + temporal scope
+        context.facts.retain(|f| {
+            vc.allows_edge(f.classification, &f.label) && vc.allows_time(f.valid_at)
+        });
+
+        // Cap facts if max_facts is set
+        if let Some(max_facts) = vc.max_facts {
+            context.facts.truncate(max_facts as usize);
+        }
+
+        // Re-assemble context string after filtering
+        context.assemble(max_tokens);
+
+        // Emit governance audit for view-scoped access
+        append_governance_audit(
+            &state,
+            user.id,
+            "view_scoped_context",
+            request_id.clone(),
+            serde_json::json!({
+                "view_name": vc.view_name,
+                "max_classification": vc.max_classification,
+                "caller_key": caller.key_name,
+                "entities_after_filter": context.entities.len(),
+                "facts_after_filter": context.facts.len(),
+            }),
+        )
+        .await;
+
+        vc.view_name.clone()
+    } else {
+        None
+    };
+
     // Attach semantic routing diagnostics to context block
     context.routing_decision = routing_decision_json;
 
@@ -4566,9 +4653,13 @@ async fn get_memory_context(
         version: session.head_version,
     });
 
-    // Optionally include the user's narrative summary
-    // Optionally include the user's narrative summary
-    let narrative = if include_narrative {
+    // Optionally include the user's narrative summary.
+    // Respect the view's include_narrative flag if a view is active.
+    let narrative_allowed = view_constraints
+        .as_ref()
+        .map(|vc| vc.include_narrative)
+        .unwrap_or(true);
+    let narrative = if include_narrative && narrative_allowed {
         state.state_store.get_narrative(user.id).await.ok().flatten()
     } else {
         None
@@ -4618,6 +4709,7 @@ async fn get_memory_context(
         metadata_filter_diagnostics,
         narrative,
         goal_applied,
+        view_applied,
     }))
 }
 
@@ -10245,6 +10337,127 @@ async fn rotate_api_key(
             key: new_key,
         }),
     ))
+}
+
+// ─── Memory View CRUD ──────────────────────────────────────────────
+
+async fn create_view(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Json(body): Json<CreateViewRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    let name = body.name.trim().to_string();
+    if name.is_empty() || name.len() > 128 {
+        return Err(AppError(MnemoError::Validation(
+            "view name must be 1-128 characters".into(),
+        )));
+    }
+
+    // Check for duplicates
+    if state.state_store.get_view(&name).await?.is_some() {
+        return Err(AppError(MnemoError::Duplicate(format!(
+            "view '{}' already exists",
+            name
+        ))));
+    }
+
+    let now = chrono::Utc::now();
+    let view = mnemo_core::models::view::MemoryView {
+        id: Uuid::now_v7(),
+        name,
+        description: body.description,
+        max_classification: body.max_classification,
+        allowed_entity_types: body.allowed_entity_types,
+        blocked_edge_labels: body.blocked_edge_labels,
+        max_facts: body.max_facts,
+        include_narrative: body.include_narrative,
+        temporal_scope: body.temporal_scope,
+        created_at: now,
+        updated_at: now,
+    };
+
+    state.state_store.save_view(&view).await?;
+    Ok((StatusCode::CREATED, Json(view)))
+}
+
+async fn list_views(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Read)?;
+
+    let views = state.state_store.list_views().await?;
+    Ok(Json(serde_json::json!({ "views": views })))
+}
+
+async fn get_view(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(name): Path<String>,
+) -> Result<Json<mnemo_core::models::view::MemoryView>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Read)?;
+
+    let view = state.state_store.get_view(&name).await?.ok_or_else(|| {
+        AppError(MnemoError::NotFound {
+            resource_type: "memory_view".into(),
+            id: name.clone(),
+        })
+    })?;
+    Ok(Json(view))
+}
+
+async fn update_view(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(name): Path<String>,
+    Json(body): Json<CreateViewRequest>,
+) -> Result<Json<mnemo_core::models::view::MemoryView>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    let mut view = state.state_store.get_view(&name).await?.ok_or_else(|| {
+        AppError(MnemoError::NotFound {
+            resource_type: "memory_view".into(),
+            id: name.clone(),
+        })
+    })?;
+
+    view.description = body.description;
+    view.max_classification = body.max_classification;
+    view.allowed_entity_types = body.allowed_entity_types;
+    view.blocked_edge_labels = body.blocked_edge_labels;
+    view.max_facts = body.max_facts;
+    view.include_narrative = body.include_narrative;
+    view.temporal_scope = body.temporal_scope;
+    view.updated_at = chrono::Utc::now();
+
+    state.state_store.update_view(&view).await?;
+    Ok(Json(view))
+}
+
+async fn delete_view(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    // Verify it exists
+    state.state_store.get_view(&name).await?.ok_or_else(|| {
+        AppError(MnemoError::NotFound {
+            resource_type: "memory_view".into(),
+            id: name.clone(),
+        })
+    })?;
+
+    state.state_store.delete_view(&name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
