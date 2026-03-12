@@ -1145,6 +1145,11 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/memory/:user/narrative/refresh",
             post(refresh_narrative),
         )
+        // Counterfactual memory
+        .route(
+            "/api/v1/memory/:user/counterfactual",
+            post(counterfactual_context),
+        )
         .route(
             "/api/v1/memory/:user/causal_recall",
             post(causal_recall_chains),
@@ -9634,6 +9639,99 @@ async fn dismiss_clarification(
     state.state_store.save_clarification(&clarification).await?;
 
     Ok(Json(clarification))
+}
+
+// ─── Counterfactual Memory ────────────────────────────────────────
+
+/// `POST /api/v1/memory/:user/counterfactual`
+///
+/// Simulate retrieval context under hypothetical assumptions. Returns a full
+/// context block as if certain facts were different — without modifying actual
+/// memory state. Read-only operation.
+async fn counterfactual_context(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Json(req): Json<mnemo_core::models::counterfactual::CounterfactualRequest>,
+) -> Result<Json<mnemo_core::models::counterfactual::CounterfactualResponse>, AppError> {
+    use mnemo_core::models::counterfactual::{
+        apply_hypotheticals, rebuild_context_string, CounterfactualResponse,
+    };
+
+    if req.query.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation("query is required".into())));
+    }
+    if req.hypotheticals.is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "at least one hypothetical is required".into(),
+        )));
+    }
+
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    let start = std::time::Instant::now();
+
+    // Run the normal retrieval pipeline to get the baseline context
+    let session_id = if let Some(ref session_name) = req.session {
+        let sessions = state
+            .state_store
+            .list_sessions(
+                user.id,
+                mnemo_core::models::session::ListSessionsParams {
+                    limit: 100,
+                    after: None,
+                    since: None,
+                },
+            )
+            .await?;
+        sessions
+            .iter()
+            .find(|s| s.name.as_deref() == Some(session_name.as_str()))
+            .map(|s| s.id)
+    } else {
+        None
+    };
+
+    let max_tokens = req.max_tokens.unwrap_or(2000);
+    let min_relevance = req.min_relevance.unwrap_or(0.0);
+
+    let context_req = mnemo_core::models::context::ContextRequest {
+        session_id,
+        messages: vec![mnemo_core::models::context::ContextMessage {
+            role: "user".to_string(),
+            content: req.query,
+        }],
+        max_tokens,
+        search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
+        temporal_filter: None,
+        as_of: None,
+        time_intent: mnemo_core::models::context::TemporalIntent::Current,
+        temporal_weight: None,
+        min_relevance,
+    };
+
+    let mut context = state
+        .retrieval
+        .get_context(user.id, &context_req, reranker_for_state(&state))
+        .await?;
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    // Apply hypothetical overrides to the retrieved facts
+    let (modified_facts, diff) = apply_hypotheticals(context.facts, &req.hypotheticals);
+
+    // Rebuild context string with modified facts
+    let context_string = rebuild_context_string(&modified_facts);
+    let token_count = (context_string.len() / 4) as u32; // rough token estimate
+
+    // Update the context block with modified data
+    context.facts = modified_facts.clone();
+
+    Ok(Json(CounterfactualResponse {
+        context: context_string,
+        token_count,
+        facts: modified_facts,
+        counterfactual_diff: diff,
+        latency_ms,
+    }))
 }
 
 // ─── Goal-Conditioned Retrieval ───────────────────────────────────

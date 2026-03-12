@@ -65,7 +65,7 @@ pub struct EntitySummary {
 }
 
 /// Lightweight fact reference included in context responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FactSummary {
     pub id: Uuid,
     pub source_entity: String,

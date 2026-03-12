@@ -889,6 +889,69 @@ an optional `goal` field (string). When set, Mnemo looks up the matching goal
 profile and re-scores context facts using the profile's relevance adjustments.
 The response includes a `goal_applied` field indicating which goal was used.
 
+### `POST /api/v1/memory/:user/counterfactual`
+
+Simulate retrieval context under hypothetical assumptions. Returns a full context
+block as if certain facts were different — without modifying actual memory state.
+This is a read-only operation; no state is changed.
+
+```json
+// Request
+{
+  "query": "What brand does the user prefer?",
+  "hypotheticals": [
+    {
+      "entity": "user",
+      "attribute": "brand_preference",
+      "value": "Adidas",
+      "confidence": 0.95
+    }
+  ],
+  "max_tokens": 2000,
+  "min_relevance": 0.0
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `query` | required | The query to retrieve context for |
+| `hypotheticals` | required | Array of fact overrides (at least one) |
+| `session` | `null` | Optional session scope |
+| `max_tokens` | `2000` | Maximum token budget |
+| `min_relevance` | `0.0` | Minimum relevance threshold |
+
+Each hypothetical has:
+- `entity` — entity name to match (case-insensitive)
+- `attribute` — relationship label to override
+- `value` — the hypothetical value
+- `confidence` — confidence of the hypothetical (default: 0.9)
+
+```json
+// Response
+{
+  "context": "- user brand_preference Adidas\n- user color_preference blue",
+  "token_count": 15,
+  "facts": [...],
+  "counterfactual_diff": {
+    "overridden_facts": [
+      {
+        "original": {"id": "...", "fact": "user prefers Nike", ...},
+        "replaced_by_index": 0,
+        "hypothetical": {"entity": "user", "attribute": "brand_preference", "value": "Adidas", "confidence": 0.95}
+      }
+    ],
+    "injected_count": 1,
+    "novel_hypotheticals": []
+  },
+  "latency_ms": 42
+}
+```
+
+The `counterfactual_diff` shows:
+- `overridden_facts` — real facts replaced by hypotheticals
+- `injected_count` — total hypotheticals applied
+- `novel_hypotheticals` — hypotheticals that didn't match existing facts (added as new)
+
 ### `POST /api/v1/memory/:user/causal_recall`
 
 Explain why memory was retrieved by returning fact-to-episode lineage chains.

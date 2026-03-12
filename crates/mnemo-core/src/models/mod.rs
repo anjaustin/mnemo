@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod clarification;
 pub mod context;
+pub mod counterfactual;
 pub mod digest;
 pub mod edge;
 pub mod entity;
