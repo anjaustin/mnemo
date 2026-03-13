@@ -39,10 +39,16 @@ use mnemo_core::models::api_key::{
     ApiKeyRole, CallerContext, CreateApiKeyRequest,
 };
 use mnemo_core::models::classification::Classification;
+use mnemo_core::models::guardrail::{
+    CreateGuardrailRequest, EvalContext, EvaluateGuardrailsRequest,
+    EvaluateGuardrailsResponse, GuardrailRule, GuardrailTrigger,
+    evaluate_rules, validate_condition_regexes, validate_guardrail_name,
+};
 use mnemo_core::models::view::{CreateViewRequest, ViewConstraints};
 use mnemo_core::traits::storage::{
-    AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
-    NarrativeStore, RawVectorStore, SessionStore, SpanStore, UserStore, VectorStore, ViewStore,
+    AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore,
+    GoalStore, GuardrailStore, NarrativeStore, RawVectorStore, SessionStore, SpanStore,
+    UserStore, VectorStore, ViewStore,
 };
 
 use mnemo_retrieval::Reranker;
@@ -1324,6 +1330,19 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/views/:name",
             get(get_view).put(update_view).delete(delete_view),
+        )
+        // Memory guardrails (declarative constraint rules)
+        .route(
+            "/api/v1/guardrails",
+            post(create_guardrail).get(list_guardrails),
+        )
+        .route(
+            "/api/v1/guardrails/evaluate",
+            post(evaluate_guardrails),
+        )
+        .route(
+            "/api/v1/guardrails/:id",
+            get(get_guardrail).put(update_guardrail).delete(delete_guardrail),
         )
         // Raw Vector API (external vector DB interface for AnythingLLM, etc.)
         .route(
@@ -2607,14 +2626,39 @@ async fn list_user_sessions(
 async fn add_episode(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     Path(session_id): Path<Uuid>,
     Json(req): Json<CreateEpisodeRequest>,
 ) -> Result<(StatusCode, Json<Episode>), AppError> {
     let request_id = request_id_from_extension(ctx);
+    let caller = caller_from_extension(caller);
     let session = state.state_store.get_session(session_id).await?;
     let policy =
         get_or_create_user_policy(&state, session.user_id, session.user_id.to_string()).await;
     validate_episode_retention(&policy, &req)?;
+
+    // ─── Write-path guardrails ──────────────────────────────────
+    let guardrail_rules = state
+        .state_store
+        .list_guardrails_for_user(session.user_id)
+        .await
+        .unwrap_or_default();
+    if !guardrail_rules.is_empty() {
+        let eval_ctx = EvalContext {
+            content: Some(req.content.clone()),
+            caller_role: Some(caller.role),
+            user_id: Some(session.user_id),
+            ..Default::default()
+        };
+        let verdict = evaluate_rules(&guardrail_rules, &GuardrailTrigger::OnIngest, &eval_ctx);
+        if verdict.blocked {
+            return Err(AppError(MnemoError::Validation(format!(
+                "Guardrail blocked: {}",
+                verdict.block_reason.unwrap_or_else(|| "policy violation".into())
+            ))));
+        }
+    }
+
     let req = CreateEpisodeRequest {
         metadata: metadata_with_request_id(req.metadata, request_id.as_deref()),
         ..req
@@ -3962,6 +4006,9 @@ struct MemoryContextResponse {
     /// The memory view applied (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     view_applied: Option<String>,
+    /// Warnings emitted by guardrail rules during context assembly.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    guardrail_warnings: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -4643,6 +4690,90 @@ async fn get_memory_context(
         None
     };
 
+    // ─── Read-path guardrails ─────────────────────────────────────────
+    // Evaluate guardrail rules against each fact and entity in the context.
+    // Actions: Redact (remove), Reclassify (upgrade classification), Warn, AuditOnly.
+    let guardrail_rules = state
+        .state_store
+        .list_guardrails_for_user(user.id)
+        .await
+        .unwrap_or_default();
+    let mut guardrail_warnings: Vec<String> = Vec::new();
+
+    if !guardrail_rules.is_empty() {
+        // Evaluate facts — redact or reclassify
+        context.facts.retain(|fact| {
+            let fact_age_days = {
+                let dur = chrono::Utc::now() - fact.valid_at;
+                dur.num_days().max(0) as u32
+            };
+            let ctx = EvalContext {
+                classification: Some(fact.classification),
+                edge_label: Some(fact.label.clone()),
+                content: Some(fact.fact.clone()),
+                caller_role: Some(caller.role),
+                fact_age_days: Some(fact_age_days),
+                confidence: Some(fact.relevance), // best proxy
+                user_id: Some(user.id),
+                ..Default::default()
+            };
+            let verdict = evaluate_rules(&guardrail_rules, &GuardrailTrigger::OnRetrieval, &ctx);
+            if verdict.redact {
+                return false; // remove from output
+            }
+            // Collect warnings
+            for w in &verdict.warnings {
+                if !guardrail_warnings.contains(w) {
+                    guardrail_warnings.push(w.clone());
+                }
+            }
+            true
+        });
+
+        // Evaluate entities — redact based on entity type / classification
+        context.entities.retain(|entity| {
+            let ctx = EvalContext {
+                classification: Some(entity.classification),
+                entity_type: Some(entity.entity_type.clone()),
+                caller_role: Some(caller.role),
+                user_id: Some(user.id),
+                ..Default::default()
+            };
+            let verdict = evaluate_rules(&guardrail_rules, &GuardrailTrigger::OnRetrieval, &ctx);
+            if verdict.redact {
+                return false;
+            }
+            for w in &verdict.warnings {
+                if !guardrail_warnings.contains(w) {
+                    guardrail_warnings.push(w.clone());
+                }
+            }
+            true
+        });
+
+        // Re-assemble context after guardrail filtering
+        if context.facts.len() != context.entities.len() || !guardrail_warnings.is_empty() {
+            context.assemble(max_tokens);
+        }
+
+        // Governance audit for guardrail evaluation
+        if !guardrail_warnings.is_empty() {
+            append_governance_audit(
+                &state,
+                user.id,
+                "guardrail_retrieval_warnings",
+                request_id.clone(),
+                serde_json::json!({
+                    "warnings": guardrail_warnings,
+                    "caller_key": caller.key_name,
+                    "facts_after_filter": context.facts.len(),
+                    "entities_after_filter": context.entities.len(),
+                }),
+            )
+            .await;
+        }
+    }
+
     // Attach semantic routing diagnostics to context block
     context.routing_decision = routing_decision_json;
 
@@ -4710,6 +4841,7 @@ async fn get_memory_context(
         narrative,
         goal_applied,
         view_applied,
+        guardrail_warnings,
     }))
 }
 
@@ -10458,6 +10590,169 @@ async fn delete_view(
 
     state.state_store.delete_view(&name).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ─── Guardrail CRUD ────────────────────────────────────────────────
+
+async fn create_guardrail(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Json(body): Json<CreateGuardrailRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    // Validate name
+    validate_guardrail_name(&body.name).map_err(|e| AppError(MnemoError::Validation(e)))?;
+
+    // Validate regex patterns in the condition tree
+    validate_condition_regexes(&body.condition)
+        .map_err(|e| AppError(MnemoError::Validation(e)))?;
+
+    // Check for duplicate name
+    let existing = state.state_store.list_guardrails().await?;
+    if existing.iter().any(|r| r.name == body.name) {
+        return Err(AppError(MnemoError::Duplicate(format!(
+            "guardrail '{}' already exists",
+            body.name
+        ))));
+    }
+
+    let now = chrono::Utc::now();
+    let rule = GuardrailRule {
+        id: Uuid::now_v7(),
+        name: body.name,
+        description: body.description,
+        trigger: body.trigger,
+        condition: body.condition,
+        action: body.action,
+        priority: body.priority,
+        enabled: body.enabled,
+        scope: body.scope,
+        created_at: now,
+        updated_at: now,
+    };
+
+    state.state_store.save_guardrail(&rule).await?;
+    Ok((StatusCode::CREATED, Json(rule)))
+}
+
+async fn list_guardrails(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Read)?;
+
+    let rules = state.state_store.list_guardrails().await?;
+    Ok(Json(serde_json::json!({ "guardrails": rules })))
+}
+
+async fn get_guardrail(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<GuardrailRule>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Read)?;
+
+    let rule = state
+        .state_store
+        .get_guardrail(id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "guardrail".into(),
+                id: id.to_string(),
+            })
+        })?;
+    Ok(Json(rule))
+}
+
+async fn update_guardrail(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<CreateGuardrailRequest>,
+) -> Result<Json<GuardrailRule>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    // Validate name
+    validate_guardrail_name(&body.name).map_err(|e| AppError(MnemoError::Validation(e)))?;
+
+    // Validate regex patterns
+    validate_condition_regexes(&body.condition)
+        .map_err(|e| AppError(MnemoError::Validation(e)))?;
+
+    let mut rule = state
+        .state_store
+        .get_guardrail(id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "guardrail".into(),
+                id: id.to_string(),
+            })
+        })?;
+
+    rule.name = body.name;
+    rule.description = body.description;
+    rule.trigger = body.trigger;
+    rule.condition = body.condition;
+    rule.action = body.action;
+    rule.priority = body.priority;
+    rule.enabled = body.enabled;
+    rule.scope = body.scope;
+    rule.updated_at = chrono::Utc::now();
+
+    state.state_store.update_guardrail(&rule).await?;
+    Ok(Json(rule))
+}
+
+async fn delete_guardrail(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    // Verify it exists
+    state
+        .state_store
+        .get_guardrail(id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "guardrail".into(),
+                id: id.to_string(),
+            })
+        })?;
+
+    state.state_store.delete_guardrail(id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Dry-run: evaluate guardrail rules against sample data without executing actions.
+async fn evaluate_guardrails(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Json(body): Json<EvaluateGuardrailsRequest>,
+) -> Result<Json<EvaluateGuardrailsResponse>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Read)?;
+
+    let rules = match body.user_id {
+        Some(uid) => state.state_store.list_guardrails_for_user(uid).await?,
+        None => state.state_store.list_guardrails().await?,
+    };
+
+    let trigger = body.trigger.clone();
+    let ctx = body.into_eval_context();
+    let verdict = evaluate_rules(&rules, &trigger, &ctx);
+
+    Ok(Json(EvaluateGuardrailsResponse::from(verdict)))
 }
 
 #[cfg(test)]

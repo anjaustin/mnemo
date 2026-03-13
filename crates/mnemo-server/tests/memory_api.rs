@@ -10401,3 +10401,869 @@ async fn view02h_view_name_validation() {
     ).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "long name should be rejected");
 }
+
+// =============================================================================
+// GR-01: Guardrail CRUD
+// =============================================================================
+
+// ---- GR-01a: Create a guardrail rule (Admin) ----
+
+#[tokio::test]
+async fn gr01a_create_guardrail_returns_created() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "block_ssn_storage",
+            "description": "Block episodes containing SSN references",
+            "trigger": "on_ingest",
+            "condition": { "type": "content_matches_regex", "pattern": "\\bSSN\\b" },
+            "action": { "type": "block", "reason": "SSN references not allowed" },
+            "priority": 10,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "create guardrail failed: {:?}", body);
+    assert_eq!(body["name"].as_str().unwrap(), "block_ssn_storage");
+    assert_eq!(body["priority"].as_u64().unwrap(), 10);
+    assert!(body["enabled"].as_bool().unwrap());
+    assert!(body["id"].is_string());
+    assert!(body["created_at"].is_string());
+}
+
+// ---- GR-01b: Duplicate guardrail name rejected ----
+
+#[tokio::test]
+async fn gr01b_duplicate_guardrail_name_rejected() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    let body = serde_json::json!({
+        "name": "dup_guard",
+        "description": "First",
+        "trigger": "on_any",
+        "condition": { "type": "classification_above", "classification": "internal" },
+        "action": { "type": "audit_only", "severity": "info" },
+    });
+
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key", body.clone(),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body2) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key", body,
+    ).await;
+    assert_eq!(status, StatusCode::CONFLICT, "duplicate should be rejected: {:?}", body2);
+}
+
+// ---- GR-01c: List guardrails ----
+
+#[tokio::test]
+async fn gr01c_list_guardrails() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create two rules
+    for name in &["gr_list_a", "gr_list_b"] {
+        let (status, _) = json_request_with_header(
+            &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+            serde_json::json!({
+                "name": name,
+                "description": "test rule",
+                "trigger": "on_retrieval",
+                "condition": { "type": "classification_above", "classification": "public" },
+                "action": { "type": "redact" },
+            }),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (status, body) = json_request_with_header(
+        &app, "GET", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "list failed: {:?}", body);
+    let rules = body["guardrails"].as_array().unwrap();
+    assert!(rules.len() >= 2);
+}
+
+// ---- GR-01d: Get guardrail by ID ----
+
+#[tokio::test]
+async fn gr01d_get_guardrail_by_id() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "gr_get_test",
+            "description": "Get test",
+            "trigger": "on_ingest",
+            "condition": { "type": "edge_label_in", "labels": ["salary"] },
+            "action": { "type": "block", "reason": "no salary" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body["id"].as_str().unwrap();
+
+    let (status, body) = json_request_with_header(
+        &app, "GET", &format!("/api/v1/guardrails/{}", id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "get failed: {:?}", body);
+    assert_eq!(body["name"].as_str().unwrap(), "gr_get_test");
+}
+
+// ---- GR-01e: Update guardrail ----
+
+#[tokio::test]
+async fn gr01e_update_guardrail() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "gr_update_test",
+            "description": "Before update",
+            "trigger": "on_ingest",
+            "condition": { "type": "classification_above", "classification": "internal" },
+            "action": { "type": "audit_only", "severity": "low" },
+            "priority": 50,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body["id"].as_str().unwrap();
+
+    let (status, body) = json_request_with_header(
+        &app, "PUT", &format!("/api/v1/guardrails/{}", id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "gr_update_test",
+            "description": "After update",
+            "trigger": "on_retrieval",
+            "condition": { "type": "classification_above", "classification": "confidential" },
+            "action": { "type": "block", "reason": "upgraded to block" },
+            "priority": 5,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "update failed: {:?}", body);
+    assert_eq!(body["description"].as_str().unwrap(), "After update");
+    assert_eq!(body["priority"].as_u64().unwrap(), 5);
+}
+
+// ---- GR-01f: Delete guardrail ----
+
+#[tokio::test]
+async fn gr01f_delete_guardrail() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "gr_delete_test",
+            "description": "Will be deleted",
+            "trigger": "on_any",
+            "condition": { "type": "confidence_below", "confidence": 0.5 },
+            "action": { "type": "warn", "message": "low confidence" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body["id"].as_str().unwrap();
+
+    let (status, _) = json_request_with_header(
+        &app, "DELETE", &format!("/api/v1/guardrails/{}", id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Verify it's gone
+    let (status, _) = json_request_with_header(
+        &app, "GET", &format!("/api/v1/guardrails/{}", id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---- GR-01g: RBAC — read key cannot create guardrails ----
+
+#[tokio::test]
+async fn gr01g_read_key_cannot_create_guardrails() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create a read-only scoped key
+    let (status, key_body) = json_request_with_header(
+        &app, "POST", "/api/v1/keys", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "name": "gr-reader", "role": "read" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let read_key = key_body["raw_key"].as_str().unwrap().to_string();
+
+    // Try to create a guardrail with the read key — should be forbidden
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", &format!("Bearer {}", read_key),
+        serde_json::json!({
+            "name": "should_fail",
+            "description": "Read cannot create",
+            "trigger": "on_any",
+            "condition": { "type": "classification_above", "classification": "public" },
+            "action": { "type": "block", "reason": "nope" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not create guardrails");
+}
+
+// ---- GR-01h: Invalid regex rejected ----
+
+#[tokio::test]
+async fn gr01h_invalid_regex_rejected() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "bad_regex",
+            "description": "Invalid regex pattern",
+            "trigger": "on_ingest",
+            "condition": { "type": "content_matches_regex", "pattern": "[invalid" },
+            "action": { "type": "block", "reason": "bad pattern" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "invalid regex should be rejected: {:?}", body);
+}
+
+// ---- GR-01i: Get nonexistent guardrail returns 404 ----
+
+#[tokio::test]
+async fn gr01i_nonexistent_guardrail_returns_404() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    let fake_id = Uuid::from_u128(999999);
+    let (status, _) = json_request_with_header(
+        &app, "GET", &format!("/api/v1/guardrails/{}", fake_id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// =============================================================================
+// GR-02: Guardrail Write-Path Enforcement (Episode Ingestion)
+// =============================================================================
+
+// ---- GR-02a: Block rule prevents episode storage ----
+
+#[tokio::test]
+async fn gr02a_block_rule_prevents_episode_storage() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create user + session
+    let user_name = format!("gr02a_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, session_body) = json_request_with_header(
+        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "user_id": user_body["id"], "name": "test-session" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session_body["id"].as_str().unwrap();
+
+    // Create a guardrail that blocks SSN content
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "block_ssn_ingest",
+            "description": "Block SSN references during ingestion",
+            "trigger": "on_ingest",
+            "condition": { "type": "content_matches_regex", "pattern": "\\bSSN\\b" },
+            "action": { "type": "block", "reason": "SSN data not allowed in memory" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Try to ingest an episode with SSN content — should be blocked
+    let ep_url = format!("/api/v1/sessions/{}/episodes", session_id);
+    let (status, body) = json_request_with_header(
+        &app, "POST", &ep_url,
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "type": "message",
+            "content": "My SSN is 123-45-6789, please remember it.",
+            "role": "user",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "SSN content should be blocked: {:?}", body);
+    let msg = body["error"]["message"].as_str().unwrap_or("");
+    assert!(msg.contains("Guardrail blocked"), "Error should mention guardrail: {}", msg);
+
+    // Ingest an episode WITHOUT SSN — should succeed
+    let (status, _) = json_request_with_header(
+        &app, "POST", &ep_url,
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "type": "message",
+            "content": "I like coffee.",
+            "role": "user",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED, "safe content should be accepted");
+}
+
+// =============================================================================
+// GR-03: Guardrail Read-Path Enforcement (Context Retrieval)
+// =============================================================================
+
+// ---- GR-03a: Redact rule removes matching facts from context ----
+
+#[tokio::test]
+async fn gr03a_redact_rule_removes_matching_facts() {
+    let (app, store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    use mnemo_core::models::classification::Classification;
+
+    let user_name = format!("gr03a_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
+
+    // Create entities + edges (one salary edge, one normal edge)
+    let ep_id = Uuid::from_u128(300);
+    let person = Entity::from_extraction(
+        &ExtractedEntity { name: "Alice".into(), entity_type: EntityType::Person, summary: Some("An employee".into()), classification: Classification::Internal },
+        user_id, ep_id,
+    );
+    let person = store.create_entity(person).await.unwrap();
+
+    let company = Entity::from_extraction(
+        &ExtractedEntity { name: "Acme Corp".into(), entity_type: EntityType::Organization, summary: Some("A company".into()), classification: Classification::Internal },
+        user_id, ep_id,
+    );
+    let company = store.create_entity(company).await.unwrap();
+
+    let now = chrono::Utc::now();
+    let salary_edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "Alice".into(), target_name: "Acme Corp".into(), label: "salary_at".into(),
+            fact: "Alice earns $150k at Acme Corp".into(), confidence: 0.9,
+            valid_at: None, classification: Classification::Internal,
+        },
+        user_id, person.id, company.id, ep_id, now,
+    );
+    store.create_edge(salary_edge).await.unwrap();
+
+    let works_edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "Alice".into(), target_name: "Acme Corp".into(), label: "works_at".into(),
+            fact: "Alice works at Acme Corp".into(), confidence: 0.9,
+            valid_at: None, classification: Classification::Internal,
+        },
+        user_id, person.id, company.id, ep_id, now,
+    );
+    store.create_edge(works_edge).await.unwrap();
+
+    // Create a guardrail that redacts salary-labeled edges on retrieval
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "redact_salary",
+            "description": "Redact salary facts from context",
+            "trigger": "on_retrieval",
+            "condition": { "type": "edge_label_in", "labels": ["salary_at"] },
+            "action": { "type": "redact" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Request context
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "query": "Tell me about Alice" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
+
+    // Salary facts should be redacted
+    let empty_arr = vec![];
+    let facts = body["facts"].as_array().unwrap_or(&empty_arr);
+    for fact in facts {
+        let label = fact["label"].as_str().unwrap_or("");
+        assert_ne!(label, "salary_at", "Salary fact should be redacted by guardrail");
+    }
+}
+
+// ---- GR-03b: Warn rule adds warnings to context response ----
+
+#[tokio::test]
+async fn gr03b_warn_rule_adds_warnings_to_response() {
+    let (app, store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    use mnemo_core::models::classification::Classification;
+
+    let user_name = format!("gr03b_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
+
+    // Create an entity + edge with confidential classification
+    let ep_id = Uuid::from_u128(301);
+    let entity = Entity::from_extraction(
+        &ExtractedEntity { name: "HR Records".into(), entity_type: EntityType::Concept, summary: Some("HR data".into()), classification: Classification::Confidential },
+        user_id, ep_id,
+    );
+    let entity = store.create_entity(entity).await.unwrap();
+    let target = Entity::from_extraction(
+        &ExtractedEntity { name: "Sensitive Data".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Confidential },
+        user_id, ep_id,
+    );
+    let target = store.create_entity(target).await.unwrap();
+
+    let now = chrono::Utc::now();
+    let edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "HR Records".into(), target_name: "Sensitive Data".into(), label: "contains".into(),
+            fact: "HR Records contains Sensitive Data".into(), confidence: 0.9,
+            valid_at: None, classification: Classification::Confidential,
+        },
+        user_id, entity.id, target.id, ep_id, now,
+    );
+    store.create_edge(edge).await.unwrap();
+
+    // Create a guardrail that warns on confidential data access
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "warn_confidential_access",
+            "description": "Warn when accessing confidential data",
+            "trigger": "on_retrieval",
+            "condition": { "type": "classification_above", "classification": "internal" },
+            "action": { "type": "warn", "message": "Accessing confidential data" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Request context
+    let (status, body) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "query": "Tell me about HR records" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
+
+    // Check for warnings in response
+    let warnings = body["guardrail_warnings"].as_array();
+    assert!(warnings.is_some(), "guardrail_warnings should be present: {:?}", body);
+    let warnings = warnings.unwrap();
+    assert!(!warnings.is_empty(), "Should have at least one warning");
+    let first_warning = warnings[0].as_str().unwrap();
+    assert!(first_warning.contains("confidential"), "Warning should mention confidential: {}", first_warning);
+}
+
+// =============================================================================
+// GR-04: Dry-Run Evaluate Endpoint
+// =============================================================================
+
+// ---- GR-04a: Dry-run returns rule evaluation results ----
+
+#[tokio::test]
+async fn gr04a_dryrun_evaluate_returns_results() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create a block rule
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "dryrun_block_test",
+            "description": "Block test for dry-run",
+            "trigger": "on_ingest",
+            "condition": { "type": "content_matches_regex", "pattern": "\\bpassword\\b" },
+            "action": { "type": "block", "reason": "password content blocked" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Dry-run with matching content
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "trigger": "on_ingest",
+            "content": "My password is secret123",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "evaluate failed: {:?}", body);
+    assert!(body["blocked"].as_bool().unwrap(), "Should be blocked");
+    assert_eq!(body["block_reason"].as_str().unwrap(), "password content blocked");
+
+    // Dry-run with non-matching content
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "trigger": "on_ingest",
+            "content": "I like coffee",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "evaluate failed: {:?}", body);
+    assert!(!body["blocked"].as_bool().unwrap(), "Should not be blocked");
+}
+
+// =============================================================================
+// GR-05: Condition Combinators
+// =============================================================================
+
+// ---- GR-05a: AND combinator blocks only when all conditions match ----
+
+#[tokio::test]
+async fn gr05a_and_combinator_blocks_when_all_match() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create user + session
+    let user_name = format!("gr05a_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, session_body) = json_request_with_header(
+        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "user_id": user_body["id"], "name": "and-test" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session_body["id"].as_str().unwrap();
+
+    // Create rule: block only if content matches BOTH "credit" AND "card"
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "and_combo_test",
+            "description": "Block credit card data",
+            "trigger": "on_ingest",
+            "condition": {
+                "type": "and",
+                "conditions": [
+                    { "type": "content_matches_regex", "pattern": "\\bcredit\\b" },
+                    { "type": "content_matches_regex", "pattern": "\\bcard\\b" },
+                ]
+            },
+            "action": { "type": "block", "reason": "credit card data not allowed" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // "credit card" → blocked
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/sessions/{}/episodes", session_id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "type": "message", "content": "My credit card number is 4111", "role": "user" }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "credit card should be blocked");
+
+    // "credit score" → NOT blocked (only matches one condition)
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/sessions/{}/episodes", session_id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "type": "message", "content": "My credit score is 750", "role": "user" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED, "credit score should pass AND combinator");
+}
+
+// ---- GR-05b: OR combinator blocks when any condition matches ----
+
+#[tokio::test]
+async fn gr05b_or_combinator_blocks_when_any_matches() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    let user_name = format!("gr05b_user_{}", Uuid::now_v7());
+    let (status, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "name": user_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, session_body) = json_request_with_header(
+        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "user_id": user_body["id"], "name": "or-test" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let session_id = session_body["id"].as_str().unwrap();
+
+    // Create rule: block if content matches SSN OR passport
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "or_combo_test",
+            "description": "Block any ID documents",
+            "trigger": "on_ingest",
+            "condition": {
+                "type": "or",
+                "conditions": [
+                    { "type": "content_matches_regex", "pattern": "\\bSSN\\b" },
+                    { "type": "content_matches_regex", "pattern": "\\bpassport\\b" },
+                ]
+            },
+            "action": { "type": "block", "reason": "ID document data not allowed" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // SSN → blocked
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/sessions/{}/episodes", session_id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "type": "message", "content": "My SSN is 123-45-6789", "role": "user" }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "SSN should be blocked");
+
+    // passport → blocked
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/sessions/{}/episodes", session_id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "type": "message", "content": "My passport number is AB123456", "role": "user" }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "passport should be blocked");
+
+    // safe content → not blocked
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/sessions/{}/episodes", session_id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "type": "message", "content": "I like hiking", "role": "user" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED, "safe content should pass");
+}
+
+// ---- GR-05c: NOT combinator inverts condition ----
+
+#[tokio::test]
+async fn gr05c_not_combinator_inverts_condition() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create a rule that blocks everything EXCEPT content matching "approved"
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "not_combo_test",
+            "description": "Block anything not approved",
+            "trigger": "on_ingest",
+            "condition": {
+                "type": "not",
+                "condition": { "type": "content_matches_regex", "pattern": "\\bapproved\\b" }
+            },
+            "action": { "type": "block", "reason": "Only approved content allowed" },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Dry-run: "this is approved content" → NOT blocked
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "trigger": "on_ingest",
+            "content": "This is approved content",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body["blocked"].as_bool().unwrap(), "Approved content should not be blocked");
+
+    // Dry-run: "random text" → blocked
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "trigger": "on_ingest",
+            "content": "random text without keyword",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["blocked"].as_bool().unwrap(), "Unapproved content should be blocked");
+}
+
+// =============================================================================
+// GR-06: Priority Ordering + Disabled Rules
+// =============================================================================
+
+// ---- GR-06a: Lower priority rule fires first ----
+
+#[tokio::test]
+async fn gr06a_lower_priority_fires_first() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create two rules with different priorities
+    // Priority 5 → block with "first"
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "priority_high",
+            "description": "Higher priority",
+            "trigger": "on_ingest",
+            "condition": { "type": "content_matches_regex", "pattern": "\\btest\\b" },
+            "action": { "type": "block", "reason": "blocked by priority 5" },
+            "priority": 5,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Priority 20 → block with "second"
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "priority_low",
+            "description": "Lower priority",
+            "trigger": "on_ingest",
+            "condition": { "type": "content_matches_regex", "pattern": "\\btest\\b" },
+            "action": { "type": "block", "reason": "blocked by priority 20" },
+            "priority": 20,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Dry-run: the block reason should come from the priority 5 rule
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "trigger": "on_ingest",
+            "content": "this is a test",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["blocked"].as_bool().unwrap());
+    assert_eq!(body["block_reason"].as_str().unwrap(), "blocked by priority 5");
+}
+
+// ---- GR-06b: Disabled rule does not fire ----
+
+#[tokio::test]
+async fn gr06b_disabled_rule_does_not_fire() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create a disabled block rule
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "disabled_block",
+            "description": "Disabled rule",
+            "trigger": "on_ingest",
+            "condition": { "type": "content_matches_regex", "pattern": "\\beverything\\b" },
+            "action": { "type": "block", "reason": "should not fire" },
+            "enabled": false,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Dry-run: should NOT be blocked
+    let (status, body) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "trigger": "on_ingest",
+            "content": "everything is fine",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body["blocked"].as_bool().unwrap(), "Disabled rule should not block");
+}
+
+// =============================================================================
+// GR-07: Scope Isolation
+// =============================================================================
+
+// ---- GR-07a: User-scoped rule only applies to that user ----
+
+#[tokio::test]
+async fn gr07a_user_scoped_rule_only_applies_to_that_user() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
+
+    // Create two users
+    let user1_name = format!("gr07a_user1_{}", Uuid::now_v7());
+    let (status, user1_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "name": user1_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user1_id = user1_body["id"].as_str().unwrap();
+
+    let user2_name = format!("gr07a_user2_{}", Uuid::now_v7());
+    let (status, user2_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "name": user2_name }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let user2_id = user2_body["id"].as_str().unwrap();
+
+    // Create sessions for both
+    let (status, sess1_body) = json_request_with_header(
+        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "user_id": user1_id, "name": "sess1" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let sess1_id = sess1_body["id"].as_str().unwrap();
+
+    let (status, sess2_body) = json_request_with_header(
+        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "user_id": user2_id, "name": "sess2" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let sess2_id = sess2_body["id"].as_str().unwrap();
+
+    // Create a user-scoped guardrail: block "forbidden" only for user1
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        serde_json::json!({
+            "name": "user1_block",
+            "description": "Block forbidden for user1 only",
+            "trigger": "on_ingest",
+            "condition": { "type": "content_matches_regex", "pattern": "\\bforbidden\\b" },
+            "action": { "type": "block", "reason": "forbidden for user1" },
+            "scope": { "type": "user", "user_id": user1_id },
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // User1: "forbidden content" → blocked
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/sessions/{}/episodes", sess1_id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "type": "message", "content": "This is forbidden content", "role": "user" }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "user1 should be blocked");
+
+    // User2: "forbidden content" → NOT blocked (rule is user1-scoped)
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/sessions/{}/episodes", sess2_id),
+        "authorization", "Bearer gr-admin-key",
+        serde_json::json!({ "type": "message", "content": "This is forbidden content", "role": "user" }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED, "user2 should not be blocked by user1-scoped rule");
+}

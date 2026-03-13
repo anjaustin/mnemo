@@ -18,6 +18,7 @@ use mnemo_core::models::{
     edge::{Edge, EdgeFilter},
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams, ProcessingStatus},
+    guardrail::GuardrailRule,
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     span::LlmSpan,
     user::{CreateUserRequest, UpdateUserRequest, User},
@@ -2209,6 +2210,136 @@ impl ViewStore for RedisStateStore {
             .query_async::<()>(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        self.del(&pk).await
+    }
+}
+
+// ─── Guardrail Store ───────────────────────────────────────────────
+
+impl GuardrailStore for RedisStateStore {
+    async fn save_guardrail(&self, rule: &GuardrailRule) -> StorageResult<()> {
+        let pk = self.key(&["guardrail", &rule.id.to_string()]);
+        self.set_json(&pk, rule).await?;
+
+        // Global sorted set (score = priority for ordering)
+        let idx = self.key(&["guardrails"]);
+        let score = rule.priority as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&idx)
+            .arg(score)
+            .arg(&pk)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Per-user sorted set (if user-scoped)
+        if let mnemo_core::models::guardrail::GuardrailScope::User { user_id } = &rule.scope {
+            let user_idx = self.key(&["guardrails_user", &user_id.to_string()]);
+            let mut conn = self.conn.clone();
+            redis::cmd("ZADD")
+                .arg(&user_idx)
+                .arg(score)
+                .arg(&pk)
+                .query_async::<()>(&mut conn)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    async fn get_guardrail(&self, id: Uuid) -> StorageResult<Option<GuardrailRule>> {
+        let pk = self.key(&["guardrail", &id.to_string()]);
+        self.get_json::<GuardrailRule>(&pk).await
+    }
+
+    async fn list_guardrails(&self) -> StorageResult<Vec<GuardrailRule>> {
+        let idx = self.key(&["guardrails"]);
+        let mut conn = self.conn.clone();
+        let keys: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(&idx)
+            .arg("-inf")
+            .arg("+inf")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut rules = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(r) = self.get_json::<GuardrailRule>(&key).await? {
+                rules.push(r);
+            }
+        }
+        // Sort by priority (ZADD score = priority, but be defensive)
+        rules.sort_by_key(|r| r.priority);
+        Ok(rules)
+    }
+
+    async fn list_guardrails_for_user(&self, user_id: Uuid) -> StorageResult<Vec<GuardrailRule>> {
+        // Load all rules and filter to global + matching user scope
+        let all = self.list_guardrails().await?;
+        let mut applicable: Vec<GuardrailRule> = all
+            .into_iter()
+            .filter(|r| match &r.scope {
+                mnemo_core::models::guardrail::GuardrailScope::Global => true,
+                mnemo_core::models::guardrail::GuardrailScope::User { user_id: uid } => {
+                    *uid == user_id
+                }
+            })
+            .collect();
+        applicable.sort_by_key(|r| r.priority);
+        Ok(applicable)
+    }
+
+    async fn update_guardrail(&self, rule: &GuardrailRule) -> StorageResult<()> {
+        // Overwrite the JSON document
+        let pk = self.key(&["guardrail", &rule.id.to_string()]);
+        self.set_json(&pk, rule).await?;
+
+        // Update score in global sorted set (priority may have changed)
+        let idx = self.key(&["guardrails"]);
+        let score = rule.priority as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&idx)
+            .arg(score)
+            .arg(&pk)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn delete_guardrail(&self, id: Uuid) -> StorageResult<()> {
+        let pk = self.key(&["guardrail", &id.to_string()]);
+
+        // Try to read the rule first so we can clean up user-scoped index
+        if let Some(rule) = self.get_json::<GuardrailRule>(&pk).await? {
+            if let mnemo_core::models::guardrail::GuardrailScope::User { user_id } = &rule.scope {
+                let user_idx = self.key(&["guardrails_user", &user_id.to_string()]);
+                let mut conn = self.conn.clone();
+                redis::cmd("ZREM")
+                    .arg(&user_idx)
+                    .arg(&pk)
+                    .query_async::<()>(&mut conn)
+                    .await
+                    .map_err(|e| MnemoError::Redis(e.to_string()))?;
+            }
+        }
+
+        // Remove from global index
+        let idx = self.key(&["guardrails"]);
+        let mut conn = self.conn.clone();
+        redis::cmd("ZREM")
+            .arg(&idx)
+            .arg(&pk)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Delete the JSON document
         self.del(&pk).await
     }
 }

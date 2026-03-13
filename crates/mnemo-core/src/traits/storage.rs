@@ -10,6 +10,7 @@ use crate::models::{
     },
     api_key::ApiKey,
     digest::MemoryDigest,
+    guardrail::GuardrailRule,
     view::MemoryView,
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -546,6 +547,34 @@ pub trait ViewStore: Send + Sync {
     async fn delete_view(&self, name: &str) -> StorageResult<()>;
 }
 
+// ─── Guardrail Storage ─────────────────────────────────────────────
+
+/// Persistence for declarative guardrail rules.
+///
+/// Rules are stored by UUID.  Two sorted sets index rules:
+/// - A global set for all rules (for listing / loading)
+/// - Per-user sets for user-scoped rules (for fast lookup during evaluation)
+#[allow(async_fn_in_trait)]
+pub trait GuardrailStore: Send + Sync {
+    /// Persist a new or updated guardrail rule.
+    async fn save_guardrail(&self, rule: &GuardrailRule) -> StorageResult<()>;
+
+    /// Get a rule by ID.
+    async fn get_guardrail(&self, id: Uuid) -> StorageResult<Option<GuardrailRule>>;
+
+    /// List all rules, ordered by priority ascending.
+    async fn list_guardrails(&self) -> StorageResult<Vec<GuardrailRule>>;
+
+    /// List rules for a specific user (user-scoped + global), ordered by priority.
+    async fn list_guardrails_for_user(&self, user_id: Uuid) -> StorageResult<Vec<GuardrailRule>>;
+
+    /// Update a rule.
+    async fn update_guardrail(&self, rule: &GuardrailRule) -> StorageResult<()>;
+
+    /// Delete a rule by ID.
+    async fn delete_guardrail(&self, id: Uuid) -> StorageResult<()>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -564,6 +593,7 @@ pub trait StateStore:
     + GoalStore
     + ApiKeyStore
     + ViewStore
+    + GuardrailStore
 {
 }
 
@@ -582,6 +612,7 @@ impl<T> StateStore for T where
         + GoalStore
         + ApiKeyStore
         + ViewStore
+        + GuardrailStore
 {
 }
 
