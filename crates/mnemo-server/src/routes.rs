@@ -47,7 +47,7 @@ use mnemo_core::models::guardrail::{
 };
 use mnemo_core::models::region::{
     CreateRegionRequest, GrantRegionAccessRequest, MemoryRegion, MemoryRegionAcl,
-    UpdateRegionRequest, validate_region_name,
+    UpdateRegionRequest, validate_agent_id, validate_region_name,
 };
 use mnemo_core::models::view::{CreateViewRequest, ViewConstraints};
 use mnemo_core::traits::storage::{
@@ -8906,11 +8906,21 @@ async fn create_region(
     caller.require_role(ApiKeyRole::Write)?;
 
     validate_region_name(&req.name).map_err(|e| AppError(MnemoError::Validation(e)))?;
+    validate_agent_id(&req.owner_agent_id)
+        .map_err(|e| AppError(MnemoError::Validation(format!("owner_agent_id: {e}"))))?;
+
+    // Verify user exists
+    state.state_store.get_user(req.user_id).await.map_err(|_| {
+        AppError(MnemoError::NotFound {
+            resource_type: "User".into(),
+            id: req.user_id.to_string(),
+        })
+    })?;
 
     let region = MemoryRegion {
         id: Uuid::now_v7(),
         name: req.name.trim().to_string(),
-        owner_agent_id: req.owner_agent_id.clone(),
+        owner_agent_id: req.owner_agent_id.trim().to_string(),
         user_id: req.user_id,
         entity_filter: req.entity_filter,
         edge_filter: req.edge_filter,
@@ -8944,8 +8954,12 @@ struct ListRegionsQuery {
 
 async fn list_regions(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Query(params): Query<ListRegionsQuery>,
 ) -> Result<Json<Vec<MemoryRegion>>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Read)?;
+
     let regions = state
         .state_store
         .list_regions(params.agent_id.as_deref())
@@ -8955,8 +8969,12 @@ async fn list_regions(
 
 async fn get_region(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(region_id): Path<Uuid>,
 ) -> Result<Json<MemoryRegion>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Read)?;
+
     let region = state
         .state_store
         .get_region(region_id)
@@ -8989,6 +9007,11 @@ async fn update_region(
                 id: region_id.to_string(),
             })
         })?;
+
+    // Only the region owner (or Admin) may update
+    if caller.role != ApiKeyRole::Admin && caller.key_name != region.owner_agent_id {
+        return Err(AppError(MnemoError::Forbidden));
+    }
 
     if let Some(name) = req.name {
         validate_region_name(&name).map_err(|e| AppError(MnemoError::Validation(e)))?;
@@ -9040,6 +9063,10 @@ async fn grant_region_access(
     let caller = caller_from_extension(caller);
     caller.require_role(ApiKeyRole::Write)?;
 
+    // Validate agent_id format
+    validate_agent_id(&req.agent_id)
+        .map_err(|e| AppError(MnemoError::Validation(format!("agent_id: {e}"))))?;
+
     // Verify region exists
     let region = state
         .state_store
@@ -9052,15 +9079,13 @@ async fn grant_region_access(
             })
         })?;
 
-    // Validate agent_id is not empty
-    if req.agent_id.trim().is_empty() {
-        return Err(AppError(MnemoError::Validation(
-            "agent_id is required".into(),
-        )));
+    // Only the region owner (or Admin) may grant access
+    if caller.role != ApiKeyRole::Admin && caller.key_name != region.owner_agent_id {
+        return Err(AppError(MnemoError::Forbidden));
     }
 
     // Cannot grant access to the owner (they already have implicit Manage)
-    if req.agent_id == region.owner_agent_id {
+    if req.agent_id.trim() == region.owner_agent_id {
         return Err(AppError(MnemoError::Validation(
             "cannot grant explicit access to the region owner".into(),
         )));
@@ -9068,7 +9093,7 @@ async fn grant_region_access(
 
     let acl = MemoryRegionAcl {
         region_id,
-        agent_id: req.agent_id.clone(),
+        agent_id: req.agent_id.trim().to_string(),
         permission: req.permission,
         granted_by: caller.key_name.clone(),
         granted_at: chrono::Utc::now(),
@@ -9096,8 +9121,12 @@ async fn grant_region_access(
 
 async fn list_region_acls(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(region_id): Path<Uuid>,
 ) -> Result<Json<Vec<MemoryRegionAcl>>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Read)?;
+
     // Verify region exists
     state
         .state_store
@@ -9111,7 +9140,9 @@ async fn list_region_acls(
         })?;
 
     let acls = state.state_store.list_region_acls(region_id).await?;
-    Ok(Json(acls))
+    // Filter out expired ACLs — consumers should not see stale entries
+    let active: Vec<MemoryRegionAcl> = acls.into_iter().filter(|a| !a.is_expired()).collect();
+    Ok(Json(active))
 }
 
 async fn revoke_region_access(
@@ -9133,6 +9164,11 @@ async fn revoke_region_access(
                 id: region_id.to_string(),
             })
         })?;
+
+    // Only the region owner (or Admin) may revoke access
+    if caller.role != ApiKeyRole::Admin && caller.key_name != region.owner_agent_id {
+        return Err(AppError(MnemoError::Forbidden));
+    }
 
     state
         .state_store

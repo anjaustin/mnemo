@@ -166,6 +166,32 @@ pub struct GrantRegionAccessRequest {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// Validate an agent ID used in region operations.
+/// Same rules as fork agent IDs: 1-128 ASCII alphanumeric plus `-`, `_`, `.`.
+/// Rejects colons, slashes, path traversal, control chars, whitespace.
+pub fn validate_agent_id(id: &str) -> Result<(), String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err("agent_id must not be empty".into());
+    }
+    if trimmed.len() > 128 {
+        return Err("agent_id must be <= 128 characters".into());
+    }
+    if trimmed.contains(':') || trimmed.contains('/') || trimmed.contains("..") {
+        return Err("agent_id must not contain ':', '/', or '..'".into());
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(
+            "agent_id must contain only alphanumeric characters, hyphens, underscores, or dots"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Validate a region name: 1-128 chars, no control characters.
 pub fn validate_region_name(name: &str) -> Result<(), String> {
     let trimmed = name.trim();
@@ -572,5 +598,61 @@ mod tests {
         let region: MemoryRegion = serde_json::from_value(json).unwrap();
         assert!(region.entity_filter.is_none());
         assert!(region.edge_filter.is_none());
+    }
+
+    // ─── validate_agent_id tests ──────────────────────────────────
+
+    #[test]
+    fn test_validate_agent_id_valid() {
+        assert!(validate_agent_id("support-bot").is_ok());
+        assert!(validate_agent_id("bot_v2").is_ok());
+        assert!(validate_agent_id("sales.bot.v3").is_ok());
+        assert!(validate_agent_id("a").is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_id_empty() {
+        assert!(validate_agent_id("").is_err());
+        assert!(validate_agent_id("   ").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_id_too_long() {
+        let long = "a".repeat(129);
+        assert!(validate_agent_id(&long).is_err());
+        assert!(validate_agent_id(&"a".repeat(128)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_id_colon_rejected() {
+        assert!(validate_agent_id("bot:fork").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_id_slash_rejected() {
+        assert!(validate_agent_id("bot/fork").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_id_path_traversal_rejected() {
+        assert!(validate_agent_id("..bot").is_err());
+        assert!(validate_agent_id("bot../etc").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_id_null_bytes_rejected() {
+        assert!(validate_agent_id("bot\0hidden").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_id_whitespace_rejected() {
+        assert!(validate_agent_id("bot name").is_err());
+        assert!(validate_agent_id("bot\tname").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_id_unicode_rejected() {
+        assert!(validate_agent_id("böt").is_err());
+        assert!(validate_agent_id("bot🤖").is_err());
     }
 }

@@ -2401,26 +2401,9 @@ impl RegionStore for RedisStateStore {
     async fn list_regions(&self, agent_id: Option<&str>) -> StorageResult<Vec<MemoryRegion>> {
         match agent_id {
             Some(aid) => {
-                // Return regions the agent owns OR has ACL access to
-                let owner_idx = self.key(&["agent_regions", aid]);
-                let mut conn = self.conn.clone();
-                let ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
-                    .arg(&owner_idx)
-                    .arg("-inf")
-                    .arg("+inf")
-                    .query_async(&mut conn)
-                    .await
-                    .map_err(|e| MnemoError::Redis(e.to_string()))?;
-
-                let mut regions = Vec::new();
-                for id_str in &ids {
-                    if let Ok(id) = id_str.parse::<Uuid>() {
-                        if let Some(r) = self.get_region(id).await? {
-                            regions.push(r);
-                        }
-                    }
-                }
-                Ok(regions)
+                // Delegate to list_agent_accessible_regions which properly
+                // checks ACL expiry and ownership
+                self.list_agent_accessible_regions(aid).await
             }
             None => {
                 // Return all regions

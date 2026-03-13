@@ -12451,3 +12451,487 @@ async fn f6_upsert_acl_replaces_permission() {
     assert_eq!(acls.as_array().unwrap().len(), 1);
     assert_eq!(acls[0]["permission"], "write");
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Feature 6 — Red-team / Adversarial Tests
+// ═══════════════════════════════════════════════════════════════════
+
+/// Helper: create a user using an authed app
+async fn create_test_user_authed(
+    app: &axum::Router,
+    admin_key: &str,
+    external_id: &str,
+) -> String {
+    let (status, body) = json_request_with_header(
+        app, "POST", "/api/v1/users",
+        "authorization", &format!("Bearer {admin_key}"),
+        serde_json::json!({"external_id": external_id, "name": external_id}),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED, "create user failed: {body:?}");
+    body["id"].as_str().unwrap().to_string()
+}
+
+/// Helper: create a write key with a specific name (used as owner identity)
+async fn create_named_write_key(
+    app: &axum::Router,
+    admin_key: &str,
+    name: &str,
+) -> String {
+    let (status, body) = json_request_with_header(
+        app, "POST", "/api/v1/keys",
+        "authorization", &format!("Bearer {admin_key}"),
+        serde_json::json!({"name": name, "role": "write"}),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED, "create key failed: {body:?}");
+    body["raw_key"].as_str().unwrap().to_string()
+}
+
+/// Helper: create a read key
+async fn create_read_key(
+    app: &axum::Router,
+    admin_key: &str,
+    name: &str,
+) -> String {
+    let (status, body) = json_request_with_header(
+        app, "POST", "/api/v1/keys",
+        "authorization", &format!("Bearer {admin_key}"),
+        serde_json::json!({"name": name, "role": "read"}),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED, "create key failed: {body:?}");
+    body["raw_key"].as_str().unwrap().to_string()
+}
+
+// RT-01: Read key cannot create regions
+#[tokio::test]
+async fn f6_rt_read_key_cannot_create_region() {
+    let (app, _store, admin_key) =
+        build_authed_test_app_with_store(vec!["rt-admin-01".to_string()]).await;
+    let read_key = create_read_key(&app, &admin_key, "read-agent").await;
+    let user_id = create_test_user_authed(&app, &admin_key, "rt-user-01").await;
+
+    let (status, _) = json_request_with_header(
+        &app, "POST", "/api/v1/regions",
+        "authorization", &format!("Bearer {read_key}"),
+        serde_json::json!({
+            "name": "stolen_region",
+            "owner_agent_id": "read-agent",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+// RT-02: Read key cannot grant ACLs
+#[tokio::test]
+async fn f6_rt_read_key_cannot_grant_acl() {
+    let (app, _store, admin_key) =
+        build_authed_test_app_with_store(vec!["rt-admin-02".to_string()]).await;
+    let read_key = create_read_key(&app, &admin_key, "read-agent").await;
+    let user_id = create_test_user_authed(&app, &admin_key, "rt-user-02").await;
+
+    // Admin creates a region
+    let (_, region) = json_request_with_header(
+        &app, "POST", "/api/v1/regions",
+        "authorization", &format!("Bearer {admin_key}"),
+        serde_json::json!({
+            "name": "protected_region",
+            "owner_agent_id": "rt-admin-02",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = region["id"].as_str().unwrap();
+
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization", &format!("Bearer {read_key}"),
+        serde_json::json!({"agent_id": "evil-bot", "permission": "manage"}),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+// RT-03: Non-owner write key cannot grant ACLs on someone else's region
+#[tokio::test]
+async fn f6_rt_nonowner_cannot_grant_acl() {
+    let (app, _store, admin_key) =
+        build_authed_test_app_with_store(vec!["rt-admin-03".to_string()]).await;
+    let owner_key = create_named_write_key(&app, &admin_key, "owner-bot").await;
+    let attacker_key = create_named_write_key(&app, &admin_key, "attacker-bot").await;
+    let user_id = create_test_user_authed(&app, &admin_key, "rt-user-03").await;
+
+    // Owner creates a region
+    let (status, region) = json_request_with_header(
+        &app, "POST", "/api/v1/regions",
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({
+            "name": "owners_region",
+            "owner_agent_id": "owner-bot",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let region_id = region["id"].as_str().unwrap();
+
+    // Attacker tries to grant themselves access
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization", &format!("Bearer {attacker_key}"),
+        serde_json::json!({"agent_id": "attacker-bot", "permission": "manage"}),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "non-owner should not be able to grant ACLs");
+}
+
+// RT-04: Non-owner write key cannot revoke ACLs
+#[tokio::test]
+async fn f6_rt_nonowner_cannot_revoke_acl() {
+    let (app, _store, admin_key) =
+        build_authed_test_app_with_store(vec!["rt-admin-04".to_string()]).await;
+    let owner_key = create_named_write_key(&app, &admin_key, "owner-bot-04").await;
+    let attacker_key = create_named_write_key(&app, &admin_key, "attacker-bot-04").await;
+    let user_id = create_test_user_authed(&app, &admin_key, "rt-user-04").await;
+
+    // Owner creates region and grants access to a legit agent
+    let (_, region) = json_request_with_header(
+        &app, "POST", "/api/v1/regions",
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({
+            "name": "owners_region_04",
+            "owner_agent_id": "owner-bot-04",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = region["id"].as_str().unwrap();
+
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({"agent_id": "legit-agent", "permission": "read"}),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Attacker tries to revoke legit agent's access
+    let (status, _) = json_request_with_header(
+        &app, "DELETE", &format!("/api/v1/regions/{region_id}/acl/legit-agent"),
+        "authorization", &format!("Bearer {attacker_key}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "non-owner should not be able to revoke ACLs");
+}
+
+// RT-05: Non-owner write key cannot update a region
+#[tokio::test]
+async fn f6_rt_nonowner_cannot_update_region() {
+    let (app, _store, admin_key) =
+        build_authed_test_app_with_store(vec!["rt-admin-05".to_string()]).await;
+    let owner_key = create_named_write_key(&app, &admin_key, "owner-bot-05").await;
+    let attacker_key = create_named_write_key(&app, &admin_key, "attacker-bot-05").await;
+    let user_id = create_test_user_authed(&app, &admin_key, "rt-user-05").await;
+
+    let (_, region) = json_request_with_header(
+        &app, "POST", "/api/v1/regions",
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({
+            "name": "immutable_region",
+            "owner_agent_id": "owner-bot-05",
+            "user_id": user_id,
+            "classification_ceiling": "confidential",
+        }),
+    ).await;
+    let region_id = region["id"].as_str().unwrap();
+
+    // Attacker tries to widen classification ceiling
+    let (status, _) = json_request_with_header(
+        &app, "PUT", &format!("/api/v1/regions/{region_id}"),
+        "authorization", &format!("Bearer {attacker_key}"),
+        serde_json::json!({"classification_ceiling": "restricted"}),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "non-owner should not be able to update region");
+}
+
+// RT-06: Owner CAN grant, update, and revoke on their own region
+#[tokio::test]
+async fn f6_rt_owner_can_manage_own_region() {
+    let (app, _store, admin_key) =
+        build_authed_test_app_with_store(vec!["rt-admin-06".to_string()]).await;
+    let owner_key = create_named_write_key(&app, &admin_key, "owner-bot-06").await;
+    let user_id = create_test_user_authed(&app, &admin_key, "rt-user-06").await;
+
+    let (status, region) = json_request_with_header(
+        &app, "POST", "/api/v1/regions",
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({
+            "name": "managed_region",
+            "owner_agent_id": "owner-bot-06",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let region_id = region["id"].as_str().unwrap();
+
+    // Owner grants access
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({"agent_id": "helper-bot", "permission": "write"}),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Owner updates region
+    let (status, _) = json_request_with_header(
+        &app, "PUT", &format!("/api/v1/regions/{region_id}"),
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({"name": "renamed_region"}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Owner revokes access
+    let (status, _) = json_request_with_header(
+        &app, "DELETE", &format!("/api/v1/regions/{region_id}/acl/helper-bot"),
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+// RT-07: Admin can grant/revoke even on non-owned regions
+#[tokio::test]
+async fn f6_rt_admin_can_manage_any_region() {
+    let (app, _store, admin_key) =
+        build_authed_test_app_with_store(vec!["rt-admin-07".to_string()]).await;
+    let owner_key = create_named_write_key(&app, &admin_key, "owner-bot-07").await;
+    let user_id = create_test_user_authed(&app, &admin_key, "rt-user-07").await;
+
+    let (_, region) = json_request_with_header(
+        &app, "POST", "/api/v1/regions",
+        "authorization", &format!("Bearer {owner_key}"),
+        serde_json::json!({
+            "name": "any_region",
+            "owner_agent_id": "owner-bot-07",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = region["id"].as_str().unwrap();
+
+    // Admin grants access on someone else's region
+    let (status, _) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization", &format!("Bearer {admin_key}"),
+        serde_json::json!({"agent_id": "admin-agent", "permission": "manage"}),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Admin revokes
+    let (status, _) = json_request_with_header(
+        &app, "DELETE", &format!("/api/v1/regions/{region_id}/acl/admin-agent"),
+        "authorization", &format!("Bearer {admin_key}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+// RT-08: Agent ID with colon (key injection) is rejected
+#[tokio::test]
+async fn f6_rt_agent_id_colon_injection_rejected() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "rt-user-08").await;
+
+    // owner_agent_id with colon
+    let (status, _) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "injection_test",
+            "owner_agent_id": "evil:agent_regions:victim",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST,
+        "colon in owner_agent_id should be rejected");
+}
+
+// RT-09: Agent ID with path traversal is rejected
+#[tokio::test]
+async fn f6_rt_agent_id_path_traversal_rejected() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "rt-user-09").await;
+
+    let (status, _) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "traversal_test",
+            "owner_agent_id": "../../../etc/passwd",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST,
+        "path traversal in owner_agent_id should be rejected");
+}
+
+// RT-10: Agent ID with null byte is rejected
+#[tokio::test]
+async fn f6_rt_agent_id_null_byte_rejected() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "rt-user-10").await;
+
+    let (status, _) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "null_test",
+            "owner_agent_id": "bot\u{0000}hidden",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST,
+        "null byte in owner_agent_id should be rejected");
+}
+
+// RT-11: Grant ACL with injected agent_id is rejected
+#[tokio::test]
+async fn f6_rt_grant_acl_agent_id_injection_rejected() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "rt-user-11").await;
+
+    let (_, region) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "acl_inject_test",
+            "owner_agent_id": "safe-bot",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = region["id"].as_str().unwrap();
+
+    let (status, _) = json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "evil:key:injection", "permission": "manage"}),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST,
+        "colon in grant agent_id should be rejected");
+}
+
+// RT-12: Create region with nonexistent user_id is rejected
+#[tokio::test]
+async fn f6_rt_create_region_nonexistent_user_rejected() {
+    let app = build_test_app().await;
+    let fake_user_id = Uuid::from_u128(999_999);
+
+    let (status, _) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "orphan_region",
+            "owner_agent_id": "some-bot",
+            "user_id": fake_user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND,
+        "creating a region for a nonexistent user should fail");
+}
+
+// RT-13: Expired ACLs are not returned by list_region_acls
+#[tokio::test]
+async fn f6_rt_expired_acls_filtered_from_list() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "rt-user-13").await;
+
+    let (_, region) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "expiry_test",
+            "owner_agent_id": "bot-owner",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = region["id"].as_str().unwrap();
+
+    // Grant with already-expired timestamp
+    let (status, _) = json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({
+            "agent_id": "temp-bot",
+            "permission": "read",
+            "expires_at": "2020-01-01T00:00:00Z",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // List should NOT include the expired ACL
+    let (status, acls) = json_request(
+        &app, "GET", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(acls.as_array().unwrap().len(), 0,
+        "expired ACLs should be filtered from listing");
+}
+
+// RT-14: Expired ACLs don't appear in list_regions(agent_id) either
+#[tokio::test]
+async fn f6_rt_expired_acl_agent_not_in_region_listing() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "rt-user-14").await;
+
+    let (_, region) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "listing_expiry_test",
+            "owner_agent_id": "bot-owner-14",
+            "user_id": user_id,
+        }),
+    ).await;
+    let _region_id = region["id"].as_str().unwrap();
+
+    // Grant with already-expired timestamp
+    let region_id = region["id"].as_str().unwrap();
+    let (status, _) = json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({
+            "agent_id": "expired-bot",
+            "permission": "write",
+            "expires_at": "2020-01-01T00:00:00Z",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // expired-bot should NOT see this region in their listing
+    let (status, regions) = json_request(
+        &app, "GET", "/api/v1/regions?agent_id=expired-bot",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(regions.as_array().unwrap().len(), 0,
+        "expired ACL should not cause region to appear in agent listing");
+}
+
+// RT-15: Empty owner_agent_id is rejected
+#[tokio::test]
+async fn f6_rt_empty_owner_agent_id_rejected() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "rt-user-15").await;
+
+    let (status, _) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "empty_owner_test",
+            "owner_agent_id": "",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST,
+        "empty owner_agent_id should be rejected");
+}
+
+// RT-16: Unicode in agent_id is rejected (prevents key encoding issues)
+#[tokio::test]
+async fn f6_rt_unicode_agent_id_rejected() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "rt-user-16").await;
+
+    let (status, _) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "unicode_test",
+            "owner_agent_id": "böt-ünïcödé",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST,
+        "unicode in owner_agent_id should be rejected");
+}
