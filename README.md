@@ -78,15 +78,38 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Semantic vector search | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
 | Knowledge graph (entity/edge API) | :green_circle: | :green_circle: | :yellow_circle: | :red_circle: |
 | Graph traversal (BFS, shortest path) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
-| Community detection | :green_circle: | :yellow_circle: | :red_circle: | :red_circle: |
-| Temporal retrieval (`as_of`, `time_intent`) | :green_circle: | :yellow_circle: | :red_circle: | :red_circle: |
+| Community detection | :green_circle: | :green_circle: | :red_circle: | :red_circle: |
+| Temporal retrieval (`as_of`, `time_intent`) | :green_circle: | :green_circle: | :yellow_circle: | :red_circle: |
 | Fact supersession / invalidation tracking | :green_circle: | :green_circle: | :yellow_circle: | :red_circle: |
 | Memory diff (`changes_since`) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | Contradiction / conflict detection | :green_circle: | :red_circle: | :green_circle: | :red_circle: |
-| Reranking (RRF + MMR) | :green_circle: | :red_circle: | :green_circle: | :red_circle: |
+| Reranking (RRF, MMR, cross-encoder) | :green_circle: | :green_circle: | :green_circle: | :red_circle: |
 | Hybrid retrieval (vector + full-text + graph) | :green_circle: | :green_circle: | :yellow_circle: | :red_circle: |
 | Context assembly with token budgeting | :green_circle: | :green_circle: | :red_circle: | :green_circle: |
 | Memory contracts (SupportSafe, CurrentStrict, etc.) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| GNN-enhanced re-ranking | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Hyperbolic geometry re-ranking | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Confidence decay + revalidation | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Cross-session narrative summaries | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Goal-conditioned retrieval | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Counterfactual ("what if") queries | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Custom ontology / entity types | :green_circle: | :green_circle: | :yellow_circle: | :red_circle: |
+| Multi-modal (images, documents) | :red_circle: | :red_circle: | :green_circle: | :red_circle: |
+
+### Agent Architecture
+
+| Feature | Mnemo | Zep | Mem0 | Letta |
+|---|:---:|:---:|:---:|:---:|
+| Agent identity core (personality versioning) | :green_circle: | :red_circle: | :red_circle: | :yellow_circle: |
+| Experience weighting (EWC++ consolidation) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Agent COW branching (A/B identity testing) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Agent fork (domain expansion) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Witness chain audit (tamper-proof) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Multi-agent communication | :red_circle: | :red_circle: | :red_circle: | :green_circle: |
+| Agent self-modification of memory | :red_circle: | :red_circle: | :red_circle: | :green_circle: |
+| Tool use / function calling | :red_circle: | :red_circle: | :red_circle: | :green_circle: |
+| Human-in-the-loop approval | :yellow_circle: | :red_circle: | :red_circle: | :green_circle: |
+| Shared memory blocks (real-time) | :green_circle: | :green_circle: | :yellow_circle: | :green_circle: |
 
 ### Compute & Observability
 
@@ -95,34 +118,36 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Sleep-time / offline compute | :green_circle: | :red_circle: | :red_circle: | :green_circle: |
 | Proactive re-ranking during idle windows | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | Memory digest generation | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
-| LLM call tracing / spans | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| LLM call tracing / spans | :green_circle: | :yellow_circle: | :red_circle: | :yellow_circle: |
 | Token usage tracking per span | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | Time travel debugger (snapshot comparison) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
-| Operator dashboard | :green_circle: | :yellow_circle: | :green_circle: | :green_circle: |
+| DAG pipeline metrics | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Operator dashboard | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
+| OpenTelemetry export | :red_circle: | :yellow_circle: | :red_circle: | :green_circle: |
 
 ### Governance & Compliance
 
 | Feature | Mnemo | Zep | Mem0 | Letta |
 |---|:---:|:---:|:---:|:---:|
+| RBAC / role-based access control | :green_circle: | :green_circle: | :red_circle: | :red_circle: |
+| Data classification labels | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Policy-scoped memory views | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Memory guardrails engine | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Multi-agent shared memory regions + ACLs | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Agent promotion governance (quorum, cooling) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | Per-user retention policies | :green_circle: | :red_circle: | :yellow_circle: | :red_circle: |
 | Policy preview (dry-run impact analysis) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | Governance audit trail | :green_circle: | :green_circle: | :yellow_circle: | :red_circle: |
 | SOC 2 Type II certification | :yellow_circle: | :green_circle: | :green_circle: | :red_circle: |
 | HIPAA compliance (BAA available) | :red_circle: | :green_circle: | :red_circle: | :red_circle: |
-| RBAC / role-based access control | :green_circle: | :green_circle: | :red_circle: | :red_circle: |
-| Data classification labels | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
-| Policy-scoped memory views | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
-| Memory guardrails engine | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
-| Multi-agent shared memory regions | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
-| Agent promotion governance | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | BYOK (customer-managed encryption keys) | :red_circle: | :green_circle: | :red_circle: | :red_circle: |
 
 ### Webhooks & Events
 
 | Feature | Mnemo | Zep | Mem0 | Letta |
 |---|:---:|:---:|:---:|:---:|
-| Memory lifecycle webhooks | :green_circle: | :green_circle: | :green_circle: | :red_circle: |
-| Webhook management via API | :green_circle: | :yellow_circle: | :yellow_circle: | :red_circle: |
+| Memory lifecycle webhooks | :green_circle: | :green_circle: | :green_circle: | :yellow_circle: |
+| Webhook management via API | :green_circle: | :green_circle: | :green_circle: | :red_circle: |
 | Dead-letter queue + replay + retry | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | HMAC signature verification | :green_circle: | :green_circle: | :red_circle: | :red_circle: |
 | Circuit breaker + rate limiting | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
@@ -139,8 +164,10 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | LangChain adapter | :green_circle: | :green_circle: | :green_circle: | :red_circle: |
 | LlamaIndex adapter | :green_circle: | :red_circle: | :green_circle: | :red_circle: |
 | Vercel AI SDK adapter | :green_circle: | :red_circle: | :green_circle: | :red_circle: |
+| CrewAI / AutoGen adapter | :red_circle: | :green_circle: | :green_circle: | :red_circle: |
 | MCP server | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
-| Multi-modal (images, audio) | :red_circle: | :red_circle: | :green_circle: | :red_circle: |
+| OpenAPI spec | :red_circle: | :green_circle: | :green_circle: | :green_circle: |
+| CLI tool | :red_circle: | :green_circle: | :red_circle: | :red_circle: |
 
 ### Deployment & Operations
 
@@ -150,15 +177,30 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Docker one-line deploy | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
 | Cloud IaC templates (AWS, GCP, DO, etc.) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | Managed cloud offering | :red_circle: | :green_circle: | :green_circle: | :green_circle: |
-| Local embeddings (no API key needed) | :green_circle: | :red_circle: | :yellow_circle: | :red_circle: |
+| Local embeddings (no API key needed) | :green_circle: | :yellow_circle: | :yellow_circle: | :red_circle: |
+| Pluggable graph backends | :red_circle: | :green_circle: | :yellow_circle: | :red_circle: |
+| Pluggable vector backends | :red_circle: | :red_circle: | :green_circle: | :red_circle: |
 
 ### Honesty notes
 
 - **Mnemo SOC 2**: Technical controls are implemented and mapped to Trust Service Criteria. No formal audit has been conducted yet.
-- **Zep self-hosted**: Zep's open-source offering is [Graphiti](https://github.com/getzep/graphiti) (the graph engine). The full Zep platform is cloud-only.
-- **Mem0 graph**: Graph memory is available but returns relations as a side-channel alongside vector results, not a traversable graph API.
-- **Letta sleep-time**: Letta agents can self-modify their memory blocks, which provides a form of background consolidation, though it is agent-initiated rather than system-scheduled.
+- **Mnemo human-in-the-loop**: Agent promotion governance has quorum-based approval. Mnemo does not have per-tool HITL gating like Letta.
 - **Mnemo reranking caveat**: MMR uses score-proximity approximation rather than full embedding dot-product.
+- **Zep self-hosted**: Zep's open-source offering is [Graphiti](https://github.com/getzep/graphiti) (the graph engine). The full Zep platform is cloud-only. Community Edition is deprecated.
+- **Zep reranking**: Shipped in Graphiti (cross-encoder reranking via OpenAI/Gemini). Prior matrix was stale.
+- **Zep community detection**: Shipped in Graphiti. Prior matrix was stale.
+- **Zep temporal**: Full `valid_at`/`invalid_at` temporal windows on facts. Prior matrix under-credited.
+- **Zep local embeddings**: Graphiti supports Ollama for local embeddings, but the Zep Cloud platform does not.
+- **Zep tracing**: API logging and debug logs exist; no full span-level tracing confirmed.
+- **Mem0 graph**: Graph memory extracts relations but returns them as a side-channel alongside vector results, not a traversable graph API.
+- **Mem0 temporal**: Custom timestamps supported on `add()`, but no time-aware retrieval (`as_of`) or temporal decay.
+- **Mem0 shared memory**: App-level and session-level scoping provides shared context, but not per-agent ACLs.
+- **Mem0 webhooks**: SDK-managed CRUD for webhooks. No signing/HMAC documented.
+- **Letta sleep-time**: Background "sleep-time agents" process conversation history and write learned context to memory blocks asynchronously. Research paper published.
+- **Letta webhooks**: Step-complete webhook only (fire-and-forget). No memory lifecycle events.
+- **Letta self-modification**: Agents edit their own memory blocks via built-in tools — a fundamentally different architecture than external memory APIs.
+- **Letta tracing**: OTel collector configs exist in repo, but no documented tracing UI or span-level visibility.
+- **Letta identity**: Memory blocks function as a mutable identity core, but there is no versioning, rollback, or audit trail.
 
 ## Core Capabilities
 
