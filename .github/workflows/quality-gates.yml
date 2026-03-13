@@ -17,6 +17,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.x'
+
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
 
@@ -52,6 +57,11 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.x'
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -211,6 +221,11 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.x'
 
       - name: Setup Python
         uses: actions/setup-python@v5

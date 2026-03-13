@@ -10,12 +10,13 @@ WORKDIR /build
 
 ARG ORT_VERSION=1.23.0
 
-# Install build dependencies
+# Install build dependencies (protobuf-compiler needed by mnemo-proto / tonic-build)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     pkg-config \
     libssl-dev \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Download ONNX Runtime shared library for fastembed local embeddings.
@@ -33,12 +34,19 @@ COPY crates/mnemo-graph/Cargo.toml crates/mnemo-graph/Cargo.toml
 COPY crates/mnemo-ingest/Cargo.toml crates/mnemo-ingest/Cargo.toml
 COPY crates/mnemo-retrieval/Cargo.toml crates/mnemo-retrieval/Cargo.toml
 COPY crates/mnemo-llm/Cargo.toml crates/mnemo-llm/Cargo.toml
+COPY crates/mnemo-proto/Cargo.toml crates/mnemo-proto/Cargo.toml
+COPY crates/mnemo-mcp/Cargo.toml crates/mnemo-mcp/Cargo.toml
+COPY crates/mnemo-gnn/Cargo.toml crates/mnemo-gnn/Cargo.toml
 
 # Create stub source files for dependency caching
-RUN for crate in mnemo-core mnemo-server mnemo-storage mnemo-graph mnemo-ingest mnemo-retrieval mnemo-llm; do \
+RUN for crate in mnemo-core mnemo-server mnemo-storage mnemo-graph mnemo-ingest mnemo-retrieval mnemo-llm mnemo-proto mnemo-mcp mnemo-gnn; do \
       mkdir -p "crates/$crate/src" && \
       echo "fn main() {}" > "crates/$crate/src/lib.rs"; \
     done
+
+# Copy proto definitions and build.rs needed by mnemo-proto's tonic-build
+COPY proto/ proto/
+COPY crates/mnemo-proto/build.rs crates/mnemo-proto/build.rs
 
 # Generate lockfile inside the build context
 RUN cargo generate-lockfile
