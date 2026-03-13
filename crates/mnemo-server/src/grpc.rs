@@ -343,6 +343,7 @@ fn edge_to_proto(e: mnemo_core::models::edge::Edge) -> ProtoEdge {
 
 // ─── MemoryService ──────────────────────────────────────────────────
 
+#[allow(clippy::result_large_err)]
 #[tonic::async_trait]
 impl MemoryService for GrpcState {
     async fn get_context(
@@ -649,6 +650,7 @@ impl EntityService for GrpcState {
 
 // ─── EdgeService ────────────────────────────────────────────────────
 
+#[allow(clippy::result_large_err)]
 #[tonic::async_trait]
 impl EdgeService for GrpcState {
     async fn query_edges(
