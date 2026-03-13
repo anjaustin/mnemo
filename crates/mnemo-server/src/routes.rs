@@ -17,10 +17,11 @@ use tracing::warn;
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
 use mnemo_core::models::{
     agent::{
-        compute_fisher_importance, AgentIdentityAuditEvent, AgentIdentityProfile,
-        AuditChainVerification, CreateExperienceRequest, CreatePromotionProposalRequest,
-        ExperienceEvent, IdentityRollbackRequest, PromotionProposal, PromotionStatus,
-        UpdateAgentIdentityRequest,
+        analyze_conflicts, compute_fisher_importance, AgentIdentityAuditEvent,
+        AgentIdentityProfile, ApprovalPolicy, AuditChainVerification, ConflictAnalysis,
+        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
+        IdentityRollbackRequest, PromotionProposal, PromotionStatus,
+        SetApprovalPolicyRequest, UpdateAgentIdentityRequest,
     },
     context::{
         estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary, FactSummary,
@@ -138,6 +139,11 @@ fn webhook_event_type_str(event_type: MemoryWebhookEventType) -> &'static str {
         MemoryWebhookEventType::ClarificationGenerated => "clarification_generated",
         MemoryWebhookEventType::ClarificationResolved => "clarification_resolved",
         MemoryWebhookEventType::NarrativeRefreshed => "narrative_refreshed",
+        MemoryWebhookEventType::PromotionProposed => "promotion_proposed",
+        MemoryWebhookEventType::PromotionApproved => "promotion_approved",
+        MemoryWebhookEventType::PromotionRejected => "promotion_rejected",
+        MemoryWebhookEventType::PromotionExpired => "promotion_expired",
+        MemoryWebhookEventType::PromotionConflictDetected => "promotion_conflict_detected",
     }
 }
 
@@ -1263,6 +1269,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/agents/:agent_id/promotions/:proposal_id/reject",
             post(reject_promotion_proposal),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/promotions/:proposal_id/conflicts",
+            get(get_promotion_conflicts),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/approval-policy",
+            put(set_agent_approval_policy).get(get_agent_approval_policy),
         )
         .route("/api/v1/agents/:agent_id/context", post(get_agent_context))
         // COW branching
@@ -7016,10 +7030,12 @@ async fn list_experience_importance(
 
 async fn create_promotion_proposal(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(agent_id): Path<String>,
     Json(req): Json<CreatePromotionProposalRequest>,
 ) -> Result<(StatusCode, Json<PromotionProposal>), AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
+    let caller = caller_from_extension(caller);
     if req.proposal.trim().is_empty() {
         return Err(AppError(MnemoError::Validation(
             "proposal is required".into(),
@@ -7060,6 +7076,22 @@ async fn create_promotion_proposal(
         .metrics
         .agent_promotion_proposals_total
         .fetch_add(1, Ordering::Relaxed);
+
+    let proposer = caller.key_name.clone();
+    append_governance_audit(
+        &state,
+        Uuid::nil(),
+        "promotion_proposed",
+        None,
+        serde_json::json!({
+            "agent_id": agent_id,
+            "proposal_id": proposal.id,
+            "proposer": proposer,
+            "risk_level": proposal.risk_level,
+        }),
+    )
+    .await;
+
     Ok((StatusCode::CREATED, Json(proposal)))
 }
 
@@ -7079,9 +7111,11 @@ async fn list_promotion_proposals(
 
 async fn approve_promotion_proposal(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path((agent_id, proposal_id)): Path<(String, Uuid)>,
 ) -> Result<Json<PromotionProposal>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
+    let caller = caller_from_extension(caller);
     let mut proposal = state
         .state_store
         .get_promotion_proposal(&agent_id, proposal_id)
@@ -7093,6 +7127,75 @@ async fn approve_promotion_proposal(
         )));
     }
 
+    // Load approval policy (or default)
+    let policy = state
+        .state_store
+        .get_approval_policy(&agent_id)
+        .await?
+        .unwrap_or_else(|| ApprovalPolicy::default_for_agent(&agent_id));
+
+    // Check expiry
+    if proposal.is_expired(&policy) {
+        proposal.status = PromotionStatus::Expired;
+        proposal.expired_at = Some(chrono::Utc::now());
+        state
+            .state_store
+            .update_promotion_proposal(&proposal)
+            .await?;
+        append_governance_audit(
+            &state,
+            Uuid::nil(),
+            "promotion_expired",
+            None,
+            serde_json::json!({
+                "agent_id": agent_id,
+                "proposal_id": proposal_id,
+            }),
+        )
+        .await;
+        return Err(AppError(MnemoError::Validation(
+            "proposal has expired".into(),
+        )));
+    }
+
+    // Check cooling period
+    if !proposal.cooling_period_elapsed(&policy) {
+        return Err(AppError(MnemoError::Validation(
+            "cooling period has not elapsed".into(),
+        )));
+    }
+
+    // Record approver (deduplicate)
+    let approver_name = caller.key_name.clone();
+    if !proposal.approvers.contains(&approver_name) {
+        proposal.approvers.push(approver_name.clone());
+    }
+
+    // Check quorum
+    if !proposal.has_quorum(&policy) {
+        // Partial approval — save the approver but keep Pending
+        state
+            .state_store
+            .update_promotion_proposal(&proposal)
+            .await?;
+        append_governance_audit(
+            &state,
+            Uuid::nil(),
+            "promotion_partial_approval",
+            None,
+            serde_json::json!({
+                "agent_id": agent_id,
+                "proposal_id": proposal_id,
+                "approver": approver_name,
+                "approvers_so_far": proposal.approvers,
+                "required": policy.requirement_for_risk(&proposal.risk_level).min_approvers,
+            }),
+        )
+        .await;
+        return Ok(Json(proposal));
+    }
+
+    // Quorum met — apply the candidate core
     validate_identity_core(&proposal.candidate_core)?;
     state
         .state_store
@@ -7114,15 +7217,31 @@ async fn approve_promotion_proposal(
         .metrics
         .agent_identity_updates_total
         .fetch_add(1, Ordering::Relaxed);
+
+    append_governance_audit(
+        &state,
+        Uuid::nil(),
+        "promotion_approved",
+        None,
+        serde_json::json!({
+            "agent_id": agent_id,
+            "proposal_id": proposal_id,
+            "approvers": proposal.approvers,
+        }),
+    )
+    .await;
+
     Ok(Json(proposal))
 }
 
 async fn reject_promotion_proposal(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path((agent_id, proposal_id)): Path<(String, Uuid)>,
     Json(req): Json<RejectPromotionRequest>,
 ) -> Result<Json<PromotionProposal>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
+    let caller = caller_from_extension(caller);
     let mut proposal = state
         .state_store
         .get_promotion_proposal(&agent_id, proposal_id)
@@ -7136,6 +7255,7 @@ async fn reject_promotion_proposal(
 
     proposal.status = PromotionStatus::Rejected;
     proposal.rejected_at = Some(chrono::Utc::now());
+    let rejector = caller.key_name.clone();
     if let Some(reason) = req.reason {
         if !reason.trim().is_empty() {
             proposal.reason = format!("{} | rejection_reason={}", proposal.reason, reason.trim());
@@ -7145,7 +7265,95 @@ async fn reject_promotion_proposal(
         .state_store
         .update_promotion_proposal(&proposal)
         .await?;
+
+    append_governance_audit(
+        &state,
+        Uuid::nil(),
+        "promotion_rejected",
+        None,
+        serde_json::json!({
+            "agent_id": agent_id,
+            "proposal_id": proposal_id,
+            "rejector": rejector,
+        }),
+    )
+    .await;
+
     Ok(Json(proposal))
+}
+
+// ─── Conflict Analysis endpoint ───────────────────────────────────
+
+async fn get_promotion_conflicts(
+    State(state): State<AppState>,
+    Path((agent_id, proposal_id)): Path<(String, Uuid)>,
+) -> Result<Json<ConflictAnalysis>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let proposal = state
+        .state_store
+        .get_promotion_proposal(&agent_id, proposal_id)
+        .await?;
+
+    // Fetch all experience events for the agent
+    let events = state
+        .state_store
+        .list_experience_events(&agent_id, 10000)
+        .await?;
+
+    let analysis = analyze_conflicts(&proposal, &events);
+    Ok(Json(analysis))
+}
+
+// ─── Approval Policy CRUD ─────────────────────────────────────────
+
+async fn set_agent_approval_policy(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<SetApprovalPolicyRequest>,
+) -> Result<Json<ApprovalPolicy>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    let policy = ApprovalPolicy {
+        agent_id: agent_id.clone(),
+        low_risk: req.low_risk,
+        medium_risk: req.medium_risk,
+        high_risk: req.high_risk,
+        updated_at: chrono::Utc::now(),
+    };
+
+    state.state_store.save_approval_policy(&policy).await?;
+
+    append_governance_audit(
+        &state,
+        Uuid::nil(),
+        "approval_policy_set",
+        None,
+        serde_json::json!({
+            "agent_id": agent_id,
+            "low_risk_min_approvers": policy.low_risk.min_approvers,
+            "medium_risk_min_approvers": policy.medium_risk.min_approvers,
+            "high_risk_min_approvers": policy.high_risk.min_approvers,
+        }),
+    )
+    .await;
+
+    Ok(Json(policy))
+}
+
+async fn get_agent_approval_policy(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<ApprovalPolicy>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let policy = state
+        .state_store
+        .get_approval_policy(&agent_id)
+        .await?
+        .unwrap_or_else(|| ApprovalPolicy::default_for_agent(&agent_id));
+    Ok(Json(policy))
 }
 
 // ─── COW Branching endpoints ──────────────────────────────────────

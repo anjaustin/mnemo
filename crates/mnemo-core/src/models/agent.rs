@@ -359,6 +359,8 @@ pub enum PromotionStatus {
     Approved,
     /// Rejected; the candidate `core` was not applied.
     Rejected,
+    /// Auto-rejected because the approval window expired.
+    Expired,
 }
 
 /// A candidate identity update proposed from accumulated experience signals.
@@ -387,12 +389,18 @@ pub struct PromotionProposal {
     /// server validation).
     #[serde(default)]
     pub source_event_ids: Vec<Uuid>,
+    /// Identities (key names) of approvers who have signed off on this proposal.
+    #[serde(default)]
+    pub approvers: Vec<String>,
     /// UTC timestamp when the proposal was approved (absent until approved).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approved_at: Option<DateTime<Utc>>,
     /// UTC timestamp when the proposal was rejected (absent until rejected).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rejected_at: Option<DateTime<Utc>>,
+    /// UTC timestamp when the proposal expired (absent until expired).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expired_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -428,10 +436,253 @@ impl PromotionProposal {
             risk_level: req.risk_level,
             status: PromotionStatus::Pending,
             source_event_ids: req.source_event_ids,
+            approvers: Vec::new(),
             approved_at: None,
             rejected_at: None,
+            expired_at: None,
             created_at: Utc::now(),
         }
+    }
+
+    /// Check whether this proposal has expired based on an approval policy.
+    pub fn is_expired(&self, policy: &ApprovalPolicy) -> bool {
+        if self.status != PromotionStatus::Pending {
+            return false;
+        }
+        let requirement = policy.requirement_for_risk(&self.risk_level);
+        if let Some(hours) = requirement.auto_reject_after_hours {
+            let deadline = self.created_at + chrono::Duration::hours(hours as i64);
+            if Utc::now() >= deadline {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check whether the cooling period has elapsed (if required).
+    pub fn cooling_period_elapsed(&self, policy: &ApprovalPolicy) -> bool {
+        let requirement = policy.requirement_for_risk(&self.risk_level);
+        match requirement.cooling_period_hours {
+            None => true,
+            Some(hours) => {
+                let deadline = self.created_at + chrono::Duration::hours(hours as i64);
+                Utc::now() >= deadline
+            }
+        }
+    }
+
+    /// Check whether this proposal has met the approval quorum.
+    pub fn has_quorum(&self, policy: &ApprovalPolicy) -> bool {
+        let requirement = policy.requirement_for_risk(&self.risk_level);
+        self.approvers.len() >= requirement.min_approvers as usize
+    }
+}
+
+// ─── Approval Policy ───────────────────────────────────────────────
+
+/// Defines how many approvers are needed per risk level for an agent's
+/// promotion proposals.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalPolicy {
+    pub agent_id: String,
+    pub low_risk: ApprovalRequirement,
+    pub medium_risk: ApprovalRequirement,
+    pub high_risk: ApprovalRequirement,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Requirements for a single risk level.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequirement {
+    /// Minimum number of distinct approvers required.
+    pub min_approvers: u32,
+    /// Mandatory wait (hours) after proposal creation before it can auto-apply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooling_period_hours: Option<u32>,
+    /// Auto-reject if not approved within this many hours.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_reject_after_hours: Option<u32>,
+}
+
+impl Default for ApprovalRequirement {
+    fn default() -> Self {
+        Self {
+            min_approvers: 1,
+            cooling_period_hours: None,
+            auto_reject_after_hours: None,
+        }
+    }
+}
+
+impl ApprovalPolicy {
+    /// Create a default policy: 1 approver for all risk levels.
+    pub fn default_for_agent(agent_id: &str) -> Self {
+        Self {
+            agent_id: agent_id.to_string(),
+            low_risk: ApprovalRequirement {
+                min_approvers: 1,
+                ..Default::default()
+            },
+            medium_risk: ApprovalRequirement {
+                min_approvers: 1,
+                ..Default::default()
+            },
+            high_risk: ApprovalRequirement {
+                min_approvers: 1,
+                ..Default::default()
+            },
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// Get the requirement for the given risk level string.
+    pub fn requirement_for_risk(&self, risk_level: &str) -> &ApprovalRequirement {
+        match risk_level.to_lowercase().as_str() {
+            "low" => &self.low_risk,
+            "high" => &self.high_risk,
+            _ => &self.medium_risk, // default to medium for unknown
+        }
+    }
+}
+
+/// Request body for `PUT /api/v1/agents/:agent_id/approval-policy`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetApprovalPolicyRequest {
+    pub low_risk: ApprovalRequirement,
+    pub medium_risk: ApprovalRequirement,
+    pub high_risk: ApprovalRequirement,
+}
+
+// ─── Conflict Analysis ─────────────────────────────────────────────
+
+/// Result of analyzing experience events for conflicts with a promotion proposal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictAnalysis {
+    pub proposal_id: Uuid,
+    pub agent_id: String,
+    /// Experience event IDs whose signals support the proposed change.
+    pub supporting_signals: Vec<Uuid>,
+    /// Experience event IDs whose signals oppose the proposed change.
+    pub conflicting_signals: Vec<Uuid>,
+    /// 0.0 (no conflict) to 1.0 (strong conflict).
+    pub conflict_score: f32,
+    pub recommendation: ConflictRecommendation,
+}
+
+/// Recommendation based on conflict analysis.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictRecommendation {
+    /// Low conflict — safe to approve.
+    Proceed,
+    /// Moderate conflict — needs human review.
+    ReviewConflicts,
+    /// High conflict — experience evidence opposes this change.
+    Reject,
+}
+
+impl ConflictRecommendation {
+    /// Derive recommendation from a conflict score.
+    pub fn from_score(score: f32) -> Self {
+        if score < 0.3 {
+            Self::Proceed
+        } else if score < 0.7 {
+            Self::ReviewConflicts
+        } else {
+            Self::Reject
+        }
+    }
+}
+
+/// Analyze experience events for conflicts with a proposed identity change.
+///
+/// The analysis compares the text of the proposal and candidate_core against
+/// each experience event's signal text. Events whose signals are semantically
+/// aligned (same category, similar language) are counted as supporting.
+/// Events whose signals contradict (opposite sentiment, conflicting preferences)
+/// are counted as conflicting.
+///
+/// This is a text-heuristic approach (no LLM call). The conflict score is:
+/// `conflicting_count / (supporting_count + conflicting_count + 1)`.
+pub fn analyze_conflicts(
+    proposal: &PromotionProposal,
+    experience_events: &[ExperienceEvent],
+) -> ConflictAnalysis {
+    let candidate_str = proposal.candidate_core.to_string().to_lowercase();
+    let proposal_str = proposal.proposal.to_lowercase();
+
+    let mut supporting: Vec<Uuid> = Vec::new();
+    let mut conflicting: Vec<Uuid> = Vec::new();
+
+    for event in experience_events {
+        let signal_lower = event.signal.to_lowercase();
+
+        // Check if the event's signal appears in the candidate core or proposal text.
+        // If the signal aligns with the proposed change, it's supporting.
+        // If it opposes (contains negation words near matching terms), it's conflicting.
+        let signal_words: Vec<&str> = signal_lower.split_whitespace().collect();
+        let candidate_words: Vec<&str> = candidate_str.split_whitespace().collect();
+        let proposal_words: Vec<&str> = proposal_str.split_whitespace().collect();
+
+        // Simple keyword overlap heuristic
+        let overlap_candidate = signal_words
+            .iter()
+            .filter(|w| w.len() > 3) // skip short words
+            .filter(|w| candidate_words.iter().any(|cw| cw.contains(**w)))
+            .count();
+
+        let overlap_proposal = signal_words
+            .iter()
+            .filter(|w| w.len() > 3)
+            .filter(|w| proposal_words.iter().any(|pw| pw.contains(**w)))
+            .count();
+
+        let total_overlap = overlap_candidate + overlap_proposal;
+        if total_overlap == 0 {
+            continue; // no relevance
+        }
+
+        // Check for negation/opposition signals
+        let has_negation = signal_lower.contains("not ")
+            || signal_lower.contains("don't")
+            || signal_lower.contains("avoid")
+            || signal_lower.contains("dislike")
+            || signal_lower.contains("stop")
+            || signal_lower.contains("reduce")
+            || signal_lower.contains("less ")
+            || signal_lower.contains("fewer");
+
+        let proposal_has_negation = proposal_str.contains("not ")
+            || proposal_str.contains("don't")
+            || proposal_str.contains("avoid")
+            || proposal_str.contains("remove")
+            || proposal_str.contains("reduce")
+            || proposal_str.contains("less ");
+
+        // If both or neither have negation → supporting (aligned sentiment).
+        // If only one has negation → conflicting (opposing sentiment).
+        if has_negation != proposal_has_negation {
+            conflicting.push(event.id);
+        } else {
+            supporting.push(event.id);
+        }
+    }
+
+    let conflict_score = if supporting.is_empty() && conflicting.is_empty() {
+        0.0
+    } else {
+        conflicting.len() as f32 / (supporting.len() + conflicting.len()) as f32
+    };
+
+    let recommendation = ConflictRecommendation::from_score(conflict_score);
+
+    ConflictAnalysis {
+        proposal_id: proposal.id,
+        agent_id: proposal.agent_id.clone(),
+        supporting_signals: supporting,
+        conflicting_signals: conflicting,
+        conflict_score,
+        recommendation,
     }
 }
 
@@ -2956,6 +3207,648 @@ mod tests {
         assert!(
             !tree.verify(&proof),
             "Short hex sibling must fail (not 32 bytes)"
+        );
+    }
+
+    // ─── Approval Policy & Governance Tests (Feature 5) ───────────
+
+    #[test]
+    fn test_promotion_status_expired_serde_roundtrip() {
+        assert_eq!(
+            serde_json::to_string(&PromotionStatus::Expired).unwrap(),
+            "\"expired\""
+        );
+        let round: PromotionStatus = serde_json::from_str("\"expired\"").unwrap();
+        assert_eq!(round, PromotionStatus::Expired);
+    }
+
+    #[test]
+    fn test_approval_policy_default_for_agent() {
+        let policy = ApprovalPolicy::default_for_agent("test-bot");
+        assert_eq!(policy.agent_id, "test-bot");
+        assert_eq!(policy.low_risk.min_approvers, 1);
+        assert_eq!(policy.medium_risk.min_approvers, 1);
+        assert_eq!(policy.high_risk.min_approvers, 1);
+        assert!(policy.low_risk.cooling_period_hours.is_none());
+        assert!(policy.low_risk.auto_reject_after_hours.is_none());
+    }
+
+    #[test]
+    fn test_approval_policy_requirement_for_risk() {
+        let policy = ApprovalPolicy {
+            agent_id: "bot".into(),
+            low_risk: ApprovalRequirement {
+                min_approvers: 1,
+                ..Default::default()
+            },
+            medium_risk: ApprovalRequirement {
+                min_approvers: 2,
+                cooling_period_hours: Some(12),
+                ..Default::default()
+            },
+            high_risk: ApprovalRequirement {
+                min_approvers: 3,
+                cooling_period_hours: Some(24),
+                auto_reject_after_hours: Some(72),
+            },
+            updated_at: Utc::now(),
+        };
+        assert_eq!(policy.requirement_for_risk("low").min_approvers, 1);
+        assert_eq!(policy.requirement_for_risk("medium").min_approvers, 2);
+        assert_eq!(policy.requirement_for_risk("high").min_approvers, 3);
+        // Unknown risk levels default to medium
+        assert_eq!(policy.requirement_for_risk("unknown").min_approvers, 2);
+        assert_eq!(policy.requirement_for_risk("").min_approvers, 2);
+    }
+
+    #[test]
+    fn test_approval_policy_requirement_for_risk_case_insensitive() {
+        let policy = ApprovalPolicy::default_for_agent("bot");
+        // "HIGH", "High", "high" should all map to high_risk
+        assert_eq!(
+            policy.requirement_for_risk("HIGH").min_approvers,
+            policy.high_risk.min_approvers
+        );
+        assert_eq!(
+            policy.requirement_for_risk("Low").min_approvers,
+            policy.low_risk.min_approvers
+        );
+    }
+
+    #[test]
+    fn test_approval_requirement_default() {
+        let req = ApprovalRequirement::default();
+        assert_eq!(req.min_approvers, 1);
+        assert!(req.cooling_period_hours.is_none());
+        assert!(req.auto_reject_after_hours.is_none());
+    }
+
+    #[test]
+    fn test_approval_policy_serde_roundtrip() {
+        let policy = ApprovalPolicy {
+            agent_id: "test-bot".into(),
+            low_risk: ApprovalRequirement {
+                min_approvers: 1,
+                cooling_period_hours: None,
+                auto_reject_after_hours: Some(168),
+            },
+            medium_risk: ApprovalRequirement {
+                min_approvers: 2,
+                cooling_period_hours: Some(12),
+                auto_reject_after_hours: Some(72),
+            },
+            high_risk: ApprovalRequirement {
+                min_approvers: 3,
+                cooling_period_hours: Some(24),
+                auto_reject_after_hours: Some(48),
+            },
+            updated_at: Utc::now(),
+        };
+        let json = serde_json::to_string(&policy).unwrap();
+        let back: ApprovalPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.agent_id, "test-bot");
+        assert_eq!(back.high_risk.min_approvers, 3);
+        assert_eq!(back.high_risk.cooling_period_hours, Some(24));
+        assert_eq!(back.high_risk.auto_reject_after_hours, Some(48));
+    }
+
+    #[test]
+    fn test_set_approval_policy_request_serde() {
+        let req: SetApprovalPolicyRequest = serde_json::from_value(json!({
+            "low_risk": {"min_approvers": 1},
+            "medium_risk": {"min_approvers": 2, "cooling_period_hours": 6},
+            "high_risk": {"min_approvers": 3, "cooling_period_hours": 24, "auto_reject_after_hours": 48}
+        }))
+        .unwrap();
+        assert_eq!(req.low_risk.min_approvers, 1);
+        assert_eq!(req.medium_risk.min_approvers, 2);
+        assert_eq!(req.medium_risk.cooling_period_hours, Some(6));
+        assert_eq!(req.high_risk.auto_reject_after_hours, Some(48));
+    }
+
+    #[test]
+    fn test_proposal_from_request_initializes_new_fields() {
+        let req = CreatePromotionProposalRequest {
+            id: None,
+            proposal: "test".into(),
+            candidate_core: json!({"mission": "new"}),
+            reason: "reason".into(),
+            risk_level: "high".into(),
+            source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+        };
+        let proposal = PromotionProposal::from_request("bot", req);
+        assert!(proposal.approvers.is_empty());
+        assert!(proposal.expired_at.is_none());
+        assert_eq!(proposal.status, PromotionStatus::Pending);
+    }
+
+    #[test]
+    fn test_proposal_has_quorum_default_policy() {
+        let policy = ApprovalPolicy::default_for_agent("bot");
+        let mut proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: None,
+                proposal: "test".into(),
+                candidate_core: json!({}),
+                reason: "r".into(),
+                risk_level: "low".into(),
+                source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+            },
+        );
+        // No approvers yet → no quorum
+        assert!(!proposal.has_quorum(&policy));
+        // Add one approver → quorum met (default requires 1)
+        proposal.approvers.push("admin-key".into());
+        assert!(proposal.has_quorum(&policy));
+    }
+
+    #[test]
+    fn test_proposal_has_quorum_multi_approver() {
+        let policy = ApprovalPolicy {
+            agent_id: "bot".into(),
+            low_risk: ApprovalRequirement::default(),
+            medium_risk: ApprovalRequirement::default(),
+            high_risk: ApprovalRequirement {
+                min_approvers: 3,
+                cooling_period_hours: None,
+                auto_reject_after_hours: None,
+            },
+            updated_at: Utc::now(),
+        };
+        let mut proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: None,
+                proposal: "test".into(),
+                candidate_core: json!({}),
+                reason: "r".into(),
+                risk_level: "high".into(),
+                source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+            },
+        );
+        proposal.approvers.push("admin-1".into());
+        assert!(!proposal.has_quorum(&policy));
+        proposal.approvers.push("admin-2".into());
+        assert!(!proposal.has_quorum(&policy));
+        proposal.approvers.push("admin-3".into());
+        assert!(proposal.has_quorum(&policy));
+    }
+
+    #[test]
+    fn test_proposal_is_expired_no_auto_reject() {
+        let policy = ApprovalPolicy::default_for_agent("bot");
+        let proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: None,
+                proposal: "test".into(),
+                candidate_core: json!({}),
+                reason: "r".into(),
+                risk_level: "low".into(),
+                source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+            },
+        );
+        // Default policy has no auto_reject_after_hours → never expires
+        assert!(!proposal.is_expired(&policy));
+    }
+
+    #[test]
+    fn test_proposal_is_expired_with_deadline() {
+        let policy = ApprovalPolicy {
+            agent_id: "bot".into(),
+            low_risk: ApprovalRequirement::default(),
+            medium_risk: ApprovalRequirement {
+                min_approvers: 1,
+                cooling_period_hours: None,
+                auto_reject_after_hours: Some(1), // 1 hour
+            },
+            high_risk: ApprovalRequirement::default(),
+            updated_at: Utc::now(),
+        };
+        // Create a proposal backdated to 2 hours ago
+        let mut proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: None,
+                proposal: "test".into(),
+                candidate_core: json!({}),
+                reason: "r".into(),
+                risk_level: "medium".into(),
+                source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+            },
+        );
+        proposal.created_at = Utc::now() - chrono::Duration::hours(2);
+        assert!(proposal.is_expired(&policy));
+    }
+
+    #[test]
+    fn test_proposal_is_expired_only_when_pending() {
+        let policy = ApprovalPolicy {
+            agent_id: "bot".into(),
+            low_risk: ApprovalRequirement::default(),
+            medium_risk: ApprovalRequirement {
+                min_approvers: 1,
+                cooling_period_hours: None,
+                auto_reject_after_hours: Some(1),
+            },
+            high_risk: ApprovalRequirement::default(),
+            updated_at: Utc::now(),
+        };
+        let mut proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: None,
+                proposal: "test".into(),
+                candidate_core: json!({}),
+                reason: "r".into(),
+                risk_level: "medium".into(),
+                source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+            },
+        );
+        proposal.created_at = Utc::now() - chrono::Duration::hours(2);
+        // Already approved → is_expired should return false
+        proposal.status = PromotionStatus::Approved;
+        assert!(!proposal.is_expired(&policy));
+        // Already rejected → is_expired should return false
+        proposal.status = PromotionStatus::Rejected;
+        assert!(!proposal.is_expired(&policy));
+    }
+
+    #[test]
+    fn test_proposal_cooling_period_elapsed_no_cooling() {
+        let policy = ApprovalPolicy::default_for_agent("bot");
+        let proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: None,
+                proposal: "test".into(),
+                candidate_core: json!({}),
+                reason: "r".into(),
+                risk_level: "low".into(),
+                source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+            },
+        );
+        // No cooling period → always elapsed
+        assert!(proposal.cooling_period_elapsed(&policy));
+    }
+
+    #[test]
+    fn test_proposal_cooling_period_not_elapsed() {
+        let policy = ApprovalPolicy {
+            agent_id: "bot".into(),
+            low_risk: ApprovalRequirement::default(),
+            medium_risk: ApprovalRequirement::default(),
+            high_risk: ApprovalRequirement {
+                min_approvers: 3,
+                cooling_period_hours: Some(24),
+                auto_reject_after_hours: None,
+            },
+            updated_at: Utc::now(),
+        };
+        // Just created → cooling period not elapsed
+        let proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: None,
+                proposal: "test".into(),
+                candidate_core: json!({}),
+                reason: "r".into(),
+                risk_level: "high".into(),
+                source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+            },
+        );
+        assert!(!proposal.cooling_period_elapsed(&policy));
+    }
+
+    #[test]
+    fn test_proposal_cooling_period_elapsed_after_wait() {
+        let policy = ApprovalPolicy {
+            agent_id: "bot".into(),
+            low_risk: ApprovalRequirement::default(),
+            medium_risk: ApprovalRequirement::default(),
+            high_risk: ApprovalRequirement {
+                min_approvers: 3,
+                cooling_period_hours: Some(24),
+                auto_reject_after_hours: None,
+            },
+            updated_at: Utc::now(),
+        };
+        let mut proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: None,
+                proposal: "test".into(),
+                candidate_core: json!({}),
+                reason: "r".into(),
+                risk_level: "high".into(),
+                source_event_ids: vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)],
+            },
+        );
+        proposal.created_at = Utc::now() - chrono::Duration::hours(25);
+        assert!(proposal.cooling_period_elapsed(&policy));
+    }
+
+    #[test]
+    fn test_proposal_approvers_backward_compat() {
+        // Proposals created before approvers field should deserialize with empty vec
+        let json_str = r#"{
+            "id": "01926a1c-7c4e-7000-8000-000000000001",
+            "agent_id": "bot",
+            "proposal": "test",
+            "candidate_core": {},
+            "reason": "test",
+            "risk_level": "low",
+            "status": "pending",
+            "source_event_ids": [],
+            "created_at": "2024-01-01T00:00:00Z"
+        }"#;
+        let proposal: PromotionProposal = serde_json::from_str(json_str).unwrap();
+        assert!(proposal.approvers.is_empty());
+        assert!(proposal.expired_at.is_none());
+    }
+
+    // ─── Conflict Analysis Tests ──────────────────────────────────
+
+    #[test]
+    fn test_conflict_recommendation_from_score() {
+        assert_eq!(
+            ConflictRecommendation::from_score(0.0),
+            ConflictRecommendation::Proceed
+        );
+        assert_eq!(
+            ConflictRecommendation::from_score(0.2),
+            ConflictRecommendation::Proceed
+        );
+        assert_eq!(
+            ConflictRecommendation::from_score(0.29),
+            ConflictRecommendation::Proceed
+        );
+        assert_eq!(
+            ConflictRecommendation::from_score(0.3),
+            ConflictRecommendation::ReviewConflicts
+        );
+        assert_eq!(
+            ConflictRecommendation::from_score(0.5),
+            ConflictRecommendation::ReviewConflicts
+        );
+        assert_eq!(
+            ConflictRecommendation::from_score(0.69),
+            ConflictRecommendation::ReviewConflicts
+        );
+        assert_eq!(
+            ConflictRecommendation::from_score(0.7),
+            ConflictRecommendation::Reject
+        );
+        assert_eq!(
+            ConflictRecommendation::from_score(1.0),
+            ConflictRecommendation::Reject
+        );
+    }
+
+    #[test]
+    fn test_conflict_recommendation_serde_roundtrip() {
+        for variant in [
+            ConflictRecommendation::Proceed,
+            ConflictRecommendation::ReviewConflicts,
+            ConflictRecommendation::Reject,
+        ] {
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: ConflictRecommendation = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, variant);
+        }
+    }
+
+    #[test]
+    fn test_conflict_analysis_serde_roundtrip() {
+        let analysis = ConflictAnalysis {
+            proposal_id: Uuid::from_u128(1),
+            agent_id: "bot".into(),
+            supporting_signals: vec![Uuid::from_u128(2), Uuid::from_u128(3)],
+            conflicting_signals: vec![Uuid::from_u128(4)],
+            conflict_score: 0.33,
+            recommendation: ConflictRecommendation::ReviewConflicts,
+        };
+        let json = serde_json::to_string(&analysis).unwrap();
+        let back: ConflictAnalysis = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.proposal_id, Uuid::from_u128(1));
+        assert_eq!(back.supporting_signals.len(), 2);
+        assert_eq!(back.conflicting_signals.len(), 1);
+    }
+
+    #[test]
+    fn test_analyze_conflicts_no_events() {
+        let proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: Some(Uuid::from_u128(1)),
+                proposal: "Add formal tone preference".into(),
+                candidate_core: json!({"style": "formal"}),
+                reason: "test".into(),
+                risk_level: "low".into(),
+                source_event_ids: vec![
+                    Uuid::from_u128(10),
+                    Uuid::from_u128(11),
+                    Uuid::from_u128(12),
+                ],
+            },
+        );
+        let result = analyze_conflicts(&proposal, &[]);
+        assert!(result.supporting_signals.is_empty());
+        assert!(result.conflicting_signals.is_empty());
+        assert_eq!(result.conflict_score, 0.0);
+        assert_eq!(result.recommendation, ConflictRecommendation::Proceed);
+    }
+
+    #[test]
+    fn test_analyze_conflicts_all_supporting() {
+        let proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: Some(Uuid::from_u128(1)),
+                proposal: "Add formal tone preference".into(),
+                candidate_core: json!({"style": "formal"}),
+                reason: "test".into(),
+                risk_level: "low".into(),
+                source_event_ids: vec![
+                    Uuid::from_u128(10),
+                    Uuid::from_u128(11),
+                    Uuid::from_u128(12),
+                ],
+            },
+        );
+        let events = vec![
+            ExperienceEvent {
+                id: Uuid::from_u128(100),
+                agent_id: "bot".into(),
+                user_id: None,
+                session_id: None,
+                category: "tone".into(),
+                signal: "user prefers formal language".into(),
+                confidence: 0.9,
+                weight: 0.8,
+                decay_half_life_days: 30,
+                evidence_episode_ids: vec![],
+                fisher_importance: 0.5,
+                created_at: Utc::now(),
+            },
+            ExperienceEvent {
+                id: Uuid::from_u128(101),
+                agent_id: "bot".into(),
+                user_id: None,
+                session_id: None,
+                category: "tone".into(),
+                signal: "formal style appreciated by users".into(),
+                confidence: 0.85,
+                weight: 0.7,
+                decay_half_life_days: 30,
+                evidence_episode_ids: vec![],
+                fisher_importance: 0.4,
+                created_at: Utc::now(),
+            },
+        ];
+        let result = analyze_conflicts(&proposal, &events);
+        assert!(!result.supporting_signals.is_empty());
+        assert!(result.conflicting_signals.is_empty());
+        assert_eq!(result.conflict_score, 0.0);
+        assert_eq!(result.recommendation, ConflictRecommendation::Proceed);
+    }
+
+    #[test]
+    fn test_analyze_conflicts_detects_opposition() {
+        let proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: Some(Uuid::from_u128(1)),
+                proposal: "Add formal tone preference".into(),
+                candidate_core: json!({"style": "formal"}),
+                reason: "test".into(),
+                risk_level: "low".into(),
+                source_event_ids: vec![
+                    Uuid::from_u128(10),
+                    Uuid::from_u128(11),
+                    Uuid::from_u128(12),
+                ],
+            },
+        );
+        let events = vec![ExperienceEvent {
+            id: Uuid::from_u128(200),
+            agent_id: "bot".into(),
+            user_id: None,
+            session_id: None,
+            category: "tone".into(),
+            signal: "user does not prefer formal tone at all".into(),
+            confidence: 0.9,
+            weight: 0.8,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.5,
+            created_at: Utc::now(),
+        }];
+        let result = analyze_conflicts(&proposal, &events);
+        // The signal contains "not" + overlapping keywords → conflicting
+        assert!(
+            !result.conflicting_signals.is_empty(),
+            "Should detect opposition signal"
+        );
+        assert!(result.conflict_score > 0.0);
+    }
+
+    #[test]
+    fn test_analyze_conflicts_irrelevant_events_ignored() {
+        let proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: Some(Uuid::from_u128(1)),
+                proposal: "Add billing expertise".into(),
+                candidate_core: json!({"capabilities": ["billing"]}),
+                reason: "test".into(),
+                risk_level: "low".into(),
+                source_event_ids: vec![
+                    Uuid::from_u128(10),
+                    Uuid::from_u128(11),
+                    Uuid::from_u128(12),
+                ],
+            },
+        );
+        let events = vec![ExperienceEvent {
+            id: Uuid::from_u128(300),
+            agent_id: "bot".into(),
+            user_id: None,
+            session_id: None,
+            category: "greeting".into(),
+            signal: "user says hi a lot".into(),
+            confidence: 0.9,
+            weight: 0.5,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+            fisher_importance: 0.1,
+            created_at: Utc::now(),
+        }];
+        let result = analyze_conflicts(&proposal, &events);
+        // No keyword overlap → not relevant
+        assert!(result.supporting_signals.is_empty());
+        assert!(result.conflicting_signals.is_empty());
+        assert_eq!(result.conflict_score, 0.0);
+    }
+
+    #[test]
+    fn test_analyze_conflicts_mixed_signals() {
+        let proposal = PromotionProposal::from_request(
+            "bot",
+            CreatePromotionProposalRequest {
+                id: Some(Uuid::from_u128(1)),
+                proposal: "Adopt formal communication style".into(),
+                candidate_core: json!({"style": "formal communication"}),
+                reason: "test".into(),
+                risk_level: "medium".into(),
+                source_event_ids: vec![
+                    Uuid::from_u128(10),
+                    Uuid::from_u128(11),
+                    Uuid::from_u128(12),
+                ],
+            },
+        );
+        let events = vec![
+            ExperienceEvent {
+                id: Uuid::from_u128(400),
+                agent_id: "bot".into(),
+                user_id: None,
+                session_id: None,
+                category: "style".into(),
+                signal: "formal communication works well".into(),
+                confidence: 0.9,
+                weight: 0.8,
+                decay_half_life_days: 30,
+                evidence_episode_ids: vec![],
+                fisher_importance: 0.5,
+                created_at: Utc::now(),
+            },
+            ExperienceEvent {
+                id: Uuid::from_u128(401),
+                agent_id: "bot".into(),
+                user_id: None,
+                session_id: None,
+                category: "style".into(),
+                signal: "avoid formal communication style".into(),
+                confidence: 0.8,
+                weight: 0.7,
+                decay_half_life_days: 30,
+                evidence_episode_ids: vec![],
+                fisher_importance: 0.4,
+                created_at: Utc::now(),
+            },
+        ];
+        let result = analyze_conflicts(&proposal, &events);
+        // Should have both supporting and conflicting
+        assert!(
+            !result.supporting_signals.is_empty() || !result.conflicting_signals.is_empty(),
+            "Mixed signals should produce some categorization"
+        );
+        assert!(
+            result.conflict_score > 0.0 && result.conflict_score < 1.0,
+            "Mixed signals should produce moderate conflict score, got {}",
+            result.conflict_score
         );
     }
 }

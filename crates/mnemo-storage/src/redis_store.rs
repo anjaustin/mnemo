@@ -9,10 +9,10 @@ use mnemo_core::error::MnemoError;
 use mnemo_core::models::{
     agent::{
         AgentIdentityAuditAction, AgentIdentityAuditEvent, AgentIdentityProfile,
-        AuditChainVerification, BranchInfo, BranchMetadata, CreateBranchRequest,
-        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
-        ForkAgentRequest, ForkLineage, ForkResult,
-        MergeResult, PromotionProposal, UpdateAgentIdentityRequest, validate_branch_name,
+        ApprovalPolicy, AuditChainVerification, BranchInfo, BranchMetadata,
+        CreateBranchRequest, CreateExperienceRequest, CreatePromotionProposalRequest,
+        ExperienceEvent, ForkAgentRequest, ForkLineage, ForkResult, MergeResult,
+        PromotionProposal, UpdateAgentIdentityRequest, validate_branch_name,
         validate_fork_agent_id,
     },
     edge::{Edge, EdgeFilter},
@@ -1459,6 +1459,21 @@ impl AgentStore for RedisStateStore {
             new_agent: new_identity,
             lineage,
         })
+    }
+
+    // ─── Approval Policy ────────────────────────────────────────
+
+    async fn save_approval_policy(&self, policy: &ApprovalPolicy) -> StorageResult<()> {
+        let key = self.key(&["approval_policy", &policy.agent_id]);
+        self.set_json(&key, policy).await
+    }
+
+    async fn get_approval_policy(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<Option<ApprovalPolicy>> {
+        let key = self.key(&["approval_policy", agent_id]);
+        self.get_json::<ApprovalPolicy>(&key).await
     }
 }
 

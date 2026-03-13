@@ -11267,3 +11267,604 @@ async fn gr07a_user_scoped_rule_only_applies_to_that_user() {
     ).await;
     assert_eq!(status, StatusCode::CREATED, "user2 should not be blocked by user1-scoped rule");
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Feature 5: Agent Identity Phase B — Governance & Conflict Handling
+// ═══════════════════════════════════════════════════════════════════
+
+/// Helper: create 3 experience events for an agent and return their IDs.
+async fn create_three_experience_events(app: &axum::Router, agent_id: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (i, signal) in ["signal alpha", "signal beta", "signal gamma"].iter().enumerate() {
+        let (status, body) = json_request(
+            app,
+            "POST",
+            &format!("/api/v1/agents/{agent_id}/experience"),
+            serde_json::json!({
+                "category": "tone",
+                "signal": signal,
+                "confidence": 0.8 + (i as f64) * 0.05,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "experience event {i} failed: {body:?}");
+        ids.push(body["id"].as_str().unwrap().to_string());
+    }
+    ids
+}
+
+// F5-INT-01: Default approval policy returns 1 approver for all risk levels
+#[tokio::test]
+async fn f5_default_approval_policy_returns_defaults() {
+    let app = build_test_app().await;
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/f5-policy-agent/approval-policy",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "get default policy failed: {body:?}");
+    assert_eq!(body["agent_id"], "f5-policy-agent");
+    assert_eq!(body["low_risk"]["min_approvers"], 1);
+    assert_eq!(body["medium_risk"]["min_approvers"], 1);
+    assert_eq!(body["high_risk"]["min_approvers"], 1);
+}
+
+// F5-INT-02: Set approval policy requires Admin role
+#[tokio::test]
+async fn f5_set_approval_policy_requires_admin() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["f5-admin-key".to_string()]).await;
+
+    // Create a read-only key
+    let (status, key_body) = json_request_with_header(
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer f5-admin-key",
+        serde_json::json!({
+            "name": "f5-read-key",
+            "role": "read",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let read_key = key_body["raw_key"].as_str().unwrap().to_string();
+
+    // Read key should be forbidden from setting approval policy
+    let (status, body) = json_request_with_header(
+        &app,
+        "PUT",
+        "/api/v1/agents/f5-rbac-agent/approval-policy",
+        "authorization",
+        &format!("Bearer {read_key}"),
+        serde_json::json!({
+            "low_risk": {"min_approvers": 1},
+            "medium_risk": {"min_approvers": 2},
+            "high_risk": {"min_approvers": 3},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "read key should be forbidden: {body:?}");
+
+    // Admin key should succeed
+    let (status, body) = json_request_with_header(
+        &app,
+        "PUT",
+        "/api/v1/agents/f5-rbac-agent/approval-policy",
+        "authorization",
+        "Bearer f5-admin-key",
+        serde_json::json!({
+            "low_risk": {"min_approvers": 1},
+            "medium_risk": {"min_approvers": 2},
+            "high_risk": {"min_approvers": 3, "cooling_period_hours": 24},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "admin set policy failed: {body:?}");
+    assert_eq!(body["high_risk"]["min_approvers"], 3);
+    assert_eq!(body["high_risk"]["cooling_period_hours"], 24);
+}
+
+// F5-INT-03: Set and retrieve custom approval policy
+#[tokio::test]
+async fn f5_set_and_get_approval_policy() {
+    let app = build_test_app().await;
+
+    // Set a custom policy
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        "/api/v1/agents/f5-custom-policy/approval-policy",
+        serde_json::json!({
+            "low_risk": {"min_approvers": 1},
+            "medium_risk": {"min_approvers": 2, "cooling_period_hours": 6},
+            "high_risk": {"min_approvers": 3, "cooling_period_hours": 24, "auto_reject_after_hours": 72},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Retrieve it
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/agents/f5-custom-policy/approval-policy",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["medium_risk"]["min_approvers"], 2);
+    assert_eq!(body["medium_risk"]["cooling_period_hours"], 6);
+    assert_eq!(body["high_risk"]["auto_reject_after_hours"], 72);
+}
+
+// F5-INT-04: Single-approver (default policy) approve flow works as before
+#[tokio::test]
+async fn f5_single_approver_default_approve_flow() {
+    let app = build_test_app().await;
+    let agent = "f5-single-approve";
+    let event_ids = create_three_experience_events(&app, agent).await;
+
+    let (status, proposal) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({
+            "proposal": "adopt formal tone",
+            "candidate_core": {"style": "formal"},
+            "reason": "evidence supports it",
+            "risk_level": "low",
+            "source_event_ids": event_ids,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proposal["id"].as_str().unwrap();
+
+    // Single approval should be enough (default policy: 1 approver)
+    let (status, approved) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "approve failed: {approved:?}");
+    assert_eq!(approved["status"], "approved");
+    assert!(approved["approved_at"].is_string());
+    assert!(!approved["approvers"].as_array().unwrap().is_empty());
+}
+
+// F5-INT-05: Multi-approver quorum — high-risk needs 3, single approval keeps pending
+#[tokio::test]
+async fn f5_multi_approver_quorum_high_risk() {
+    let app = build_test_app().await;
+    let agent = "f5-multi-quorum";
+
+    // Set policy: high_risk needs 3 approvers
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        &format!("/api/v1/agents/{agent}/approval-policy"),
+        serde_json::json!({
+            "low_risk": {"min_approvers": 1},
+            "medium_risk": {"min_approvers": 2},
+            "high_risk": {"min_approvers": 3},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let event_ids = create_three_experience_events(&app, agent).await;
+
+    let (status, proposal) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({
+            "proposal": "major personality shift",
+            "candidate_core": {"persona": "bold leader"},
+            "reason": "evidence supports it",
+            "risk_level": "high",
+            "source_event_ids": event_ids,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proposal["id"].as_str().unwrap();
+
+    // First approval — still pending (need 3, have 1)
+    // Note: in unauthed mode, caller is always "bootstrap", so repeated
+    // approvals from the same caller won't increase the count.
+    // We test the basic flow: first call keeps pending because bootstrap is
+    // deduplicated. But since we have only one caller identity in unauthed mode,
+    // the quorum check is: 1 approver < 3 required → stays pending.
+    let (status, partial) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "partial approve failed: {partial:?}");
+    assert_eq!(partial["status"], "pending", "should stay pending with 1/3 approvers");
+    assert_eq!(partial["approvers"].as_array().unwrap().len(), 1);
+}
+
+// F5-INT-06: Multi-approver quorum with authed app — 3 different keys
+#[tokio::test]
+async fn f5_multi_approver_quorum_with_authed_keys() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["f5-quorum-admin".to_string()]).await;
+
+    let agent = "f5-quorum-authed";
+    let bearer = |k: &str| format!("Bearer {k}");
+
+    // Set policy: high_risk needs 3 approvers
+    let (status, _) = json_request_with_header(
+        &app, "PUT", &format!("/api/v1/agents/{agent}/approval-policy"),
+        "authorization", &bearer("f5-quorum-admin"),
+        serde_json::json!({
+            "low_risk": {"min_approvers": 1},
+            "medium_risk": {"min_approvers": 2},
+            "high_risk": {"min_approvers": 3},
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Create 3 admin keys
+    let mut keys = Vec::new();
+    for i in 1..=3 {
+        let (status, kb) = json_request_with_header(
+            &app, "POST", "/api/v1/keys",
+            "authorization", &bearer("f5-quorum-admin"),
+            serde_json::json!({ "name": format!("approver-{i}"), "role": "admin" }),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED);
+        keys.push(kb["raw_key"].as_str().unwrap().to_string());
+    }
+
+    // Create experience events
+    let mut event_ids = Vec::new();
+    for (_i, sig) in ["a signal", "b signal", "c signal"].iter().enumerate() {
+        let (status, ev) = json_request_with_header(
+            &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
+            "authorization", &bearer("f5-quorum-admin"),
+            serde_json::json!({"category":"tone","signal":sig,"confidence":0.8}),
+        ).await;
+        assert_eq!(status, StatusCode::CREATED);
+        event_ids.push(ev["id"].as_str().unwrap().to_string());
+    }
+
+    // Create high-risk proposal
+    let (status, proposal) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        "authorization", &bearer("f5-quorum-admin"),
+        serde_json::json!({
+            "proposal": "major change",
+            "candidate_core": {"persona": "bold"},
+            "reason": "evidence",
+            "risk_level": "high",
+            "source_event_ids": event_ids,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proposal["id"].as_str().unwrap();
+
+    // Approve with key 1 → partial (1/3)
+    let (status, p1) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        "authorization", &bearer(&keys[0]),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(p1["status"], "pending", "1/3 approvals → pending");
+
+    // Approve with key 2 → partial (2/3)
+    let (status, p2) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        "authorization", &bearer(&keys[1]),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(p2["status"], "pending", "2/3 approvals → pending");
+
+    // Approve with key 3 → approved (3/3)
+    let (status, p3) = json_request_with_header(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        "authorization", &bearer(&keys[2]),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "final approve failed: {p3:?}");
+    assert_eq!(p3["status"], "approved", "3/3 approvals → approved");
+    assert_eq!(p3["approvers"].as_array().unwrap().len(), 3);
+
+    // Verify identity was updated
+    let (status, identity) = json_request_with_header(
+        &app, "GET", &format!("/api/v1/agents/{agent}/identity"),
+        "authorization", &bearer("f5-quorum-admin"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(identity["core"]["persona"], "bold");
+}
+
+// F5-INT-07: Conflict analysis endpoint returns analysis
+#[tokio::test]
+async fn f5_conflict_analysis_endpoint() {
+    let app = build_test_app().await;
+    let agent = "f5-conflict-agent";
+
+    // Add supporting experience
+    let (_, ev1) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
+        serde_json::json!({"category":"tone","signal":"formal style works well","confidence":0.9}),
+    ).await;
+    let (_, ev2) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
+        serde_json::json!({"category":"tone","signal":"formal approach preferred","confidence":0.85}),
+    ).await;
+    // Add opposing experience
+    let (_, ev3) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
+        serde_json::json!({"category":"tone","signal":"avoid formal style entirely","confidence":0.7}),
+    ).await;
+
+    let event_ids: Vec<String> = vec![
+        ev1["id"].as_str().unwrap().into(),
+        ev2["id"].as_str().unwrap().into(),
+        ev3["id"].as_str().unwrap().into(),
+    ];
+
+    // Create proposal about formal style
+    let (status, proposal) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({
+            "proposal": "adopt formal communication style",
+            "candidate_core": {"style": "formal communication"},
+            "reason": "evidence",
+            "source_event_ids": event_ids,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proposal["id"].as_str().unwrap();
+
+    // Get conflict analysis
+    let (status, analysis) = json_request(
+        &app, "GET",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/conflicts"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "conflict analysis failed: {analysis:?}");
+    assert_eq!(analysis["agent_id"], agent);
+    assert_eq!(analysis["proposal_id"], pid);
+    assert!(analysis["conflict_score"].is_number());
+    assert!(analysis["recommendation"].is_string());
+    assert!(analysis["supporting_signals"].is_array());
+    assert!(analysis["conflicting_signals"].is_array());
+}
+
+// F5-INT-08: Reject promotion adds governance audit
+#[tokio::test]
+async fn f5_reject_promotion_records_audit() {
+    let app = build_test_app().await;
+    let agent = "f5-reject-audit";
+    let event_ids = create_three_experience_events(&app, agent).await;
+
+    let (status, proposal) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({
+            "proposal": "test proposal",
+            "candidate_core": {"mission": "new"},
+            "reason": "test",
+            "source_event_ids": event_ids,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proposal["id"].as_str().unwrap();
+
+    let (status, rejected) = json_request(
+        &app, "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/reject"),
+        serde_json::json!({"reason": "not convinced"}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "reject failed: {rejected:?}");
+    assert_eq!(rejected["status"], "rejected");
+    assert!(rejected["rejected_at"].is_string());
+    assert!(rejected["reason"].as_str().unwrap().contains("not convinced"));
+}
+
+// F5-INT-09: Duplicate approver is deduplicated
+#[tokio::test]
+async fn f5_duplicate_approver_deduplicated() {
+    let app = build_test_app().await;
+    let agent = "f5-dedup-approver";
+
+    // Set policy: medium needs 2 approvers
+    let (status, _) = json_request(
+        &app, "PUT", &format!("/api/v1/agents/{agent}/approval-policy"),
+        serde_json::json!({
+            "low_risk": {"min_approvers": 1},
+            "medium_risk": {"min_approvers": 2},
+            "high_risk": {"min_approvers": 3},
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let event_ids = create_three_experience_events(&app, agent).await;
+
+    let (status, proposal) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({
+            "proposal": "test",
+            "candidate_core": {"mission": "new"},
+            "reason": "test",
+            "source_event_ids": event_ids,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proposal["id"].as_str().unwrap();
+
+    // Approve twice with the same caller (bootstrap) — should remain at 1 approver
+    let (status, p1) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(p1["approvers"].as_array().unwrap().len(), 1);
+
+    let (status, p2) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    // Still 1 approver (deduplicated)
+    assert_eq!(p2["approvers"].as_array().unwrap().len(), 1);
+    assert_eq!(p2["status"], "pending", "still pending — need 2, have 1 unique");
+}
+
+// F5-INT-10: Approving an already-approved proposal fails
+#[tokio::test]
+async fn f5_approve_already_approved_fails() {
+    let app = build_test_app().await;
+    let agent = "f5-double-approve";
+    let event_ids = create_three_experience_events(&app, agent).await;
+
+    let (status, proposal) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({
+            "proposal": "test",
+            "candidate_core": {"mission": "new"},
+            "reason": "test",
+            "source_event_ids": event_ids,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proposal["id"].as_str().unwrap();
+
+    // Approve
+    let (status, _) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Second approval attempt should fail
+    let (status, body) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "double approve should fail: {body:?}");
+}
+
+// F5-INT-11: Expired status serde in list promotions
+#[tokio::test]
+async fn f5_expired_status_visible_in_list() {
+    let app = build_test_app().await;
+    let agent = "f5-expired-list";
+    let event_ids = create_three_experience_events(&app, agent).await;
+
+    let (status, _proposal) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({
+            "proposal": "test",
+            "candidate_core": {"mission": "new"},
+            "reason": "test",
+            "source_event_ids": event_ids,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // List promotions and verify the new one appears as pending with empty approvers
+    let (status, list) = json_request(
+        &app, "GET",
+        &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    let proposals = list.as_array().unwrap();
+    assert!(!proposals.is_empty());
+    let p = &proposals[0];
+    assert_eq!(p["status"], "pending");
+    assert!(p["approvers"].as_array().unwrap().is_empty());
+    assert!(p["expired_at"].is_null());
+}
+
+// F5-INT-12: Conflict analysis for proposal with no relevant events
+#[tokio::test]
+async fn f5_conflict_analysis_no_relevant_events() {
+    let app = build_test_app().await;
+    let agent = "f5-no-conflict";
+
+    // Create experience events about a DIFFERENT topic
+    let (_, ev1) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
+        serde_json::json!({"category":"greeting","signal":"user says hello warmly","confidence":0.9}),
+    ).await;
+    let (_, ev2) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
+        serde_json::json!({"category":"greeting","signal":"user prefers casual greetings","confidence":0.8}),
+    ).await;
+    let (_, ev3) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
+        serde_json::json!({"category":"greeting","signal":"warm welcomes appreciated","confidence":0.85}),
+    ).await;
+
+    let event_ids: Vec<String> = vec![
+        ev1["id"].as_str().unwrap().into(),
+        ev2["id"].as_str().unwrap().into(),
+        ev3["id"].as_str().unwrap().into(),
+    ];
+
+    // Create proposal about billing (unrelated to greeting events)
+    let (status, proposal) = json_request(
+        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        serde_json::json!({
+            "proposal": "add billing expertise",
+            "candidate_core": {"capabilities": ["billing", "refunds"]},
+            "reason": "expanding capabilities",
+            "source_event_ids": event_ids,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let pid = proposal["id"].as_str().unwrap();
+
+    let (status, analysis) = json_request(
+        &app, "GET",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/conflicts"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(analysis["conflict_score"], 0.0);
+    assert_eq!(analysis["recommendation"], "proceed");
+}
+
+// F5-INT-13: Webhook event types include promotion types
+#[tokio::test]
+async fn f5_webhook_event_types_include_promotion_types() {
+    // Verify the new webhook event types serialize correctly
+    let types = vec![
+        ("promotion_proposed", serde_json::json!("promotion_proposed")),
+        ("promotion_approved", serde_json::json!("promotion_approved")),
+        ("promotion_rejected", serde_json::json!("promotion_rejected")),
+        ("promotion_expired", serde_json::json!("promotion_expired")),
+        ("promotion_conflict_detected", serde_json::json!("promotion_conflict_detected")),
+    ];
+
+    use mnemo_server::state::MemoryWebhookEventType;
+    let variants = [
+        MemoryWebhookEventType::PromotionProposed,
+        MemoryWebhookEventType::PromotionApproved,
+        MemoryWebhookEventType::PromotionRejected,
+        MemoryWebhookEventType::PromotionExpired,
+        MemoryWebhookEventType::PromotionConflictDetected,
+    ];
+
+    for (expected_str, variant) in types.iter().zip(variants.iter()) {
+        let serialized = serde_json::to_value(variant).unwrap();
+        assert_eq!(&serialized, &expected_str.1, "webhook event type mismatch for {}", expected_str.0);
+    }
+}

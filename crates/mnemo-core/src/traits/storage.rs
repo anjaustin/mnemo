@@ -3,10 +3,10 @@ use uuid::Uuid;
 use crate::error::MnemoError;
 use crate::models::{
     agent::{
-        AgentIdentityAuditEvent, AgentIdentityProfile, AuditChainVerification,
-        BranchInfo, BranchMetadata, CreateBranchRequest, CreateExperienceRequest,
-        CreatePromotionProposalRequest, ExperienceEvent, MergeResult,
-        PromotionProposal, UpdateAgentIdentityRequest,
+        AgentIdentityAuditEvent, AgentIdentityProfile, ApprovalPolicy,
+        AuditChainVerification, BranchInfo, BranchMetadata, CreateBranchRequest,
+        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
+        MergeResult, PromotionProposal, UpdateAgentIdentityRequest,
     },
     api_key::ApiKey,
     digest::MemoryDigest,
@@ -124,6 +124,15 @@ pub trait AgentStore: Send + Sync {
         source_agent_id: &str,
         req: crate::models::agent::ForkAgentRequest,
     ) -> StorageResult<crate::models::agent::ForkResult>;
+
+    // ─── Approval Policy ────────────────────────────────────────
+    /// Save (create or update) the approval policy for an agent.
+    async fn save_approval_policy(&self, policy: &ApprovalPolicy) -> StorageResult<()>;
+    /// Get the approval policy for an agent, or `None` if not set.
+    async fn get_approval_policy(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<Option<ApprovalPolicy>>;
 }
 
 /// Result type for all storage operations.

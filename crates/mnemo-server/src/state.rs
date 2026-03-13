@@ -65,6 +65,11 @@ pub enum MemoryWebhookEventType {
     ClarificationGenerated,
     ClarificationResolved,
     NarrativeRefreshed,
+    PromotionProposed,
+    PromotionApproved,
+    PromotionRejected,
+    PromotionExpired,
+    PromotionConflictDetected,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
