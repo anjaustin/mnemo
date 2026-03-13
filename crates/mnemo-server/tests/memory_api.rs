@@ -11868,3 +11868,586 @@ async fn f5_webhook_event_types_include_promotion_types() {
         assert_eq!(&serialized, &expected_str.1, "webhook event type mismatch for {}", expected_str.0);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Feature 6: Multi-Agent Shared Memory with ACLs
+// ═══════════════════════════════════════════════════════════════════
+
+/// Helper: create a user and return user_id
+async fn create_test_user(app: &axum::Router, external_id: &str) -> String {
+    let (status, body) = json_request(
+        app,
+        "POST",
+        "/api/v1/users",
+        serde_json::json!({"external_id": external_id, "name": external_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create user failed: {body:?}");
+    body["id"].as_str().unwrap().to_string()
+}
+
+// F6-INT-01: Create a memory region
+#[tokio::test]
+async fn f6_create_memory_region() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-01").await;
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "shared_customer_context",
+            "owner_agent_id": "support-bot",
+            "user_id": user_id,
+            "classification_ceiling": "confidential",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create region failed: {body:?}");
+    assert_eq!(body["name"], "shared_customer_context");
+    assert_eq!(body["owner_agent_id"], "support-bot");
+    assert_eq!(body["classification_ceiling"], "confidential");
+    assert!(body["id"].is_string());
+}
+
+// F6-INT-02: Get region by ID
+#[tokio::test]
+async fn f6_get_region_by_id() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-02").await;
+
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "get_test_region",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let region_id = created["id"].as_str().unwrap();
+
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{region_id}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "get region failed: {body:?}");
+    assert_eq!(body["name"], "get_test_region");
+    assert_eq!(body["id"], region_id);
+}
+
+// F6-INT-03: Get nonexistent region returns 404
+#[tokio::test]
+async fn f6_get_nonexistent_region_404() {
+    let app = build_test_app().await;
+    let fake_id = uuid::Uuid::from_u128(999);
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{fake_id}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "should be 404: {body:?}");
+}
+
+// F6-INT-04: Update region name and classification
+#[tokio::test]
+async fn f6_update_region() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-04").await;
+
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "original_name",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    )
+    .await;
+    let region_id = created["id"].as_str().unwrap();
+
+    let (status, updated) = json_request(
+        &app,
+        "PUT",
+        &format!("/api/v1/regions/{region_id}"),
+        serde_json::json!({
+            "name": "updated_name",
+            "classification_ceiling": "restricted",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update failed: {updated:?}");
+    assert_eq!(updated["name"], "updated_name");
+    assert_eq!(updated["classification_ceiling"], "restricted");
+}
+
+// F6-INT-05: Delete region
+#[tokio::test]
+async fn f6_delete_region() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-05").await;
+
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "to_delete",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    )
+    .await;
+    let region_id = created["id"].as_str().unwrap();
+
+    let (status, _) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/v1/regions/{region_id}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Verify it's gone
+    let (status, _) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{region_id}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// F6-INT-06: Grant agent access to a region
+#[tokio::test]
+async fn f6_grant_region_access() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-06").await;
+
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "shared_region",
+            "owner_agent_id": "support-bot",
+            "user_id": user_id,
+        }),
+    )
+    .await;
+    let region_id = created["id"].as_str().unwrap();
+
+    let (status, acl) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({
+            "agent_id": "sales-bot",
+            "permission": "read",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "grant failed: {acl:?}");
+    assert_eq!(acl["agent_id"], "sales-bot");
+    assert_eq!(acl["permission"], "read");
+    assert_eq!(acl["region_id"], region_id);
+}
+
+// F6-INT-07: List ACLs for a region
+#[tokio::test]
+async fn f6_list_region_acls() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-07").await;
+
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "acl_list_region",
+            "owner_agent_id": "support-bot",
+            "user_id": user_id,
+        }),
+    )
+    .await;
+    let region_id = created["id"].as_str().unwrap();
+
+    // Grant access to two agents
+    json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "sales-bot", "permission": "read"}),
+    ).await;
+    json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "billing-bot", "permission": "write"}),
+    ).await;
+
+    let (status, acls) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let acl_list = acls.as_array().unwrap();
+    assert_eq!(acl_list.len(), 2);
+}
+
+// F6-INT-08: Revoke region access
+#[tokio::test]
+async fn f6_revoke_region_access() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-08").await;
+
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "revoke_test",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    )
+    .await;
+    let region_id = created["id"].as_str().unwrap();
+
+    // Grant then revoke
+    json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "sales-bot", "permission": "read"}),
+    ).await;
+
+    let (status, _) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/v1/regions/{region_id}/acl/sales-bot"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Verify ACL list is now empty
+    let (status, acls) = json_request(
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(acls.as_array().unwrap().is_empty());
+}
+
+// F6-INT-09: Cannot grant access to region owner
+#[tokio::test]
+async fn f6_cannot_grant_access_to_owner() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-09").await;
+
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "owner_test",
+            "owner_agent_id": "bot-owner",
+            "user_id": user_id,
+        }),
+    )
+    .await;
+    let region_id = created["id"].as_str().unwrap();
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "bot-owner", "permission": "manage"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "should reject: {body:?}");
+}
+
+// F6-INT-10: Create region with entity and edge filters
+#[tokio::test]
+async fn f6_create_region_with_filters() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-10").await;
+
+    let (status, body) = json_request(
+        &app,
+        "POST",
+        "/api/v1/regions",
+        serde_json::json!({
+            "name": "filtered_region",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+            "entity_filter": {
+                "entity_types": ["person", "organization"],
+                "name_patterns": ["acme"],
+            },
+            "edge_filter": {
+                "labels": ["works_at", "reports_to"],
+                "min_confidence": 0.7,
+            },
+            "classification_ceiling": "confidential",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "create filtered failed: {body:?}");
+    assert_eq!(body["entity_filter"]["entity_types"].as_array().unwrap().len(), 2);
+    assert_eq!(body["edge_filter"]["labels"].as_array().unwrap().len(), 2);
+    assert_eq!(body["edge_filter"]["min_confidence"], 0.7);
+}
+
+// F6-INT-11: List regions filtered by agent_id
+#[tokio::test]
+async fn f6_list_regions_by_agent() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-11").await;
+
+    // Create two regions owned by different agents
+    json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "bot_a_region",
+            "owner_agent_id": "f6-list-bot-a",
+            "user_id": user_id,
+        }),
+    ).await;
+    json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "bot_b_region",
+            "owner_agent_id": "f6-list-bot-b",
+            "user_id": user_id,
+        }),
+    ).await;
+
+    // List for bot-a should return 1
+    let (status, body) = json_request(
+        &app,
+        "GET",
+        "/api/v1/regions?agent_id=f6-list-bot-a",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let regions = body.as_array().unwrap();
+    assert!(regions.iter().all(|r| r["owner_agent_id"] == "f6-list-bot-a"));
+}
+
+// F6-INT-12: Delete region cleans up ACLs
+#[tokio::test]
+async fn f6_delete_region_cleans_up_acls() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-12").await;
+
+    let (_, created) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "cleanup_test",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = created["id"].as_str().unwrap();
+
+    // Grant access
+    json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "bot-b", "permission": "read"}),
+    ).await;
+
+    // Delete region
+    let (status, _) = json_request(
+        &app, "DELETE", &format!("/api/v1/regions/{region_id}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Verify region and ACLs are gone
+    let (status, _) = json_request(
+        &app, "GET", &format!("/api/v1/regions/{region_id}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = json_request(
+        &app, "GET", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// F6-INT-13: Grant access with expiry
+#[tokio::test]
+async fn f6_grant_access_with_expiry() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-13").await;
+
+    let (_, created) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "expiry_test",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = created["id"].as_str().unwrap();
+
+    let (status, acl) = json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({
+            "agent_id": "bot-b",
+            "permission": "read",
+            "expires_at": "2099-12-31T23:59:59Z",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(acl["expires_at"].is_string());
+}
+
+// F6-INT-14: Validate region name — empty rejected
+#[tokio::test]
+async fn f6_create_region_empty_name_rejected() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-14").await;
+
+    let (status, body) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "empty name should fail: {body:?}");
+}
+
+// F6-INT-15: Grant access with empty agent_id rejected
+#[tokio::test]
+async fn f6_grant_empty_agent_id_rejected() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-15").await;
+
+    let (_, created) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "empty_agent_test",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = created["id"].as_str().unwrap();
+
+    let (status, body) = json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "", "permission": "read"}),
+    ).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "empty agent_id should fail: {body:?}");
+}
+
+// F6-INT-16: RBAC — delete region requires Admin
+#[tokio::test]
+async fn f6_delete_region_requires_admin() {
+    let (app, _store, _admin_key) =
+        build_authed_test_app_with_store(vec!["f6-admin-key".to_string()]).await;
+
+    // Create a read key
+    let (_, key_body) = json_request_with_header(
+        &app, "POST", "/api/v1/keys",
+        "authorization", "Bearer f6-admin-key",
+        serde_json::json!({"name": "f6-write-key", "role": "write"}),
+    ).await;
+    let write_key = key_body["raw_key"].as_str().unwrap().to_string();
+
+    // Create user and region
+    let (_, user_body) = json_request_with_header(
+        &app, "POST", "/api/v1/users",
+        "authorization", "Bearer f6-admin-key",
+        serde_json::json!({"external_id": "f6-rbac-user", "name": "f6-rbac-user"}),
+    ).await;
+    let user_id = user_body["id"].as_str().unwrap();
+
+    let (status, created) = json_request_with_header(
+        &app, "POST", "/api/v1/regions",
+        "authorization", "Bearer f6-admin-key",
+        serde_json::json!({
+            "name": "rbac_delete_test",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let region_id = created["id"].as_str().unwrap();
+
+    // Write key should be forbidden from deleting
+    let (status, body) = json_request_with_header(
+        &app, "DELETE", &format!("/api/v1/regions/{region_id}"),
+        "authorization", &format!("Bearer {write_key}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "write key should be forbidden: {body:?}");
+
+    // Admin key should succeed
+    let (status, _) = json_request_with_header(
+        &app, "DELETE", &format!("/api/v1/regions/{region_id}"),
+        "authorization", "Bearer f6-admin-key",
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+// F6-INT-17: Upsert ACL — granting again replaces permission
+#[tokio::test]
+async fn f6_upsert_acl_replaces_permission() {
+    let app = build_test_app().await;
+    let user_id = create_test_user(&app, "f6-user-17").await;
+
+    let (_, created) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "upsert_test",
+            "owner_agent_id": "bot-a",
+            "user_id": user_id,
+        }),
+    ).await;
+    let region_id = created["id"].as_str().unwrap();
+
+    // Grant Read
+    json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "bot-b", "permission": "read"}),
+    ).await;
+
+    // Upgrade to Write
+    let (status, acl) = json_request(
+        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({"agent_id": "bot-b", "permission": "write"}),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(acl["permission"], "write");
+
+    // Verify only 1 ACL entry (not duplicated)
+    let (_, acls) = json_request(
+        &app, "GET", &format!("/api/v1/regions/{region_id}/acl"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(acls.as_array().unwrap().len(), 1);
+    assert_eq!(acls[0]["permission"], "write");
+}

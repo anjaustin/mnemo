@@ -45,10 +45,14 @@ use mnemo_core::models::guardrail::{
     EvaluateGuardrailsResponse, GuardrailRule, GuardrailTrigger,
     evaluate_rules, validate_condition_regexes, validate_guardrail_name,
 };
+use mnemo_core::models::region::{
+    CreateRegionRequest, GrantRegionAccessRequest, MemoryRegion, MemoryRegionAcl,
+    UpdateRegionRequest, validate_region_name,
+};
 use mnemo_core::models::view::{CreateViewRequest, ViewConstraints};
 use mnemo_core::traits::storage::{
     AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore,
-    GoalStore, GuardrailStore, NarrativeStore, RawVectorStore, SessionStore, SpanStore,
+    GoalStore, GuardrailStore, NarrativeStore, RawVectorStore, RegionStore, SessionStore, SpanStore,
     UserStore, VectorStore, ViewStore,
 };
 
@@ -1357,6 +1361,23 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/guardrails/:id",
             get(get_guardrail).put(update_guardrail).delete(delete_guardrail),
+        )
+        // Memory regions (multi-agent shared memory with ACLs)
+        .route(
+            "/api/v1/regions",
+            post(create_region).get(list_regions),
+        )
+        .route(
+            "/api/v1/regions/:region_id",
+            get(get_region).put(update_region).delete(delete_region),
+        )
+        .route(
+            "/api/v1/regions/:region_id/acl",
+            post(grant_region_access).get(list_region_acls),
+        )
+        .route(
+            "/api/v1/regions/:region_id/acl/:agent_id",
+            delete(revoke_region_access),
         )
         // Raw Vector API (external vector DB interface for AnythingLLM, etc.)
         .route(
@@ -8872,6 +8893,266 @@ async fn get_subgraph(
         "edges": edges,
         "entities_visited": subgraph.entities_visited,
     })))
+}
+
+// ─── Memory Regions (Multi-Agent Shared Memory) ───────────────────
+
+async fn create_region(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Json(req): Json<CreateRegionRequest>,
+) -> Result<(StatusCode, Json<MemoryRegion>), AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
+    validate_region_name(&req.name).map_err(|e| AppError(MnemoError::Validation(e)))?;
+
+    let region = MemoryRegion {
+        id: Uuid::now_v7(),
+        name: req.name.trim().to_string(),
+        owner_agent_id: req.owner_agent_id.clone(),
+        user_id: req.user_id,
+        entity_filter: req.entity_filter,
+        edge_filter: req.edge_filter,
+        classification_ceiling: req.classification_ceiling,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    state.state_store.create_region(&region).await?;
+
+    append_governance_audit(
+        &state,
+        req.user_id,
+        "region_created",
+        None,
+        serde_json::json!({
+            "region_id": region.id,
+            "name": region.name,
+            "owner_agent_id": region.owner_agent_id,
+        }),
+    )
+    .await;
+
+    Ok((StatusCode::CREATED, Json(region)))
+}
+
+#[derive(Debug, Deserialize)]
+struct ListRegionsQuery {
+    agent_id: Option<String>,
+}
+
+async fn list_regions(
+    State(state): State<AppState>,
+    Query(params): Query<ListRegionsQuery>,
+) -> Result<Json<Vec<MemoryRegion>>, AppError> {
+    let regions = state
+        .state_store
+        .list_regions(params.agent_id.as_deref())
+        .await?;
+    Ok(Json(regions))
+}
+
+async fn get_region(
+    State(state): State<AppState>,
+    Path(region_id): Path<Uuid>,
+) -> Result<Json<MemoryRegion>, AppError> {
+    let region = state
+        .state_store
+        .get_region(region_id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "MemoryRegion".into(),
+                id: region_id.to_string(),
+            })
+        })?;
+    Ok(Json(region))
+}
+
+async fn update_region(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(region_id): Path<Uuid>,
+    Json(req): Json<UpdateRegionRequest>,
+) -> Result<Json<MemoryRegion>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
+    let mut region = state
+        .state_store
+        .get_region(region_id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "MemoryRegion".into(),
+                id: region_id.to_string(),
+            })
+        })?;
+
+    if let Some(name) = req.name {
+        validate_region_name(&name).map_err(|e| AppError(MnemoError::Validation(e)))?;
+        region.name = name.trim().to_string();
+    }
+    if req.entity_filter.is_some() || req.edge_filter.is_some() {
+        region.entity_filter = req.entity_filter;
+        region.edge_filter = req.edge_filter;
+    }
+    if let Some(ceiling) = req.classification_ceiling {
+        region.classification_ceiling = ceiling;
+    }
+    region.updated_at = chrono::Utc::now();
+
+    state.state_store.update_region(&region).await?;
+    Ok(Json(region))
+}
+
+async fn delete_region(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(region_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
+    // Verify it exists
+    state
+        .state_store
+        .get_region(region_id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "MemoryRegion".into(),
+                id: region_id.to_string(),
+            })
+        })?;
+
+    state.state_store.delete_region(region_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn grant_region_access(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(region_id): Path<Uuid>,
+    Json(req): Json<GrantRegionAccessRequest>,
+) -> Result<(StatusCode, Json<MemoryRegionAcl>), AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
+    // Verify region exists
+    let region = state
+        .state_store
+        .get_region(region_id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "MemoryRegion".into(),
+                id: region_id.to_string(),
+            })
+        })?;
+
+    // Validate agent_id is not empty
+    if req.agent_id.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "agent_id is required".into(),
+        )));
+    }
+
+    // Cannot grant access to the owner (they already have implicit Manage)
+    if req.agent_id == region.owner_agent_id {
+        return Err(AppError(MnemoError::Validation(
+            "cannot grant explicit access to the region owner".into(),
+        )));
+    }
+
+    let acl = MemoryRegionAcl {
+        region_id,
+        agent_id: req.agent_id.clone(),
+        permission: req.permission,
+        granted_by: caller.key_name.clone(),
+        granted_at: chrono::Utc::now(),
+        expires_at: req.expires_at,
+    };
+
+    state.state_store.grant_region_access(&acl).await?;
+
+    append_governance_audit(
+        &state,
+        region.user_id,
+        "region_access_granted",
+        None,
+        serde_json::json!({
+            "region_id": region_id,
+            "agent_id": req.agent_id,
+            "permission": req.permission,
+            "granted_by": caller.key_name,
+        }),
+    )
+    .await;
+
+    Ok((StatusCode::CREATED, Json(acl)))
+}
+
+async fn list_region_acls(
+    State(state): State<AppState>,
+    Path(region_id): Path<Uuid>,
+) -> Result<Json<Vec<MemoryRegionAcl>>, AppError> {
+    // Verify region exists
+    state
+        .state_store
+        .get_region(region_id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "MemoryRegion".into(),
+                id: region_id.to_string(),
+            })
+        })?;
+
+    let acls = state.state_store.list_region_acls(region_id).await?;
+    Ok(Json(acls))
+}
+
+async fn revoke_region_access(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path((region_id, agent_id)): Path<(Uuid, String)>,
+) -> Result<StatusCode, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
+    // Verify region exists
+    let region = state
+        .state_store
+        .get_region(region_id)
+        .await?
+        .ok_or_else(|| {
+            AppError(MnemoError::NotFound {
+                resource_type: "MemoryRegion".into(),
+                id: region_id.to_string(),
+            })
+        })?;
+
+    state
+        .state_store
+        .revoke_region_access(region_id, &agent_id)
+        .await?;
+
+    append_governance_audit(
+        &state,
+        region.user_id,
+        "region_access_revoked",
+        None,
+        serde_json::json!({
+            "region_id": region_id,
+            "agent_id": agent_id,
+            "revoked_by": caller.key_name,
+        }),
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─── Raw Vector API ────────────────────────────────────────────────

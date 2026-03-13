@@ -11,6 +11,7 @@ use crate::models::{
     api_key::ApiKey,
     digest::MemoryDigest,
     guardrail::GuardrailRule,
+    region::{MemoryRegion, MemoryRegionAcl},
     view::MemoryView,
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -584,6 +585,42 @@ pub trait GuardrailStore: Send + Sync {
     async fn delete_guardrail(&self, id: Uuid) -> StorageResult<()>;
 }
 
+// ─── Region Storage ────────────────────────────────────────────────
+
+/// Trait for memory region and ACL persistence.
+#[allow(async_fn_in_trait)]
+pub trait RegionStore: Send + Sync {
+    /// Create a new memory region.
+    async fn create_region(&self, region: &MemoryRegion) -> StorageResult<()>;
+
+    /// Get a region by ID.
+    async fn get_region(&self, id: Uuid) -> StorageResult<Option<MemoryRegion>>;
+
+    /// List all regions (optionally filtered to regions an agent can access).
+    async fn list_regions(&self, agent_id: Option<&str>) -> StorageResult<Vec<MemoryRegion>>;
+
+    /// Update a region.
+    async fn update_region(&self, region: &MemoryRegion) -> StorageResult<()>;
+
+    /// Delete a region and all its ACLs.
+    async fn delete_region(&self, id: Uuid) -> StorageResult<()>;
+
+    /// Grant an agent access to a region (upsert: replaces existing ACL for same agent).
+    async fn grant_region_access(&self, acl: &MemoryRegionAcl) -> StorageResult<()>;
+
+    /// List all ACL entries for a region.
+    async fn list_region_acls(&self, region_id: Uuid) -> StorageResult<Vec<MemoryRegionAcl>>;
+
+    /// Revoke an agent's access to a region.
+    async fn revoke_region_access(&self, region_id: Uuid, agent_id: &str) -> StorageResult<()>;
+
+    /// Get all regions an agent has access to (via ACL, excluding expired).
+    async fn list_agent_accessible_regions(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<Vec<MemoryRegion>>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -603,6 +640,7 @@ pub trait StateStore:
     + ApiKeyStore
     + ViewStore
     + GuardrailStore
+    + RegionStore
 {
 }
 
@@ -622,6 +660,7 @@ impl<T> StateStore for T where
         + ApiKeyStore
         + ViewStore
         + GuardrailStore
+        + RegionStore
 {
 }
 

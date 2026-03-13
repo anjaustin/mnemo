@@ -19,6 +19,7 @@ use mnemo_core::models::{
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams, ProcessingStatus},
     guardrail::GuardrailRule,
+    region::{MemoryRegion, MemoryRegionAcl},
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     span::LlmSpan,
     user::{CreateUserRequest, UpdateUserRequest, User},
@@ -2356,5 +2357,284 @@ impl GuardrailStore for RedisStateStore {
 
         // Delete the JSON document
         self.del(&pk).await
+    }
+}
+
+// ─── RegionStore ───────────────────────────────────────────────────
+
+impl RegionStore for RedisStateStore {
+    async fn create_region(&self, region: &MemoryRegion) -> StorageResult<()> {
+        let pk = self.key(&["region", &region.id.to_string()]);
+        self.set_json(&pk, region).await?;
+
+        // Global index: sorted by created_at
+        let idx = self.key(&["regions"]);
+        let score = region.created_at.timestamp_millis() as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&idx)
+            .arg(score)
+            .arg(region.id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Owner reverse index
+        let owner_idx = self.key(&["agent_regions", &region.owner_agent_id]);
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&owner_idx)
+            .arg(score)
+            .arg(region.id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_region(&self, id: Uuid) -> StorageResult<Option<MemoryRegion>> {
+        let pk = self.key(&["region", &id.to_string()]);
+        self.get_json::<MemoryRegion>(&pk).await
+    }
+
+    async fn list_regions(&self, agent_id: Option<&str>) -> StorageResult<Vec<MemoryRegion>> {
+        match agent_id {
+            Some(aid) => {
+                // Return regions the agent owns OR has ACL access to
+                let owner_idx = self.key(&["agent_regions", aid]);
+                let mut conn = self.conn.clone();
+                let ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+                    .arg(&owner_idx)
+                    .arg("-inf")
+                    .arg("+inf")
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+                let mut regions = Vec::new();
+                for id_str in &ids {
+                    if let Ok(id) = id_str.parse::<Uuid>() {
+                        if let Some(r) = self.get_region(id).await? {
+                            regions.push(r);
+                        }
+                    }
+                }
+                Ok(regions)
+            }
+            None => {
+                // Return all regions
+                let idx = self.key(&["regions"]);
+                let mut conn = self.conn.clone();
+                let ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+                    .arg(&idx)
+                    .arg("-inf")
+                    .arg("+inf")
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+                let mut regions = Vec::new();
+                for id_str in &ids {
+                    if let Ok(id) = id_str.parse::<Uuid>() {
+                        if let Some(r) = self.get_region(id).await? {
+                            regions.push(r);
+                        }
+                    }
+                }
+                Ok(regions)
+            }
+        }
+    }
+
+    async fn update_region(&self, region: &MemoryRegion) -> StorageResult<()> {
+        let pk = self.key(&["region", &region.id.to_string()]);
+        self.set_json(&pk, region).await
+    }
+
+    async fn delete_region(&self, id: Uuid) -> StorageResult<()> {
+        // Get region first to clean up indices
+        let region = match self.get_region(id).await? {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+
+        // Remove from global index
+        let idx = self.key(&["regions"]);
+        let mut conn = self.conn.clone();
+        redis::cmd("ZREM")
+            .arg(&idx)
+            .arg(id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Remove from owner reverse index
+        let owner_idx = self.key(&["agent_regions", &region.owner_agent_id]);
+        let mut conn = self.conn.clone();
+        redis::cmd("ZREM")
+            .arg(&owner_idx)
+            .arg(id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Delete all ACLs for this region
+        let acl_idx = self.key(&["region_acl", &id.to_string()]);
+        let mut conn = self.conn.clone();
+        let acl_agent_ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(&acl_idx)
+            .arg("-inf")
+            .arg("+inf")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        for agent_id in &acl_agent_ids {
+            // Remove from agent reverse index
+            let agent_idx = self.key(&["agent_regions", agent_id]);
+            let mut conn = self.conn.clone();
+            redis::cmd("ZREM")
+                .arg(&agent_idx)
+                .arg(id.to_string())
+                .query_async::<()>(&mut conn)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+            // Delete ACL entry
+            let acl_key = self.key(&["region_acl_entry", &id.to_string(), agent_id]);
+            self.del(&acl_key).await?;
+        }
+
+        // Delete ACL index
+        self.del(&acl_idx).await?;
+
+        // Delete region document
+        let pk = self.key(&["region", &id.to_string()]);
+        self.del(&pk).await
+    }
+
+    async fn grant_region_access(&self, acl: &MemoryRegionAcl) -> StorageResult<()> {
+        // Store ACL entry
+        let acl_key = self.key(&[
+            "region_acl_entry",
+            &acl.region_id.to_string(),
+            &acl.agent_id,
+        ]);
+        self.set_json(&acl_key, acl).await?;
+
+        // Add to region's ACL index (keyed by agent_id for easy lookup)
+        let acl_idx = self.key(&["region_acl", &acl.region_id.to_string()]);
+        let score = acl.granted_at.timestamp_millis() as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&acl_idx)
+            .arg(score)
+            .arg(&acl.agent_id)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Add to agent's reverse index (agent → region mapping)
+        let agent_idx = self.key(&["agent_regions", &acl.agent_id]);
+        let region_score = acl.granted_at.timestamp_millis() as f64;
+        let mut conn = self.conn.clone();
+        redis::cmd("ZADD")
+            .arg(&agent_idx)
+            .arg(region_score)
+            .arg(acl.region_id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn list_region_acls(&self, region_id: Uuid) -> StorageResult<Vec<MemoryRegionAcl>> {
+        let acl_idx = self.key(&["region_acl", &region_id.to_string()]);
+        let mut conn = self.conn.clone();
+        let agent_ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(&acl_idx)
+            .arg("-inf")
+            .arg("+inf")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut acls = Vec::new();
+        for agent_id in &agent_ids {
+            let acl_key = self.key(&["region_acl_entry", &region_id.to_string(), agent_id]);
+            if let Some(acl) = self.get_json::<MemoryRegionAcl>(&acl_key).await? {
+                acls.push(acl);
+            }
+        }
+        Ok(acls)
+    }
+
+    async fn revoke_region_access(&self, region_id: Uuid, agent_id: &str) -> StorageResult<()> {
+        // Remove ACL entry
+        let acl_key = self.key(&["region_acl_entry", &region_id.to_string(), agent_id]);
+        self.del(&acl_key).await?;
+
+        // Remove from region's ACL index
+        let acl_idx = self.key(&["region_acl", &region_id.to_string()]);
+        let mut conn = self.conn.clone();
+        redis::cmd("ZREM")
+            .arg(&acl_idx)
+            .arg(agent_id)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Remove from agent's reverse index
+        let agent_idx = self.key(&["agent_regions", agent_id]);
+        let mut conn = self.conn.clone();
+        redis::cmd("ZREM")
+            .arg(&agent_idx)
+            .arg(region_id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn list_agent_accessible_regions(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<Vec<MemoryRegion>> {
+        // Get all region IDs from the agent's reverse index
+        let agent_idx = self.key(&["agent_regions", agent_id]);
+        let mut conn = self.conn.clone();
+        let region_ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(&agent_idx)
+            .arg("-inf")
+            .arg("+inf")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut regions = Vec::new();
+        for id_str in &region_ids {
+            if let Ok(id) = id_str.parse::<Uuid>() {
+                // Check if the ACL entry exists and is not expired
+                let acl_key = self.key(&["region_acl_entry", id_str, agent_id]);
+                if let Some(acl) = self.get_json::<MemoryRegionAcl>(&acl_key).await? {
+                    if !acl.is_expired() {
+                        if let Some(region) = self.get_region(id).await? {
+                            regions.push(region);
+                        }
+                    }
+                } else {
+                    // No ACL entry — might be the owner. Check region ownership.
+                    if let Some(region) = self.get_region(id).await? {
+                        if region.owner_agent_id == agent_id {
+                            regions.push(region);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(regions)
     }
 }
