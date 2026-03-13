@@ -3,6 +3,7 @@
 //! Spins up a tonic gRPC server against live Redis + Qdrant, then exercises
 //! each RPC via a real tonic client. Mirrors the REST integration tests in
 //! `memory_api.rs` but over protobuf/HTTP2.
+#![allow(clippy::result_large_err)]
 
 use std::sync::Arc;
 
