@@ -72,6 +72,7 @@ pub const DEFAULT_CLARIFICATION_TTL_DAYS: u32 = 7;
 
 impl ClarificationRequest {
     /// Create a new pending clarification request.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         user_id: Uuid,
         question: String,
@@ -590,7 +591,7 @@ mod tests {
 
     #[test]
     fn test_falsify_many_conflict_edge_ids() {
-        let edge_ids: Vec<Uuid> = (0..100).map(|i| Uuid::from_u128(i)).collect();
+        let edge_ids: Vec<Uuid> = (0..100).map(Uuid::from_u128).collect();
         let req = ClarificationRequest::new(
             Uuid::from_u128(1),
             "question".into(),

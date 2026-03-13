@@ -1035,7 +1035,7 @@ impl AllowlistMerkleTree {
         keys.sort();
         let mut leaf_hashes: Vec<MerkleHash> = keys.iter().map(|k| leaf_hash(k)).collect();
         // Pad to even length
-        if leaf_hashes.len() % 2 != 0 {
+        if !leaf_hashes.len().is_multiple_of(2) {
             leaf_hashes.push(*leaf_hashes.last().unwrap());
         }
 
@@ -1043,7 +1043,7 @@ impl AllowlistMerkleTree {
         let mut current = leaf_hashes;
 
         while current.len() > 1 {
-            let mut next = Vec::with_capacity((current.len() + 1) / 2);
+            let mut next = Vec::with_capacity(current.len().div_ceil(2));
             for pair in current.chunks(2) {
                 if pair.len() == 2 {
                     next.push(node_hash(&pair[0], &pair[1]));
@@ -1700,7 +1700,7 @@ mod tests {
         let event = make_event("x", 100.0, 100.0, 0.0, 0);
         let fisher = compute_fisher_importance(&event, &[]);
         assert!(
-            fisher >= 0.0 && fisher <= 1.0,
+            (0.0..=1.0).contains(&fisher),
             "fisher must be in [0,1], got {}",
             fisher
         );
@@ -1710,7 +1710,7 @@ mod tests {
             .collect();
         let fisher2 = compute_fisher_importance(&event, &existing);
         assert!(
-            fisher2 >= 0.0 && fisher2 <= 1.0,
+            (0.0..=1.0).contains(&fisher2),
             "fisher must be in [0,1], got {}",
             fisher2
         );
@@ -2796,7 +2796,7 @@ mod tests {
         for key in IDENTITY_ALLOWLIST {
             let proof = tree
                 .prove(key)
-                .expect(&format!("proof for '{}' should exist", key));
+                .unwrap_or_else(|| panic!("proof for '{}' should exist", key));
             assert_eq!(proof.key, *key);
             assert_eq!(proof.root, tree.root);
             assert!(

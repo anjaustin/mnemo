@@ -8616,7 +8616,7 @@ async fn test_coherence_response_all_fields_present() {
     // Score should be in [0, 1]
     let score = body["score"].as_f64().unwrap();
     assert!(
-        score >= 0.0 && score <= 1.0,
+        (0.0..=1.0).contains(&score),
         "score must be in [0,1]: {}",
         score
     );
@@ -12436,7 +12436,7 @@ async fn f5_multi_approver_quorum_with_authed_keys() {
 
     // Create experience events
     let mut event_ids = Vec::new();
-    for (_i, sig) in ["a signal", "b signal", "c signal"].iter().enumerate() {
+    for sig in ["a signal", "b signal", "c signal"].iter() {
         let (status, ev) = json_request_with_header(
             &app,
             "POST",
@@ -12835,7 +12835,7 @@ async fn f5_conflict_analysis_no_relevant_events() {
 #[tokio::test]
 async fn f5_webhook_event_types_include_promotion_types() {
     // Verify the new webhook event types serialize correctly
-    let types = vec![
+    let types = [
         (
             "promotion_proposed",
             serde_json::json!("promotion_proposed"),

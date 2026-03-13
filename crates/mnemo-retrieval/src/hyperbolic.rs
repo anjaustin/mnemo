@@ -345,8 +345,8 @@ mod tests {
         // Points near the boundary are exponentially far apart
         let near = vec![0.1, 0.0];
         let far = vec![0.9, 0.0];
-        let d_near = poincare_distance(&vec![0.0, 0.0], &near, 1.0);
-        let d_far = poincare_distance(&vec![0.0, 0.0], &far, 1.0);
+        let d_near = poincare_distance(&[0.0, 0.0], &near, 1.0);
+        let d_far = poincare_distance(&[0.0, 0.0], &far, 1.0);
         assert!(
             d_far > d_near * 3.0,
             "Boundary distance should grow super-linearly: near={}, far={}",
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_log_map_origin_zero() {
-        let result = log_map_origin(&vec![0.0, 0.0], 1.0);
+        let result = log_map_origin(&[0.0, 0.0], 1.0);
         assert_eq!(result, vec![0.0, 0.0]);
     }
 

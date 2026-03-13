@@ -83,7 +83,7 @@ impl GrpcState {
         Self {
             state_store: app.state_store.clone(),
             retrieval: app.retrieval.clone(),
-            reranker: app.reranker.clone(),
+            reranker: app.reranker,
             auth_config,
         }
     }
@@ -243,6 +243,7 @@ fn extract_request_id<T>(request: &Request<T>) -> String {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
+#[allow(clippy::result_large_err)]
 fn parse_uuid(s: &str, field: &str) -> Result<Uuid, Status> {
     s.parse::<Uuid>()
         .map_err(|_| Status::invalid_argument(format!("invalid UUID for {field}: {s}")))
@@ -404,7 +405,7 @@ impl MemoryService for GrpcState {
 
         // F7: Clamp min_relevance to [0.0, 1.0]
         let min_relevance = match req.min_relevance {
-            Some(r) if r < 0.0 || r > 1.0 => {
+            Some(r) if !(0.0..=1.0).contains(&r) => {
                 return Err(Status::invalid_argument(
                     "min_relevance must be between 0.0 and 1.0",
                 ));
@@ -602,7 +603,7 @@ impl EntityService for GrpcState {
         let type_filter = req
             .entity_type
             .as_deref()
-            .map(|s| mnemo_core::models::entity::EntityType::from_str_flexible(s));
+            .map(mnemo_core::models::entity::EntityType::from_str_flexible);
 
         let entities = self
             .state_store

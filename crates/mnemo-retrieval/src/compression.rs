@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_quantize_f16_preserves_magnitude() {
-        let v = vec![0.123456789, -0.987654321, 0.0, 1.0, -1.0];
+        let v = vec![0.123_456_79, -0.987_654_3, 0.0, 1.0, -1.0];
         let q = quantize_f16(&v);
         assert_eq!(q.len(), v.len());
         for (orig, quant) in v.iter().zip(q.iter()) {

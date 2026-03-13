@@ -1114,7 +1114,7 @@ impl AgentStore for RedisStateStore {
         agent_id: &str,
         req: CreateBranchRequest,
     ) -> StorageResult<BranchInfo> {
-        validate_branch_name(&req.branch_name).map_err(|e| MnemoError::Validation(e))?;
+        validate_branch_name(&req.branch_name).map_err(MnemoError::Validation)?;
 
         // Check if branch already exists
         let meta_key = self.key(&["agent_branch", agent_id, &req.branch_name]);
@@ -1336,7 +1336,7 @@ impl AgentStore for RedisStateStore {
         req: ForkAgentRequest,
     ) -> StorageResult<ForkResult> {
         // 1. Validate new agent ID
-        validate_fork_agent_id(&req.new_agent_id).map_err(|e| MnemoError::Validation(e))?;
+        validate_fork_agent_id(&req.new_agent_id).map_err(MnemoError::Validation)?;
 
         // 2. Check new agent doesn't already exist
         let new_identity_key = self.key(&["agent_identity", &req.new_agent_id]);
@@ -2668,9 +2668,9 @@ impl RegionStore for RedisStateStore {
             let mut pipe = redis::pipe();
             // Don't wrap cleanup in atomic — best-effort is fine
             for (region_id_str, aid) in &expired_cleanup {
-                let acl_key = self.key(&["region_acl_entry", region_id_str, &aid]);
+                let acl_key = self.key(&["region_acl_entry", region_id_str, aid]);
                 let acl_idx = self.key(&["region_acl", region_id_str]);
-                let agent_rev_idx = self.key(&["agent_regions", &aid]);
+                let agent_rev_idx = self.key(&["agent_regions", aid]);
                 pipe.del(&acl_key)
                     .ignore()
                     .cmd("ZREM")

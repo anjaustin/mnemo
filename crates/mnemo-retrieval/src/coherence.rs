@@ -149,7 +149,7 @@ pub fn compute_fact_coherence(edges: &[Edge]) -> (f32, usize) {
     }
 
     let mut conflicting_groups = 0usize;
-    for (_key, group_edges) in &groups {
+    for group_edges in groups.values() {
         let active_count = group_edges.iter().filter(|e| e.is_valid()).count();
         if active_count > 1 {
             conflicting_groups += 1;
@@ -858,7 +858,7 @@ mod tests {
         // isolation_penalty = 0.6 * 0.4 = 0.24
         // score = 0.84 - 0.24 = 0.60
         assert!(
-            score >= 0.0 && score <= 1.0,
+            (0.0..=1.0).contains(&score),
             "score must be bounded: {}",
             score
         );

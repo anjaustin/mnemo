@@ -158,8 +158,8 @@ impl GatWeights {
 
         // Build adjacency list (with self-loops)
         let mut adj: Vec<Vec<(usize, f32)>> = vec![Vec::new(); n];
-        for i in 0..n {
-            adj[i].push((i, 1.0)); // self-loop
+        for (i, row) in adj.iter_mut().enumerate() {
+            row.push((i, 1.0)); // self-loop
         }
         for edge in &subgraph.edges {
             if edge.source_idx < n && edge.target_idx < n {
@@ -207,15 +207,15 @@ impl GatWeights {
                 let mut agg = vec![0.0f32; HEAD_DIM];
                 for (k, &(j, _)) in neighbors.iter().enumerate() {
                     let alpha_k = exp_scores[k] / (sum_exp + 1e-10);
-                    for d in 0..HEAD_DIM {
-                        agg[d] += alpha_k * projected[j][d];
+                    for (d, agg_d) in agg.iter_mut().enumerate() {
+                        *agg_d += alpha_k * projected[j][d];
                     }
                 }
 
                 // ELU activation
-                for d in 0..HEAD_DIM {
-                    if agg[d] < 0.0 {
-                        agg[d] = agg[d].exp() - 1.0;
+                for val in agg.iter_mut() {
+                    if *val < 0.0 {
+                        *val = val.exp() - 1.0;
                     }
                 }
 
@@ -230,8 +230,8 @@ impl GatWeights {
         for i in 0..n {
             // Concatenate all heads: [h0_d0, h0_d1, ..., h3_d7]
             let mut concat = Vec::with_capacity(NUM_HEADS * HEAD_DIM);
-            for h in 0..NUM_HEADS {
-                concat.extend_from_slice(&head_outputs[h][i]);
+            for head_output in head_outputs.iter().take(NUM_HEADS) {
+                concat.extend_from_slice(&head_output[i]);
             }
 
             // Linear projection to scalar

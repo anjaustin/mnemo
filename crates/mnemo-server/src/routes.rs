@@ -1717,7 +1717,7 @@ pub async fn run_compression_sweep(state: &AppState) -> Result<u64, MnemoError> 
             let target_tier = match created_at_epoch {
                 Some(ts) => {
                     let created = chrono::DateTime::from_timestamp(ts as i64, 0)
-                        .unwrap_or_else(|| chrono::Utc::now());
+                        .unwrap_or_else(chrono::Utc::now);
                     config.tier_for_timestamp(created)
                 }
                 None => CompressionTier::Full,

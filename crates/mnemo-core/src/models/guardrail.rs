@@ -197,14 +197,16 @@ impl GuardrailCondition {
                 .classification
                 .map(|c| c > *classification)
                 .unwrap_or(false),
-            Self::EntityTypeIn { entity_types } => ctx.entity_type.as_ref().map_or(false, |et| {
-                entity_types.iter().any(|t| t.eq_ignore_ascii_case(et))
-            }),
-            Self::EdgeLabelIn { labels } => ctx.edge_label.as_ref().map_or(false, |el| {
-                labels.iter().any(|l| l.eq_ignore_ascii_case(el))
-            }),
+            Self::EntityTypeIn { entity_types } => ctx
+                .entity_type
+                .as_ref()
+                .is_some_and(|et| entity_types.iter().any(|t| t.eq_ignore_ascii_case(et))),
+            Self::EdgeLabelIn { labels } => ctx
+                .edge_label
+                .as_ref()
+                .is_some_and(|el| labels.iter().any(|l| l.eq_ignore_ascii_case(el))),
             Self::ContentMatchesRegex { pattern } => {
-                ctx.content.as_ref().map_or(false, |content| {
+                ctx.content.as_ref().is_some_and(|content| {
                     // Compile regex; if invalid, treat as non-match (safe default)
                     regex::Regex::new(pattern)
                         .map(|re| re.is_match(content))
@@ -241,9 +243,7 @@ impl GuardrailRule {
         }
         match &self.scope {
             GuardrailScope::Global => true,
-            GuardrailScope::User { user_id: rule_user } => {
-                user_id.map_or(false, |uid| uid == *rule_user)
-            }
+            GuardrailScope::User { user_id: rule_user } => user_id == Some(*rule_user),
         }
     }
 }
@@ -532,15 +532,23 @@ mod tests {
         let cond = GuardrailCondition::EdgeLabelIn {
             labels: vec!["salary".into(), "ssn".into()],
         };
-        let mut ctx = EvalContext::default();
 
-        ctx.edge_label = Some("salary".into());
+        let ctx = EvalContext {
+            edge_label: Some("salary".into()),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx));
 
-        ctx.edge_label = Some("SSN".into()); // case-insensitive
+        let ctx = EvalContext {
+            edge_label: Some("SSN".into()), // case-insensitive
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx));
 
-        ctx.edge_label = Some("works_at".into());
+        let ctx = EvalContext {
+            edge_label: Some("works_at".into()),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx));
     }
 
@@ -549,19 +557,27 @@ mod tests {
         let cond = GuardrailCondition::ContentMatchesRegex {
             pattern: r"\bSSN\b".into(),
         };
-        let mut ctx = EvalContext::default();
 
-        ctx.content = Some("My SSN is 123-45-6789".into());
+        let ctx = EvalContext {
+            content: Some("My SSN is 123-45-6789".into()),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx));
 
-        ctx.content = Some("No sensitive data here".into());
+        let ctx = EvalContext {
+            content: Some("No sensitive data here".into()),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx));
 
         // Invalid regex → non-match (safe default)
         let bad_cond = GuardrailCondition::ContentMatchesRegex {
             pattern: r"[invalid".into(),
         };
-        ctx.content = Some("anything".into());
+        let ctx = EvalContext {
+            content: Some("anything".into()),
+            ..Default::default()
+        };
         assert!(!bad_cond.evaluate(&ctx));
     }
 
@@ -570,45 +586,69 @@ mod tests {
         let cond = GuardrailCondition::CallerRoleBelow {
             role: ApiKeyRole::Admin,
         };
-        let mut ctx = EvalContext::default();
 
-        ctx.caller_role = Some(ApiKeyRole::Read);
+        let ctx = EvalContext {
+            caller_role: Some(ApiKeyRole::Read),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx)); // Read < Admin
 
-        ctx.caller_role = Some(ApiKeyRole::Write);
+        let ctx = EvalContext {
+            caller_role: Some(ApiKeyRole::Write),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx)); // Write < Admin
 
-        ctx.caller_role = Some(ApiKeyRole::Admin);
+        let ctx = EvalContext {
+            caller_role: Some(ApiKeyRole::Admin),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx)); // Admin == Admin (not below)
     }
 
     #[test]
     fn condition_fact_age_above_days() {
         let cond = GuardrailCondition::FactAgeAboveDays { days: 90 };
-        let mut ctx = EvalContext::default();
 
-        ctx.fact_age_days = Some(30);
+        let ctx = EvalContext {
+            fact_age_days: Some(30),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx));
 
-        ctx.fact_age_days = Some(91);
+        let ctx = EvalContext {
+            fact_age_days: Some(91),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx));
 
-        ctx.fact_age_days = Some(90);
+        let ctx = EvalContext {
+            fact_age_days: Some(90),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx)); // exactly 90 is not above 90
     }
 
     #[test]
     fn condition_confidence_below() {
         let cond = GuardrailCondition::ConfidenceBelow { confidence: 0.5 };
-        let mut ctx = EvalContext::default();
 
-        ctx.confidence = Some(0.3);
+        let ctx = EvalContext {
+            confidence: Some(0.3),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx));
 
-        ctx.confidence = Some(0.5);
+        let ctx = EvalContext {
+            confidence: Some(0.5),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx)); // 0.5 is not below 0.5
 
-        ctx.confidence = Some(0.9);
+        let ctx = EvalContext {
+            confidence: Some(0.9),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx));
     }
 
@@ -624,15 +664,21 @@ mod tests {
                 },
             ],
         };
-        let mut ctx = EvalContext::default();
 
         // Both match
-        ctx.edge_label = Some("salary".into());
-        ctx.classification = Some(Classification::Internal);
+        let ctx = EvalContext {
+            edge_label: Some("salary".into()),
+            classification: Some(Classification::Internal),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx));
 
         // Only one matches
-        ctx.edge_label = Some("works_at".into());
+        let ctx = EvalContext {
+            edge_label: Some("works_at".into()),
+            classification: Some(Classification::Internal),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx));
     }
 
@@ -648,15 +694,23 @@ mod tests {
                 },
             ],
         };
-        let mut ctx = EvalContext::default();
 
-        ctx.edge_label = Some("salary".into());
+        let ctx = EvalContext {
+            edge_label: Some("salary".into()),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx));
 
-        ctx.edge_label = Some("ssn".into());
+        let ctx = EvalContext {
+            edge_label: Some("ssn".into()),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx));
 
-        ctx.edge_label = Some("works_at".into());
+        let ctx = EvalContext {
+            edge_label: Some("works_at".into()),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx));
     }
 
@@ -667,12 +721,17 @@ mod tests {
                 labels: vec!["salary".into()],
             }),
         };
-        let mut ctx = EvalContext::default();
 
-        ctx.edge_label = Some("works_at".into());
+        let ctx = EvalContext {
+            edge_label: Some("works_at".into()),
+            ..Default::default()
+        };
         assert!(cond.evaluate(&ctx)); // NOT salary → true
 
-        ctx.edge_label = Some("salary".into());
+        let ctx = EvalContext {
+            edge_label: Some("salary".into()),
+            ..Default::default()
+        };
         assert!(!cond.evaluate(&ctx)); // NOT salary → false
     }
 

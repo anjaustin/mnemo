@@ -369,7 +369,7 @@ impl<T: Clone + Eq + std::hash::Hash + Serialize> ORSet<T> {
         let tag = self.next_tag(node_id);
         self.elements
             .entry(element)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(tag.clone());
         tag
     }
@@ -384,7 +384,7 @@ impl<T: Clone + Eq + std::hash::Hash + Serialize> ORSet<T> {
     pub fn contains(&self, element: &T) -> bool {
         self.elements
             .get(element)
-            .map_or(false, |tags| !tags.is_empty())
+            .is_some_and(|tags| !tags.is_empty())
     }
 
     /// Get all elements currently in the set.
@@ -411,10 +411,7 @@ impl<T: Clone + Eq + std::hash::Hash + Serialize> ORSet<T> {
     /// Merge with another OR-Set. Union of all (element, tag) pairs.
     pub fn merge(&mut self, other: &ORSet<T>) {
         for (elem, other_tags) in &other.elements {
-            let entry = self
-                .elements
-                .entry(elem.clone())
-                .or_insert_with(HashSet::new);
+            let entry = self.elements.entry(elem.clone()).or_default();
             for tag in other_tags {
                 entry.insert(tag.clone());
             }

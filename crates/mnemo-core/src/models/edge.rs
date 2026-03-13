@@ -764,7 +764,7 @@ mod tests {
     fn test_compute_edge_fisher_importance_clamped() {
         let fi = compute_edge_fisher_importance(1000, 1, 1000, 1000);
         assert!(
-            fi >= 0.0 && fi <= 1.0,
+            (0.0..=1.0).contains(&fi),
             "Importance must be clamped to [0, 1], got {}",
             fi
         );
@@ -829,7 +829,7 @@ mod tests {
             "Zero half-life must not produce NaN/Inf, got {}",
             eff
         );
-        assert!(eff >= 0.0 && eff <= 1.0);
+        assert!((0.0..=1.0).contains(&eff));
     }
 
     #[test]
@@ -885,7 +885,7 @@ mod tests {
         let eff = effective_edge_confidence(&edge, 0.0, 90);
         assert!(eff.is_finite(), "u32::MAX corroboration must not overflow");
         assert!(
-            eff >= 0.0 && eff <= 1.0,
+            (0.0..=1.0).contains(&eff),
             "Result must be clamped, got {}",
             eff
         );
@@ -983,7 +983,7 @@ mod tests {
         let fi = compute_edge_fisher_importance(0, 0, 0, 0);
         assert!(fi.is_finite(), "All-zero inputs must not produce NaN");
         assert!(
-            fi >= 0.0 && fi <= 1.0,
+            (0.0..=1.0).contains(&fi),
             "Importance must be clamped, got {}",
             fi
         );
@@ -994,7 +994,7 @@ mod tests {
         let fi = compute_edge_fisher_importance(u32::MAX, u32::MAX, u32::MAX, u32::MAX);
         assert!(fi.is_finite(), "u32::MAX inputs must not overflow to Inf");
         assert!(
-            fi >= 0.0 && fi <= 1.0,
+            (0.0..=1.0).contains(&fi),
             "Importance must be clamped, got {}",
             fi
         );

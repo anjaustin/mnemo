@@ -197,7 +197,7 @@ pub fn classify_query(query: &str) -> RoutingDecision {
     // Hybrid gets a base score — it's the "safe default"
     let hybrid_score: f32 = 0.3;
 
-    let mut scores = vec![
+    let mut scores = [
         (RetrievalStrategy::Head, head_score),
         (RetrievalStrategy::Historical, historical_score),
         (RetrievalStrategy::GraphFocused, graph_score),

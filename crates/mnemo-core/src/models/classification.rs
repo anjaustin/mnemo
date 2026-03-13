@@ -16,10 +16,12 @@ use serde::{Deserialize, Serialize};
 /// data but not Confidential or Restricted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Classification {
     /// Safe for any audience — customers, external agents.
     Public = 0,
     /// Safe for internal agents and operators.
+    #[default]
     Internal = 1,
     /// Restricted to authorized agents/users.  May contain PII.
     Confidential = 2,
@@ -46,12 +48,6 @@ impl Classification {
             "restricted" => Self::Restricted,
             _ => Self::Internal,
         }
-    }
-}
-
-impl Default for Classification {
-    fn default() -> Self {
-        Self::Internal
     }
 }
 
