@@ -265,6 +265,7 @@ mod tests {
     // ── F-03c: FastEmbedder produces correct dimension count ──
 
     #[tokio::test]
+    #[ignore = "requires ONNX Runtime + model cache (not available on CI)"]
     async fn test_fast_embedder_dimensions_and_nonzero() {
         // Use production config: AllMiniLML6V2, 384 dims
         let embedder = FastEmbedder::new("AllMiniLML6V2", 384)
@@ -293,6 +294,7 @@ mod tests {
     // ── F-03d: Batch embedding + semantic similarity sanity check ──
 
     #[tokio::test]
+    #[ignore = "requires ONNX Runtime + model cache (not available on CI)"]
     async fn test_fast_embedder_batch_and_similarity() {
         let embedder =
             FastEmbedder::new("AllMiniLML6V2", 384).expect("FastEmbedder should initialise");
