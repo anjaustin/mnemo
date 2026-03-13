@@ -1,0 +1,44 @@
+
+Mnemo has been deployed to your Kubernetes cluster.
+
+{{- $fullname := include "mnemo.fullname" . -}}
+
+1. Get the application URL:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ $fullname }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  kubectl get --namespace {{ .Release.Namespace }} svc {{ $fullname }} -w
+{{- else }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ $fullname }} 8080:{{ .Values.service.port }}
+  echo "Visit http://localhost:8080"
+{{- end }}
+
+2. Verify the deployment is healthy:
+  kubectl --namespace {{ .Release.Namespace }} get pods -l "app.kubernetes.io/name={{ include "mnemo.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+3. Check the health endpoint:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ $fullname }} 8080:{{ .Values.service.port }}
+  curl http://localhost:8080/health
+
+4. Access the API documentation:
+  # Swagger UI:  http://localhost:8080/swagger-ui
+  # OpenAPI JSON: http://localhost:8080/api/v1/openapi.json
+
+5. Access gRPC (same port):
+  grpcurl -plaintext localhost:8080 list
+
+{{- if not .Values.mnemo.bootstrapKeys }}
+{{- if not .Values.mnemo.existingSecret }}
+
+WARNING: No authentication keys configured!
+  Set mnemo.bootstrapKeys or mnemo.existingSecret for production use.
+  See: helm upgrade {{ .Release.Name }} mnemo --set mnemo.bootstrapKeys="your-secret-key"
+{{- end }}
+{{- end }}

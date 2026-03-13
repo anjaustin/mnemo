@@ -39,3 +39,7 @@ Thumbs.db
 # Docker volumes
 redis-data/
 qdrant-data/
+
+# Helm subchart tarballs (downloaded via helm dependency build)
+deploy/kubernetes/mnemo/charts/
+deploy/kubernetes/mnemo/Chart.lock

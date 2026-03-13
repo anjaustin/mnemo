@@ -1,0 +1,228 @@
+# ============================================================================
+# Mnemo Helm Chart — Default Values
+# ============================================================================
+
+# -- Number of Mnemo server replicas
+replicaCount: 2
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/anjaustin/mnemo/mnemo-server
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Image tag (defaults to Chart appVersion)
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Service account configuration
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# -- Pod annotations
+podAnnotations: {}
+
+# -- Pod labels
+podLabels: {}
+
+# -- Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+# -- Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Service configuration
+service:
+  type: ClusterIP
+  # -- REST + gRPC port (both served on same port)
+  port: 8080
+  annotations: {}
+
+# -- Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: mnemo.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: mnemo-tls
+  #    hosts:
+  #      - mnemo.example.com
+
+# -- Resource limits and requests
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi
+
+# -- Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# -- Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# -- Liveness probe
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# -- Readiness probe
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# -- Startup probe (allows slow initial model download)
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 30
+
+# -- Node selector
+nodeSelector: {}
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity rules (anti-affinity for HA by default)
+affinity: {}
+
+# -- Topology spread constraints for HA
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels: {}  # populated by template
+
+# ============================================================================
+# Mnemo Configuration
+# ============================================================================
+
+mnemo:
+  # -- Server bind host
+  host: "0.0.0.0"
+  # -- Server bind port
+  port: 8080
+
+  # -- Enable API key authentication
+  authEnabled: true
+
+  # -- Bootstrap API keys (comma-separated). Use existingSecret for production.
+  bootstrapKeys: ""
+
+  # -- Name of existing Secret containing MNEMO_AUTH_BOOTSTRAP_KEYS
+  existingSecret: ""
+
+  # -- LLM provider: openai, anthropic, ollama, liquid
+  llmProvider: "anthropic"
+  # -- LLM model for extraction/summarization
+  llmModel: "claude-haiku-4-20250514"
+
+  # -- Embedding provider: openai, local, ollama
+  embeddingProvider: "local"
+  # -- Embedding model name
+  embeddingModel: "AllMiniLML6V2"
+  # -- Embedding vector dimensions
+  embeddingDimensions: 384
+
+  # -- Redis connection URL (overridden if redis.enabled=true)
+  redisUrl: ""
+  # -- Qdrant connection URL (overridden if qdrant.enabled=true)
+  qdrantUrl: ""
+  # -- Qdrant collection prefix
+  qdrantPrefix: "mnemo"
+
+  # -- Additional environment variables
+  extraEnv: []
+  # - name: ANTHROPIC_API_KEY
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: mnemo-llm-keys
+  #       key: anthropic-api-key
+
+  # -- Extra volumes to mount (e.g., for fastembed model cache)
+  extraVolumes: []
+  extraVolumeMounts: []
+
+# ============================================================================
+# Redis Subchart (Bitnami)
+# ============================================================================
+
+redis:
+  # -- Deploy Redis as a subchart
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# ============================================================================
+# Qdrant Subchart
+# ============================================================================
+
+qdrant:
+  # -- Deploy Qdrant as a subchart
+  enabled: true
+  replicaCount: 1
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

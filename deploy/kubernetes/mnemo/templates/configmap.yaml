@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mnemo.fullname" . }}-config
+  labels:
+    {{- include "mnemo.labels" . | nindent 4 }}
+data:
+  MNEMO_HOST: {{ .Values.mnemo.host | quote }}
+  MNEMO_PORT: {{ .Values.mnemo.port | quote }}
+  MNEMO_AUTH_ENABLED: {{ .Values.mnemo.authEnabled | quote }}
+  MNEMO_LLM_PROVIDER: {{ .Values.mnemo.llmProvider | quote }}
+  MNEMO_LLM_MODEL: {{ .Values.mnemo.llmModel | quote }}
+  MNEMO_EMBEDDING_PROVIDER: {{ .Values.mnemo.embeddingProvider | quote }}
+  MNEMO_EMBEDDING_MODEL: {{ .Values.mnemo.embeddingModel | quote }}
+  MNEMO_EMBEDDING_DIMENSIONS: {{ .Values.mnemo.embeddingDimensions | quote }}
+  MNEMO_QDRANT_PREFIX: {{ .Values.mnemo.qdrantPrefix | quote }}

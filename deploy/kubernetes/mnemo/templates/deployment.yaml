@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mnemo.fullname" . }}
+  labels:
+    {{- include "mnemo.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "mnemo.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "mnemo.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "mnemo.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ include "mnemo.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mnemo.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "mnemo.fullname" . }}-config
+          env:
+            # Redis and Qdrant URLs (computed from subcharts or external)
+            - name: MNEMO_REDIS_URL
+              value: {{ include "mnemo.redisUrl" . | quote }}
+            - name: MNEMO_QDRANT_URL
+              value: {{ include "mnemo.qdrantUrl" . | quote }}
+            {{- if .Values.mnemo.existingSecret }}
+            - name: MNEMO_AUTH_BOOTSTRAP_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mnemo.existingSecret }}
+                  key: MNEMO_AUTH_BOOTSTRAP_KEYS
+            {{- else if .Values.mnemo.bootstrapKeys }}
+            - name: MNEMO_AUTH_BOOTSTRAP_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mnemo.fullname" . }}-auth
+                  key: MNEMO_AUTH_BOOTSTRAP_KEYS
+            {{- end }}
+            {{- with .Values.mnemo.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: fastembed-cache
+              mountPath: /app/.fastembed_cache
+            {{- with .Values.mnemo.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: fastembed-cache
+          emptyDir: {}
+        {{- with .Values.mnemo.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range .Values.topologySpreadConstraints }}
+        - maxSkew: {{ .maxSkew }}
+          topologyKey: {{ .topologyKey }}
+          whenUnsatisfiable: {{ .whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "mnemo.selectorLabels" $ | nindent 14 }}
+        {{- end }}
+      {{- end }}
