@@ -1,0 +1,200 @@
+syntax = "proto3";
+
+package mnemo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Memory Context Service ─────────────────────────────────────────
+// The hot-path endpoint: assemble LLM-ready context from a user's
+// knowledge graph. This is the #1 latency-sensitive call in Mnemo.
+
+service MemoryService {
+  // Assemble a context block for an LLM prompt.
+  rpc GetContext(GetContextRequest) returns (GetContextResponse);
+
+  // Retrieve raw episodes for a user+session.
+  rpc ListEpisodes(ListEpisodesRequest) returns (ListEpisodesResponse);
+
+  // Ingest a single episode (message/event).
+  rpc CreateEpisode(CreateEpisodeRequest) returns (Episode);
+
+  // Delete an episode by ID.
+  rpc DeleteEpisode(DeleteEpisodeRequest) returns (DeleteEpisodeResponse);
+}
+
+// ─── Entity Service ─────────────────────────────────────────────────
+
+service EntityService {
+  // List entities for a user.
+  rpc ListEntities(ListEntitiesRequest) returns (ListEntitiesResponse);
+
+  // Get a single entity by ID.
+  rpc GetEntity(GetEntityRequest) returns (Entity);
+}
+
+// ─── Edge (Fact) Service ────────────────────────────────────────────
+
+service EdgeService {
+  // Query edges (facts) for a user with optional filters.
+  rpc QueryEdges(QueryEdgesRequest) returns (QueryEdgesResponse);
+
+  // Get a single edge by ID.
+  rpc GetEdge(GetEdgeRequest) returns (Edge);
+}
+
+// ─── Common Types ───────────────────────────────────────────────────
+
+enum Classification {
+  CLASSIFICATION_UNSPECIFIED = 0;
+  CLASSIFICATION_PUBLIC = 1;
+  CLASSIFICATION_INTERNAL = 2;
+  CLASSIFICATION_CONFIDENTIAL = 3;
+  CLASSIFICATION_RESTRICTED = 4;
+}
+
+// ─── Memory Context ─────────────────────────────────────────────────
+
+message ContextMessage {
+  string role = 1;                        // "user", "assistant", "system"
+  string content = 2;
+}
+
+message GetContextRequest {
+  string user_id = 1;                     // UUID of the user
+  repeated ContextMessage messages = 2;   // Recent messages as query context
+  optional int32 max_tokens = 3;          // Token budget (default 500)
+  optional string session_id = 4;         // Optional session scope
+  optional string as_of = 5;             // ISO-8601 timestamp for point-in-time
+  optional float min_relevance = 6;       // Minimum relevance threshold (0.0-1.0)
+}
+
+message EntitySummary {
+  string id = 1;                          // UUID
+  string name = 2;
+  string entity_type = 3;
+  Classification classification = 4;
+  optional string summary = 5;
+  float relevance = 6;
+}
+
+message FactSummary {
+  string id = 1;                          // UUID
+  string source_entity = 2;
+  string target_entity = 3;
+  string label = 4;
+  string fact = 5;
+  Classification classification = 6;
+  google.protobuf.Timestamp valid_at = 7;
+  optional google.protobuf.Timestamp invalid_at = 8;
+  float relevance = 9;
+}
+
+message GetContextResponse {
+  string context = 1;                     // Assembled context text
+  repeated EntitySummary entities = 2;    // Key entities
+  repeated FactSummary facts = 3;         // Key facts
+  int32 token_count = 4;                  // Actual tokens used
+  uint64 latency_ms = 5;                  // Retrieval latency in ms
+  optional string routing_decision = 6;   // Retrieval routing strategy
+}
+
+// ─── Episodes ───────────────────────────────────────────────────────
+
+message Episode {
+  string id = 1;                          // UUID
+  string user_id = 2;
+  string session_id = 3;
+  string episode_type = 4;               // "message"
+  string content = 5;
+  optional string role = 6;              // "user", "assistant", "system"
+  string status = 7;                     // "pending", "processing", "completed", "failed", "skipped"
+  google.protobuf.Timestamp created_at = 8;
+  optional google.protobuf.Timestamp ingested_at = 9;
+}
+
+message CreateEpisodeRequest {
+  string user_id = 1;
+  string session_id = 2;
+  string content = 3;
+  string episode_type = 4;               // Must be "message"
+  optional string role = 5;
+}
+
+message ListEpisodesRequest {
+  string user_id = 1;
+  string session_id = 2;
+  optional int32 limit = 3;
+}
+
+message ListEpisodesResponse {
+  repeated Episode episodes = 1;
+}
+
+message DeleteEpisodeRequest {
+  string id = 1;                          // UUID
+}
+
+message DeleteEpisodeResponse {}
+
+// ─── Entities ───────────────────────────────────────────────────────
+
+message Entity {
+  string id = 1;                          // UUID
+  string user_id = 2;
+  string name = 3;
+  string entity_type = 4;
+  optional string summary = 5;
+  repeated string aliases = 6;
+  uint64 mention_count = 7;
+  Classification classification = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message ListEntitiesRequest {
+  string user_id = 1;
+  optional int32 limit = 2;
+  optional string entity_type = 3;        // Filter by type
+}
+
+message ListEntitiesResponse {
+  repeated Entity entities = 1;
+}
+
+message GetEntityRequest {
+  string id = 1;                          // UUID
+}
+
+// ─── Edges (Facts) ──────────────────────────────────────────────────
+
+message Edge {
+  string id = 1;                          // UUID
+  string user_id = 2;
+  string source_entity_id = 3;
+  string target_entity_id = 4;
+  string label = 5;
+  string fact = 6;
+  float confidence = 7;
+  google.protobuf.Timestamp valid_at = 8;
+  optional google.protobuf.Timestamp invalid_at = 9;
+  bool is_current = 10;                   // Convenience: invalid_at is null
+  Classification classification = 11;
+  string source_episode_id = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+message QueryEdgesRequest {
+  string user_id = 1;
+  optional string entity_id = 2;         // Edges involving this entity
+  optional string label = 3;             // Filter by label
+  optional bool current_only = 4;        // Only current facts
+  optional int32 limit = 5;
+}
+
+message QueryEdgesResponse {
+  repeated Edge edges = 1;
+}
+
+message GetEdgeRequest {
+  string id = 1;                          // UUID
+}

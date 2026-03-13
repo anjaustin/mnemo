@@ -13,6 +13,8 @@
 //! - **[`middleware`]** — Auth middleware (API key validation, RBAC enforcement via
 //!   `CallerContext`), request context propagation, and CORS/tracing layers.
 //! - **[`dashboard`]** — Embedded SPA operator dashboard served at `/_/`.
+//! - **[`grpc`]** — gRPC service implementations (memory, entity, edge) served
+//!   on the same port via content-type routing (`application/grpc`).
 //!
 //! ## Storage
 //!
@@ -23,6 +25,7 @@
 
 pub mod config;
 pub mod dashboard;
+pub mod grpc;
 pub mod middleware;
 pub mod routes;
 pub mod state;

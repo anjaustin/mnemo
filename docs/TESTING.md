@@ -26,7 +26,7 @@
 | `tests/phase_b_screenshots.py` | 8 screenshots | Playwright (requires running server) |
 | Phase B falsification | 35 gates | Playwright (manual, requires running server) |
 | `tests/eval_recall_quality.py` | 3 quality gates (40-fact dataset) | Python (requires running server + embedding model) |
-| **Total Rust tests** | **~1,091** | |
+| **Total Rust tests** | **~1,102** | |
 | **Total (all languages)** | **~1,200+** | |
 
 This project has several practical testing layers.

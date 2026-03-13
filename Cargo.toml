@@ -10,6 +10,7 @@ members = [
     "crates/mnemo-llm",
     "crates/mnemo-gnn",
     "crates/mnemo-mcp",
+    "crates/mnemo-proto",
 ]
 
 [workspace.package]
@@ -87,6 +88,7 @@ mnemo-retrieval = { path = "crates/mnemo-retrieval" }
 mnemo-llm = { path = "crates/mnemo-llm" }
 mnemo-gnn = { path = "crates/mnemo-gnn" }
 mnemo-mcp = { path = "crates/mnemo-mcp" }
+mnemo-proto = { path = "crates/mnemo-proto" }
 
 [profile.release]
 lto = true

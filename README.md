@@ -60,7 +60,7 @@ All 10 targets fully falsified (5-gate test: health, write, context, list-episod
 ## Why teams choose Mnemo
 
 - **Temporal memory, not static notes**: facts can be superseded while preserving history for point-in-time recall (`docs/TEMPORAL_VECTORIZATION.md`).
-- **Fast context assembly**: hybrid retrieval and pre-assembled context blocks optimized for LLM prompts (`docs/ARCHITECTURE.md`).
+- **Fast context assembly**: hybrid retrieval and pre-assembled context blocks optimized for LLM prompts, with both REST and gRPC APIs on the same port (`docs/ARCHITECTURE.md`).
 - **Enterprise access control**: RBAC with scoped API keys, data classification labels, policy-scoped memory views, a guardrails engine, multi-agent shared memory regions with ACLs, and agent promotion governance with approval workflows.
 - **Agent identity controls**: identity core, experience weighting, versioning, audit, rollback, and promotion flow (`docs/AGENT_IDENTITY_SUBSTRATE.md`).
 - **Proof over claims**: benchmark harness plus falsification and CI gates are first-class (`docs/EVALUATION.md`, `docs/COMPETITIVE.md`, `.github/workflows/quality-gates.yml`).
@@ -165,6 +165,7 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | LlamaIndex adapter | :green_circle: | :red_circle: | :green_circle: | :red_circle: |
 | Vercel AI SDK adapter | :green_circle: | :red_circle: | :green_circle: | :red_circle: |
 | CrewAI / AutoGen adapter | :red_circle: | :green_circle: | :green_circle: | :red_circle: |
+| gRPC API | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | MCP server | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
 | OpenAPI spec | :red_circle: | :green_circle: | :green_circle: | :green_circle: |
 | CLI tool | :red_circle: | :green_circle: | :red_circle: | :red_circle: |

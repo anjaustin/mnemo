@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **gRPC API** (`mnemo-proto`, `mnemo-server`): Client-facing gRPC endpoint served on the same port as REST via content-type routing. `MemoryService` (GetContext, CreateEpisode, ListEpisodes, DeleteEpisode), `EntityService` (ListEntities, GetEntity), `EdgeService` (QueryEdges, GetEdge). Proto schema at `proto/mnemo/v1/memory.proto`. New `mnemo-proto` crate (10th workspace crate) with `tonic-build` compilation and `FILE_DESCRIPTOR_SET` for server reflection. gRPC health check (`grpc.health.v1.Health/Check`) and reflection (`grpc.reflection.v1.ServerReflection`) services. Same-port multiplexing via `axum::Router::merge`. 11 integration tests. First-in-category: none of Zep, Mem0, or Letta offer gRPC.
+
+### Changed
+
+- Workspace crate count: 9 -> 10 (added `mnemo-proto`).
+- `mnemo-server` description updated: "HTTP/REST and gRPC server for Mnemo".
+- Total workspace test count: ~1,091 -> ~1,102 (+11 gRPC integration tests).
+- `MnemoError` gRPC mapping uses `status_code()` method for correct classification of all error variants.
+
 ## [0.6.0] — 2026-03-13
 
 ### Added

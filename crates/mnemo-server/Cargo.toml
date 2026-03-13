@@ -1,6 +1,6 @@
 [package]
 name = "mnemo-server"
-description = "HTTP/REST server for Mnemo"
+description = "HTTP/REST and gRPC server for Mnemo"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -40,3 +40,12 @@ sha2 = "0.10"
 hex = "0.4"
 rust-embed = { workspace = true }
 mime_guess = { workspace = true }
+mnemo-proto = { workspace = true }
+tonic = "0.12"
+tonic-health = "0.12"
+tonic-reflection = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+[dev-dependencies]
+tokio-stream = { version = "0.1", features = ["net"] }

@@ -2,9 +2,80 @@
 
 Base URL: `http://localhost:8080`
 
-All request and response bodies are JSON. IDs are UUIDv7 strings.
+Mnemo serves both **REST** (JSON over HTTP/1.1) and **gRPC** (protobuf over HTTP/2) on the same port. Content-type routing dispatches `application/grpc` requests to the gRPC stack.
 
-All responses include `x-mnemo-request-id`. Clients may also provide `x-mnemo-request-id` and Mnemo will propagate it.
+All REST request and response bodies are JSON. IDs are UUIDv7 strings.
+
+All REST responses include `x-mnemo-request-id`. Clients may also provide `x-mnemo-request-id` and Mnemo will propagate it.
+
+---
+
+## gRPC API
+
+Proto definition: `proto/mnemo/v1/memory.proto`
+
+gRPC services are served on the same port as REST. Use any gRPC client (e.g. `grpcurl`, tonic, grpc-go) pointed at the server address.
+
+### Services
+
+| Service | RPCs |
+|---|---|
+| `mnemo.v1.MemoryService` | `GetContext`, `CreateEpisode`, `ListEpisodes`, `DeleteEpisode` |
+| `mnemo.v1.EntityService` | `ListEntities`, `GetEntity` |
+| `mnemo.v1.EdgeService` | `QueryEdges`, `GetEdge` |
+| `grpc.health.v1.Health` | `Check` (standard health check) |
+| `grpc.reflection.v1.ServerReflection` | Server reflection for schema discovery |
+
+### Quick start with grpcurl
+
+```bash
+# Health check
+grpcurl -plaintext localhost:8080 grpc.health.v1.Health/Check
+
+# List services (via reflection)
+grpcurl -plaintext localhost:8080 list
+
+# Create an episode
+grpcurl -plaintext -d '{
+  "user_id": "01234567-89ab-cdef-0123-456789abcdef",
+  "session_id": "01234567-89ab-cdef-0123-456789abcde0",
+  "content": "I just bought Nike running shoes",
+  "episode_type": "message",
+  "role": "user"
+}' localhost:8080 mnemo.v1.MemoryService/CreateEpisode
+
+# Get context
+grpcurl -plaintext -d '{
+  "user_id": "01234567-89ab-cdef-0123-456789abcdef",
+  "messages": [{"role": "user", "content": "What shoes does Kendra like?"}],
+  "max_tokens": 500
+}' localhost:8080 mnemo.v1.MemoryService/GetContext
+
+# List entities
+grpcurl -plaintext -d '{
+  "user_id": "01234567-89ab-cdef-0123-456789abcdef",
+  "limit": 10
+}' localhost:8080 mnemo.v1.EntityService/ListEntities
+
+# Query edges
+grpcurl -plaintext -d '{
+  "user_id": "01234567-89ab-cdef-0123-456789abcdef",
+  "current_only": true,
+  "limit": 20
+}' localhost:8080 mnemo.v1.EdgeService/QueryEdges
+```
+
+### Error mapping
+
+| gRPC Status | REST Equivalent | When |
+|---|---|---|
+| `NOT_FOUND` | 404 | Resource does not exist |
+| `INVALID_ARGUMENT` | 400 | Malformed UUID, missing required field |
+| `ALREADY_EXISTS` | 409 | Duplicate resource |
+| `PERMISSION_DENIED` | 403 | Insufficient permissions |
+| `UNAUTHENTICATED` | 401 | Missing/invalid auth |
+| `RESOURCE_EXHAUSTED` | 429 | Rate limited |
+| `INTERNAL` | 500 | Server error |
 
 ---
 

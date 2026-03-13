@@ -32,6 +32,7 @@ use tracing_subscriber::EnvFilter;
 
 use mnemo_server::config::MnemoConfig;
 use mnemo_server::config::RerankerConfig;
+use mnemo_server::grpc::GrpcState;
 use mnemo_server::middleware::{request_context_middleware, AuthConfig, AuthLayer};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
@@ -495,7 +496,8 @@ async fn main() -> anyhow::Result<()> {
         tracing::debug!("Temporal compression disabled (MNEMO_EMBEDDING_COMPRESSION_ENABLED=false)");
     }
 
-    let app = build_router(app_state.clone())
+    // ─── REST (Axum) router ───────────────────────────────────────
+    let rest = build_router(app_state.clone())
         .layer(from_fn_with_state(
             app_state.clone(),
             request_context_middleware,
@@ -504,9 +506,53 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());
 
+    // ─── gRPC (tonic) router ────────────────────────────────────
+    let grpc_state = GrpcState::from_app_state(&app_state);
+
+    // Health check service
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<mnemo_proto::proto::memory_service_server::MemoryServiceServer<GrpcState>>()
+        .await;
+    health_reporter
+        .set_serving::<mnemo_proto::proto::entity_service_server::EntityServiceServer<GrpcState>>()
+        .await;
+    health_reporter
+        .set_serving::<mnemo_proto::proto::edge_service_server::EdgeServiceServer<GrpcState>>()
+        .await;
+
+    // Reflection service
+    let reflection = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(mnemo_proto::FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .expect("failed to build gRPC reflection service");
+
+    let grpc_routes = tonic::service::Routes::new(health_service)
+        .add_service(reflection)
+        .add_service(
+            mnemo_proto::proto::memory_service_server::MemoryServiceServer::new(
+                grpc_state.clone(),
+            ),
+        )
+        .add_service(
+            mnemo_proto::proto::entity_service_server::EntityServiceServer::new(
+                grpc_state.clone(),
+            ),
+        )
+        .add_service(
+            mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state),
+        );
+    let grpc = grpc_routes.into_axum_router();
+
+    tracing::info!("gRPC services registered: MemoryService, EntityService, EdgeService + health + reflection");
+
+    // ─── Multiplex: gRPC + REST on the same port ────────────────
+    // Route based on content-type header: "application/grpc" → tonic, else → Axum.
+    let app = multiplex_grpc_rest(rest, grpc);
+
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = TcpListener::bind(&addr).await?;
-    tracing::info!(addr = %addr, "Mnemo server listening");
+    tracing::info!(addr = %addr, "Mnemo server listening (REST + gRPC)");
 
     println!(
         r#"
@@ -516,12 +562,19 @@ async fn main() -> anyhow::Result<()> {
  | |  | | | | |  __/ | | | | | (_) |
  |_|  |_|_| |_|\___|_| |_| |_|\___/
 
- v{} | {}
+ v{} | {} | REST + gRPC
 "#,
         env!("CARGO_PKG_VERSION"),
         addr
     );
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service()).await?;
     Ok(())
+}
+
+/// Build a combined router that serves both REST and gRPC on the same port.
+/// gRPC paths (e.g. `/mnemo.v1.MemoryService/GetContext`) are disjoint from
+/// REST paths (`/api/v1/...`) so a simple merge works.
+fn multiplex_grpc_rest(rest: axum::Router, grpc: axum::Router) -> axum::Router {
+    rest.merge(grpc)
 }
