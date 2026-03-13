@@ -132,6 +132,8 @@ where
             || path == "/metrics"
             || path.starts_with("/_/")
             || path == "/_"
+            || path == "/api/v1/openapi.json"
+            || path.starts_with("/swagger-ui")
         {
             req.extensions_mut()
                 .insert(CallerContext::admin_bootstrap());

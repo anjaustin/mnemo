@@ -26,7 +26,7 @@ use super::classification::Classification;
 ///   New info: "My Adidas shoes fell apart! Nike is my new favorite!"
 ///   Result: Original edge gets invalid_at: 2025-02-28
 ///           New edge: "Kendra" --loves--> "Nike shoes" (valid_at: 2025-02-28)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Edge {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -82,7 +82,7 @@ pub struct Edge {
 
 /// Represents a relationship extracted by the LLM/extraction pipeline
 /// before it's been resolved against the existing graph.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExtractedRelationship {
     /// The source entity name (will be resolved to an entity ID).
     pub source_name: String,
@@ -103,7 +103,7 @@ pub struct ExtractedRelationship {
 }
 
 /// Query parameters for filtering edges.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EdgeFilter {
     /// Filter by source entity.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,7 +294,7 @@ pub fn compute_edge_fisher_importance(
 }
 
 /// A fact that has decayed below the revalidation threshold.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct StaleFact {
     /// The edge representing the stale fact.
     pub edge: Edge,
@@ -310,7 +310,7 @@ pub struct StaleFact {
 }
 
 /// Request body for `POST /api/v1/memory/:user/revalidate`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RevalidateFactRequest {
     /// The edge ID to revalidate.
     pub edge_id: Uuid,
@@ -322,7 +322,7 @@ pub struct RevalidateFactRequest {
 }
 
 /// Response from a revalidation action.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RevalidateFactResult {
     /// The updated edge.
     pub edge: Edge,
@@ -333,7 +333,7 @@ pub struct RevalidateFactResult {
 }
 
 /// Query parameters for the stale facts endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct StaleFactsQuery {
     /// Revalidation threshold (default: 0.3). Facts below this effective
     /// confidence are considered stale.

@@ -17,7 +17,8 @@ use super::classification::Classification;
 ///
 /// Serializes as a plain string (e.g., `"person"`, `"organization"`, `"medication"`).
 /// Deserializes flexibly: known types map to their variants, unknown strings become `Custom`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, utoipa::ToSchema)]
+#[schema(as = String, example = "person")]
 pub enum EntityType {
     Person,
     Organization,
@@ -75,7 +76,7 @@ impl<'de> Deserialize<'de> for EntityType {
 /// Entities represent people, products, organizations, concepts, etc.
 /// They are automatically extracted from episodes and deduplicated
 /// across the user's entire conversation history.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Entity {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -121,7 +122,7 @@ pub struct Entity {
 
 /// Represents an entity extracted by the LLM/extraction pipeline
 /// before it's been deduplicated and merged into the graph.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExtractedEntity {
     /// The name as extracted from the text.
     pub name: String,

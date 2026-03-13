@@ -14,7 +14,19 @@ use serde::{Deserialize, Serialize};
 /// Ordered: Public < Internal < Confidential < Restricted.
 /// A caller with `max_classification = Internal` can see Public + Internal
 /// data but not Confidential or Restricted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum Classification {
@@ -110,7 +122,7 @@ mod tests {
     #[test]
     fn classification_missing_field_defaults_to_internal() {
         // Simulates backward compatibility: existing Redis data has no classification field
-        #[derive(Deserialize)]
+        #[derive(Deserialize, utoipa::ToSchema)]
         struct LegacyEdge {
             #[allow(dead_code)]
             name: String,

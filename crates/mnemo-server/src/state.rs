@@ -21,7 +21,7 @@ pub enum RerankerMode {
     Mmr,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportJobStatus {
     Queued,
@@ -30,7 +30,7 @@ pub enum ImportJobStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ImportJobRecord {
     pub id: Uuid,
     pub source: String,
@@ -54,7 +54,7 @@ pub struct MetadataPrefilterConfig {
     pub relax_if_empty: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryWebhookEventType {
     FactAdded,
@@ -72,7 +72,7 @@ pub enum MemoryWebhookEventType {
     PromotionConflictDetected,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MemoryWebhookSubscription {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -86,7 +86,7 @@ pub struct MemoryWebhookSubscription {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MemoryWebhookEventRecord {
     pub id: Uuid,
     pub webhook_id: Uuid,
@@ -105,7 +105,7 @@ pub struct MemoryWebhookEventRecord {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MemoryWebhookAuditRecord {
     pub id: Uuid,
     pub webhook_id: Uuid,
@@ -116,7 +116,7 @@ pub struct MemoryWebhookAuditRecord {
     pub at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UserPolicyRecord {
     pub user_id: Uuid,
     pub user_identifier: String,
@@ -130,7 +130,7 @@ pub struct UserPolicyRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GovernanceAuditRecord {
     pub id: Uuid,
     pub user_id: Uuid,

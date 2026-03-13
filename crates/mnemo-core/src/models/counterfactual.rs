@@ -16,7 +16,7 @@ use super::context::FactSummary;
 /// Represents a "what if" condition: "what if this entity had this attribute
 /// set to this value?" The counterfactual engine injects these into the
 /// retrieval pipeline, replacing any matching real facts.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct HypotheticalFact {
     /// The entity this override applies to (by name, matched case-insensitively).
     pub entity: String,
@@ -37,7 +37,7 @@ fn default_confidence() -> f32 {
 }
 
 /// A record of a real fact that was overridden by a hypothetical.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct OverriddenFact {
     /// The real fact that was replaced.
     pub original: FactSummary,
@@ -50,7 +50,7 @@ pub struct OverriddenFact {
 }
 
 /// The diff between real and counterfactual context — shows what changed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CounterfactualDiff {
     /// Real facts that were overridden by hypotheticals.
     pub overridden_facts: Vec<OverriddenFact>,
@@ -64,7 +64,7 @@ pub struct CounterfactualDiff {
 }
 
 /// Request body for `POST /api/v1/memory/:user/counterfactual`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CounterfactualRequest {
     /// The query to retrieve context for (same as normal context request).
     pub query: String,
@@ -86,7 +86,7 @@ pub struct CounterfactualRequest {
 }
 
 /// Response from the counterfactual endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CounterfactualResponse {
     /// The assembled context string with hypotheticals applied.
     pub context: String,

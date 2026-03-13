@@ -13,7 +13,7 @@ use uuid::Uuid;
 /// Sessions belong to a user and contain an ordered sequence of episodes.
 /// They track conversation state and provide a natural grouping for
 /// context retrieval ("what happened in this conversation?").
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Session {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -56,7 +56,7 @@ pub struct Session {
     pub last_activity_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Uuid>,
@@ -70,7 +70,7 @@ pub struct CreateSessionRequest {
     pub metadata: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct UpdateSessionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -88,7 +88,7 @@ pub struct UpdateSessionRequest {
 }
 
 /// Pagination parameters for listing sessions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ListSessionsParams {
     #[serde(default = "default_limit")]
     pub limit: u32,

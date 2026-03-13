@@ -12,7 +12,7 @@ use uuid::Uuid;
 ///
 /// Shared between the server (route-time spans) and the ingest worker
 /// (background extraction/embedding/summarization spans).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LlmSpan {
     pub id: Uuid,
     /// The `x-mnemo-request-id` that triggered this call (if available).

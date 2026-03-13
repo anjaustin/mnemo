@@ -87,7 +87,7 @@ impl From<MnemoError> for AppError {
 
 // ─── Response wrappers ─────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct ListResponse<T: Serialize> {
     data: Vec<T>,
     count: usize,
@@ -100,14 +100,14 @@ impl<T: Serialize> ListResponse<T> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct DeleteResponse {
     deleted: bool,
 }
 
 // ─── Pagination query params ───────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct PaginationParams {
     #[serde(default = "default_limit")]
     limit: u32,
@@ -1384,7 +1384,7 @@ pub fn build_router(state: AppState) -> Router {
 
 // ─── Health ────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct HealthResponse {
     status: String,
     version: String,
@@ -1995,7 +1995,7 @@ fn default_true_audit() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct AuditExportQuery {
     #[serde(default = "default_audit_export_from")]
     from: chrono::DateTime<chrono::Utc>,
@@ -2011,7 +2011,7 @@ struct AuditExportQuery {
     user: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct AuditExportRecord {
     /// "governance" or "webhook"
     audit_type: &'static str,
@@ -2027,7 +2027,7 @@ struct AuditExportRecord {
     webhook_id: Option<Uuid>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct AuditExportResponse {
     ok: bool,
     from: chrono::DateTime<chrono::Utc>,
@@ -2781,7 +2781,7 @@ async fn list_episodes(
 // These endpoints expose raw message access required by LangChain's
 // BaseChatMessageHistory and LlamaIndex's BaseChatStore adapters.
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct MessageRecord {
     /// 0-based ordinal index within the session (chronological order).
     idx: usize,
@@ -2792,14 +2792,14 @@ struct MessageRecord {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct MessagesResponse {
     messages: Vec<MessageRecord>,
     count: usize,
     session_id: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct ClearMessagesResponse {
     deleted: u32,
     session_id: Uuid,
@@ -2913,7 +2913,7 @@ async fn delete_session_message_by_idx(
 
 // ─── Entity routes ─────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ListEntitiesParams {
     #[serde(default = "default_entity_limit")]
     limit: u32,
@@ -3014,7 +3014,7 @@ async fn delete_edge(
 
 // ─── Classification PATCH endpoints ────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ClassificationPatch {
     classification: Classification,
 }
@@ -3065,7 +3065,7 @@ async fn get_context(
     Ok(Json(context))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct RememberMemoryRequest {
     user: String,
     text: String,
@@ -3075,7 +3075,7 @@ struct RememberMemoryRequest {
     role: Option<MessageRole>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct RememberMemoryResponse {
     ok: bool,
     user_id: Uuid,
@@ -3083,7 +3083,7 @@ struct RememberMemoryResponse {
     episode_id: Uuid,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 enum ChatHistorySource {
     Ndjson,
@@ -3109,7 +3109,7 @@ struct ImportMessage {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ImportChatHistoryRequest {
     user: String,
     source: ChatHistorySource,
@@ -3122,14 +3122,14 @@ struct ImportChatHistoryRequest {
     idempotency_key: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct ImportChatHistoryResponse {
     ok: bool,
     job_id: Uuid,
     status: ImportJobStatus,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct RegisterMemoryWebhookRequest {
     user: String,
     target_url: String,
@@ -3141,13 +3141,13 @@ struct RegisterMemoryWebhookRequest {
     enabled: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct RegisterMemoryWebhookResponse {
     ok: bool,
     webhook: MemoryWebhookSubscription,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct UpdateMemoryWebhookRequest {
     /// New target URL (optional; if provided, must pass TLS/domain checks).
     #[serde(default)]
@@ -3163,18 +3163,18 @@ struct UpdateMemoryWebhookRequest {
     enabled: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct UpdateMemoryWebhookResponse {
     ok: bool,
     webhook: MemoryWebhookSubscription,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct DeleteMemoryWebhookResponse {
     deleted: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ListWebhookEventsQuery {
     #[serde(default)]
     limit: Option<u32>,
@@ -3182,14 +3182,14 @@ struct ListWebhookEventsQuery {
     event_type: Option<MemoryWebhookEventType>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct ListWebhookEventsResponse {
     webhook_id: Uuid,
     count: usize,
     events: Vec<MemoryWebhookEventRecord>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ReplayWebhookEventsQuery {
     #[serde(default)]
     after_event_id: Option<Uuid>,
@@ -3201,7 +3201,7 @@ struct ReplayWebhookEventsQuery {
     include_dead_letter: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct ReplayWebhookEventsResponse {
     webhook_id: Uuid,
     count: usize,
@@ -3210,13 +3210,13 @@ struct ReplayWebhookEventsResponse {
     events: Vec<MemoryWebhookEventRecord>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct RetryWebhookEventRequest {
     #[serde(default)]
     force: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct RetryWebhookEventResponse {
     webhook_id: Uuid,
     event_id: Uuid,
@@ -3226,20 +3226,20 @@ struct RetryWebhookEventResponse {
     event: Option<MemoryWebhookEventRecord>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct WebhookAuditQuery {
     #[serde(default)]
     limit: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct WebhookAuditResponse {
     webhook_id: Uuid,
     count: usize,
     audit: Vec<MemoryWebhookAuditRecord>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct UpsertUserPolicyRequest {
     #[serde(default)]
     retention_days_message: Option<u32>,
@@ -3255,25 +3255,25 @@ struct UpsertUserPolicyRequest {
     default_retrieval_policy: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct UserPolicyResponse {
     policy: UserPolicyRecord,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct UserPolicyAuditQuery {
     #[serde(default)]
     limit: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct UserPolicyAuditResponse {
     user_id: Uuid,
     count: usize,
     audit: Vec<GovernanceAuditRecord>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct UserPolicyViolationQuery {
     #[serde(default)]
     from: Option<chrono::DateTime<chrono::Utc>>,
@@ -3283,7 +3283,7 @@ struct UserPolicyViolationQuery {
     limit: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct UserPolicyViolationResponse {
     user_id: Uuid,
     from: chrono::DateTime<chrono::Utc>,
@@ -3292,7 +3292,7 @@ struct UserPolicyViolationResponse {
     violations: Vec<GovernanceAuditRecord>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct PreviewUserPolicyRequest {
     #[serde(default)]
     retention_days_message: Option<u32>,
@@ -3321,7 +3321,7 @@ impl From<PreviewUserPolicyRequest> for UpsertUserPolicyRequest {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct UserPolicyPreviewResponse {
     user_id: Uuid,
     current_policy: UserPolicyRecord,
@@ -3333,7 +3333,7 @@ struct UserPolicyPreviewResponse {
     confidence: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct TimeTravelSummaryRequest {
     query: String,
     from: chrono::DateTime<chrono::Utc>,
@@ -3346,7 +3346,7 @@ struct TimeTravelSummaryRequest {
     retrieval_policy: Option<AdaptiveRetrievalPolicy>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct TimeTravelSummaryResponse {
     user_id: Uuid,
     from: chrono::DateTime<chrono::Utc>,
@@ -3364,13 +3364,13 @@ struct TimeTravelSummaryResponse {
     summary: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct OpsSummaryQuery {
     #[serde(default)]
     window_seconds: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct OpsSummaryResponse {
     window_seconds: u64,
     http_requests_total: u64,
@@ -3393,14 +3393,14 @@ struct OpsSummaryResponse {
     webhook_audit_events_in_window: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct OpsIncidentsResponse {
     window_seconds: u64,
     total_active: usize,
     incidents: Vec<OpsIncidentResponse>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct OpsIncidentResponse {
     id: String,
     kind: String,
@@ -3419,7 +3419,7 @@ struct OpsIncidentResponse {
     opened_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct TraceLookupResponse {
     request_id: String,
     matched_episodes: Vec<TraceEpisodeRef>,
@@ -3429,7 +3429,7 @@ struct TraceLookupResponse {
     summary: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct TraceLookupQuery {
     #[serde(default = "default_trace_lookup_from")]
     from: chrono::DateTime<chrono::Utc>,
@@ -3449,7 +3449,7 @@ struct TraceLookupQuery {
     user: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct TraceLookupQueryWithEvidence {
     #[serde(default = "default_trace_lookup_from")]
     from: chrono::DateTime<chrono::Utc>,
@@ -3473,7 +3473,7 @@ struct TraceLookupQueryWithEvidence {
     source_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct EvidenceExportQuery {
     #[serde(default)]
     focus: Option<String>,
@@ -3481,7 +3481,7 @@ struct EvidenceExportQuery {
     source_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct GovernanceEvidenceExportQuery {
     #[serde(default)]
     focus: Option<String>,
@@ -3507,7 +3507,7 @@ fn default_governance_evidence_limit() -> u32 {
     50
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct EvidenceBundleEnvelope<T: Serialize> {
     kind: &'static str,
     exported_at: chrono::DateTime<chrono::Utc>,
@@ -3515,7 +3515,7 @@ struct EvidenceBundleEnvelope<T: Serialize> {
     payload: T,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct WebhookEvidenceBundlePayload {
     webhook: MemoryWebhookSubscription,
     stats: WebhookStatsResponse,
@@ -3525,13 +3525,13 @@ struct WebhookEvidenceBundlePayload {
     focus: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct GovernanceEvidenceWindow {
     from: chrono::DateTime<chrono::Utc>,
     to: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct GovernanceEvidenceBundlePayload {
     user: String,
     policy: UserPolicyRecord,
@@ -3542,7 +3542,7 @@ struct GovernanceEvidenceBundlePayload {
     focus: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct TraceEvidenceBundlePayload {
     request_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3635,7 +3635,7 @@ async fn build_webhook_stats_response(
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct TraceEpisodeRef {
     user_id: Uuid,
     session_id: Uuid,
@@ -3644,13 +3644,13 @@ struct TraceEpisodeRef {
     preview: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct WebhookStatsQuery {
     #[serde(default)]
     window_seconds: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct WebhookStatsResponse {
     webhook_id: Uuid,
     total_events: usize,
@@ -3664,7 +3664,7 @@ struct WebhookStatsResponse {
     rate_limit_per_minute: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct MemoryChangesSinceRequest {
     from: chrono::DateTime<chrono::Utc>,
     to: chrono::DateTime<chrono::Utc>,
@@ -3672,7 +3672,7 @@ struct MemoryChangesSinceRequest {
     session: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct TimeTravelTraceRequest {
     query: String,
     from: chrono::DateTime<chrono::Utc>,
@@ -3689,7 +3689,7 @@ struct TimeTravelTraceRequest {
     retrieval_policy: Option<AdaptiveRetrievalPolicy>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct TimeTravelTraceResponse {
     user_id: Uuid,
     query: String,
@@ -3710,7 +3710,7 @@ struct TimeTravelTraceResponse {
     summary: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct TimeTravelSnapshot {
     as_of: chrono::DateTime<chrono::Utc>,
     token_count: u32,
@@ -3720,7 +3720,7 @@ struct TimeTravelSnapshot {
     top_episodes: Vec<EpisodeSummary>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct TimeTravelTimelineEvent {
     at: chrono::DateTime<chrono::Utc>,
     event_type: String,
@@ -3735,7 +3735,7 @@ struct TimeTravelTimelineEvent {
     request_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct MemoryChangesSinceResponse {
     user_id: Uuid,
     from: chrono::DateTime<chrono::Utc>,
@@ -3750,7 +3750,7 @@ struct MemoryChangesSinceResponse {
     summary: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct FactChange {
     edge_id: Uuid,
     fact: String,
@@ -3761,7 +3761,7 @@ struct FactChange {
     occurred_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct ConfidenceDelta {
     source_entity: String,
     target_entity: String,
@@ -3772,7 +3772,7 @@ struct ConfidenceDelta {
     at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct HeadChange {
     session_id: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3783,7 +3783,7 @@ struct HeadChange {
     at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct EpisodeChange {
     episode_id: Uuid,
     session_id: Uuid,
@@ -3797,7 +3797,7 @@ struct EpisodeChange {
     request_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ConflictRadarRequest {
     #[serde(default)]
     as_of: Option<chrono::DateTime<chrono::Utc>>,
@@ -3807,7 +3807,7 @@ struct ConflictRadarRequest {
     max_items: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct ConflictRadarResponse {
     user_id: Uuid,
     as_of: chrono::DateTime<chrono::Utc>,
@@ -3815,14 +3815,14 @@ struct ConflictRadarResponse {
     summary: ConflictRadarSummary,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct ConflictRadarSummary {
     clusters: usize,
     needs_resolution: usize,
     high_severity: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct ConflictCluster {
     source_entity: String,
     label: String,
@@ -3834,7 +3834,7 @@ struct ConflictCluster {
     edges: Vec<ConflictEdge>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct ConflictEdge {
     edge_id: Uuid,
     target_entity: String,
@@ -3846,7 +3846,7 @@ struct ConflictEdge {
     is_active: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct CausalRecallRequest {
     query: String,
     #[serde(default)]
@@ -3861,7 +3861,7 @@ struct CausalRecallRequest {
     as_of: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct CausalRecallResponse {
     query: String,
     user_id: Uuid,
@@ -3871,7 +3871,7 @@ struct CausalRecallResponse {
     summary: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct CausalRecallChain {
     id: String,
     confidence: f32,
@@ -3880,7 +3880,7 @@ struct CausalRecallChain {
     source_episodes: Vec<CausalEpisode>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct CausalFact {
     fact_id: Uuid,
     source_entity: String,
@@ -3893,7 +3893,7 @@ struct CausalFact {
     relevance: f32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct CausalEpisode {
     episode_id: Uuid,
     session_id: Uuid,
@@ -3904,7 +3904,7 @@ struct CausalEpisode {
     preview: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct MemoryContextRequest {
     query: String,
     #[serde(default)]
@@ -3941,7 +3941,7 @@ struct MemoryContextRequest {
     view: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 struct MemoryContextFilters {
     #[serde(default)]
     roles: Option<Vec<MessageRole>>,
@@ -3957,7 +3957,7 @@ struct MemoryContextFilters {
     processing_status: Option<ProcessingStatus>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 enum MemoryContextMode {
     Head,
@@ -3965,7 +3965,7 @@ enum MemoryContextMode {
     Historical,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 enum MemoryContract {
     Default,
@@ -3974,7 +3974,7 @@ enum MemoryContract {
     HistoricalStrict,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 enum AdaptiveRetrievalPolicy {
     Balanced,
@@ -3983,7 +3983,7 @@ enum AdaptiveRetrievalPolicy {
     Stability,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct RetrievalPolicyDiagnostics {
     effective_max_tokens: u32,
     effective_min_relevance: f32,
@@ -3992,7 +3992,7 @@ struct RetrievalPolicyDiagnostics {
     effective_temporal_weight: Option<f32>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct MemoryHeadInfo {
     session_id: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4002,7 +4002,7 @@ struct MemoryHeadInfo {
     version: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct MemoryContextResponse {
     #[serde(flatten)]
     context: ContextBlock,
@@ -4028,7 +4028,7 @@ struct MemoryContextResponse {
     guardrail_warnings: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AgentContextRequest {
     user: String,
     query: String,
@@ -4048,7 +4048,7 @@ struct AgentContextRequest {
     temporal_weight: Option<f32>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct AgentContextResponse {
     #[serde(flatten)]
     context: ContextBlock,
@@ -4060,7 +4060,7 @@ struct AgentContextResponse {
     attribution_guards: serde_json::Value,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct MetadataFilterDiagnostics {
     prefilter_enabled: bool,
     candidate_count_before_filters: u32,
@@ -4071,12 +4071,12 @@ struct MetadataFilterDiagnostics {
     applied_filters: serde_json::Value,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ListLimitQuery {
     limit: Option<u32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct RejectPromotionRequest {
     #[serde(default)]
     reason: Option<String>,
@@ -4178,14 +4178,14 @@ async fn remember_memory(
 // If no LLM is configured the endpoint returns an empty extraction with
 // a `no_llm` note rather than an error, so callers can detect the state.
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ExtractMemoryRequest {
     text: String,
     #[serde(default)]
     user: Option<String>, // if provided, existing entities for this user are used as dedup hints
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct ExtractMemoryResponse {
     ok: bool,
     entities: Vec<ExtractedEntity>,
@@ -7583,7 +7583,7 @@ async fn get_agent_context(
 
 // ─── Memory Retrieval Feedback ─────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct RetrievalFeedbackRequest {
     /// The entity IDs that were actually useful / cited by the agent.
     positive_entity_ids: Vec<Uuid>,
@@ -8844,7 +8844,7 @@ fn is_session_not_found(err: &MnemoError) -> bool {
 
 // ─── Graph route ───────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SubgraphParams {
     #[serde(default = "default_depth")]
     depth: u32,
@@ -8963,7 +8963,7 @@ async fn create_region(
     Ok((StatusCode::CREATED, Json(region)))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ListRegionsQuery {
     agent_id: Option<String>,
     user_id: Option<Uuid>,
@@ -9214,12 +9214,12 @@ async fn revoke_region_access(
 // systems like AnythingLLM. Namespaces are isolated from Mnemo's internal
 // entity/edge/episode collections (prefixed with `raw_`).
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct VectorsUpsertRequest {
     vectors: Vec<VectorPoint>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct VectorPoint {
     id: String,
     vector: Vec<f32>,
@@ -9227,7 +9227,7 @@ struct VectorPoint {
     metadata: serde_json::Value,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct VectorsQueryRequest {
     vector: Vec<f32>,
     #[serde(default = "default_top_k")]
@@ -9243,7 +9243,7 @@ fn default_min_score() -> f32 {
     0.0
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct VectorsDeleteIdsRequest {
     ids: Vec<String>,
 }
@@ -9400,7 +9400,7 @@ async fn vectors_exists(
 // ─── Knowledge Graph API ───────────────────────────────────────────────────
 
 /// Query parameters for entity listing with optional type/name filters.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct GraphEntitiesParams {
     #[serde(default = "default_limit")]
     limit: u32,
@@ -9538,7 +9538,7 @@ async fn graph_get_entity(
 /// `GET /api/v1/graph/:user/edges`
 ///
 /// List edges for a user with optional label, source, and target filters.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct GraphEdgesParams {
     #[serde(default = "default_limit")]
     limit: u32,
@@ -9593,7 +9593,7 @@ async fn graph_list_edges(
 /// `GET /api/v1/graph/:user/neighbors/:entity_id`
 ///
 /// Return 1-hop neighbors of an entity.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct NeighborsParams {
     #[serde(default = "default_neighbor_depth")]
     depth: u32,
@@ -9672,7 +9672,7 @@ async fn graph_neighbors(
 /// `GET /api/v1/graph/:user/community`
 ///
 /// Run community detection and return entity→community assignments.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CommunityParams {
     #[serde(default = "default_community_iterations")]
     max_iterations: u32,
@@ -9725,7 +9725,7 @@ async fn graph_community(
 /// `GET /api/v1/graph/:user/path`
 ///
 /// Find the shortest path between two entities in the user's knowledge graph.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct GraphPathParams {
     /// Source entity ID.
     from: Uuid,
@@ -9869,7 +9869,7 @@ async fn list_spans_by_request(
 /// Return recent LLM spans for a given user ID.
 /// Reads from Redis first; falls back to the in-memory ring buffer if Redis
 /// returns no results.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct SpansUserParams {
     #[serde(default = "default_spans_limit")]
     limit: usize,
@@ -10298,7 +10298,7 @@ async fn list_clarifications(
     })))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ListClarificationsParams {
     all: Option<bool>,
     limit: Option<u32>,
@@ -10606,7 +10606,7 @@ async fn list_goal_profiles(
     })))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct GoalListParams {
     limit: Option<u32>,
 }
@@ -10899,7 +10899,7 @@ async fn create_api_key(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ListApiKeysParams {
     #[serde(default = "default_api_key_limit")]
     limit: usize,

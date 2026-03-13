@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 /// A single chapter in a user's narrative — covers a time period and summarizes
 /// key changes that occurred during that window.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct NarrativeChapter {
     /// Human-readable label for the period (e.g. "March 2026", "Sessions 40–55").
     pub period: String,
@@ -32,7 +32,7 @@ pub struct NarrativeChapter {
 /// readable narrative the agent can use as high-level context.
 ///
 /// Versioned — each update creates a new version (mirrors agent identity versioning).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UserNarrative {
     /// The user this narrative belongs to.
     pub user_id: Uuid,
@@ -115,7 +115,7 @@ impl UserNarrative {
 }
 
 /// Request body for `POST /api/v1/memory/:user/narrative/refresh`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RefreshNarrativeRequest {
     /// If true, regenerate the narrative from scratch (scan all sessions).
     /// If false (default), do an incremental update from the last known state.
@@ -204,7 +204,7 @@ pub fn build_narrative_prompt(
 }
 
 /// Input for narrative generation — a summary of a single session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SessionSummaryInput {
     pub session_id: Uuid,
     pub session_name: Option<String>,
@@ -214,7 +214,7 @@ pub struct SessionSummaryInput {
 
 /// The raw output from the LLM narrative generation, before we wrap it
 /// into a full `UserNarrative`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct NarrativeGenerationOutput {
     pub narrative_text: String,
     #[serde(default)]

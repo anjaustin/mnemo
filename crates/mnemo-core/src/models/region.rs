@@ -18,7 +18,7 @@ use super::classification::Classification;
 /// Regions define which entities and edges are visible through the share,
 /// and impose a classification ceiling on all data surfaced through the region.
 /// The owner agent creates the region and can grant other agents access via ACLs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MemoryRegion {
     pub id: Uuid,
     /// Human-readable name (e.g. `"shared_customer_context"`).
@@ -42,7 +42,7 @@ pub struct MemoryRegion {
 }
 
 /// Filter for selecting entities in a memory region.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegionEntityFilter {
     /// Only include entities of these types (empty = all types).
     #[serde(default)]
@@ -53,7 +53,7 @@ pub struct RegionEntityFilter {
 }
 
 /// Filter for selecting edges (facts) in a memory region.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegionEdgeFilter {
     /// Only include edges with these relationship labels (empty = all labels).
     #[serde(default)]
@@ -66,7 +66,7 @@ pub struct RegionEdgeFilter {
 // ─── ACL ───────────────────────────────────────────────────────────
 
 /// Access control entry granting an agent permission to a memory region.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MemoryRegionAcl {
     /// The region this ACL entry belongs to.
     pub region_id: Uuid,
@@ -104,7 +104,9 @@ impl MemoryRegionAcl {
 /// Permission levels for memory region access.
 ///
 /// Ordered: `Read < Write < Manage`. Higher permissions include all lower ones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RegionPermission {
     /// Can retrieve facts from this region.
@@ -125,7 +127,7 @@ impl RegionPermission {
 // ─── Request / Response structs ────────────────────────────────────
 
 /// Request body for `POST /api/v1/regions`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateRegionRequest {
     /// Human-readable region name (1-128 chars).
     pub name: String,
@@ -145,7 +147,7 @@ pub struct CreateRegionRequest {
 }
 
 /// Request body for `PUT /api/v1/regions/:id`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateRegionRequest {
     /// Updated region name (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -162,7 +164,7 @@ pub struct UpdateRegionRequest {
 }
 
 /// Request body for `POST /api/v1/regions/:id/acl`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GrantRegionAccessRequest {
     /// Agent to grant access to.
     pub agent_id: String,

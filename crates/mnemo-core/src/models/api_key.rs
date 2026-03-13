@@ -17,7 +17,19 @@ use uuid::Uuid;
 /// Roles are ordered: Read < Write < Admin.  A handler that requires
 /// `Write` will also accept `Admin`.  The ordering is enforced by
 /// `ApiKeyRole::has_at_least`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiKeyRole {
     /// GET endpoints only — context retrieval, graph queries, list operations.
@@ -58,7 +70,7 @@ pub use super::classification::Classification;
 // ─── API Key Scope ─────────────────────────────────────────────────
 
 /// Optional fine-grained restrictions for an API key beyond its role.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct ApiKeyScope {
     /// Restrict to these user IDs.  `None` = all users.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,7 +114,7 @@ impl ApiKeyScope {
 // ─── API Key Model ─────────────────────────────────────────────────
 
 /// A stored API key.  The raw key is never persisted — only its SHA-256 hash.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApiKey {
     pub id: Uuid,
 
@@ -159,7 +171,7 @@ impl ApiKey {
 // ─── Request / Response types ──────────────────────────────────────
 
 /// Request body for `POST /api/v1/keys`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct CreateApiKeyRequest {
     /// Human-friendly label.
     pub name: String,
@@ -178,7 +190,7 @@ pub struct CreateApiKeyRequest {
 
 /// Response from `POST /api/v1/keys`.  The `raw_key` is returned exactly
 /// once — it cannot be retrieved again.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct CreateApiKeyResponse {
     /// The full API key value.  Store this securely — it will not be shown again.
     pub raw_key: String,

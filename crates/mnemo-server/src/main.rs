@@ -510,6 +510,32 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());
 
+    // ─── OpenAPI spec + Swagger UI ────────────────────────────────
+    use mnemo_server::openapi::MnemoApiDoc;
+    use utoipa::OpenApi;
+    let openapi_json = MnemoApiDoc::openapi()
+        .to_json()
+        .expect("OpenAPI JSON serialization");
+    let openapi_json_clone = openapi_json.clone();
+
+    let openapi_routes = axum::Router::new()
+        .route(
+            "/api/v1/openapi.json",
+            axum::routing::get(move || async move {
+                axum::response::Response::builder()
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(openapi_json_clone))
+                    .unwrap()
+            }),
+        )
+        .route(
+            "/swagger-ui",
+            axum::routing::get(move || async move { axum::response::Html(SWAGGER_UI_HTML) }),
+        );
+
+    // Merge OpenAPI routes (auth-exempt via middleware path checks)
+    let rest = rest.merge(openapi_routes);
+
     // ─── gRPC (tonic) router ────────────────────────────────────
     // gRPC handlers enforce auth internally via validate_grpc_auth(),
     // using the same AuthConfig shared with the REST middleware.
@@ -593,3 +619,27 @@ async fn main() -> anyhow::Result<()> {
 fn multiplex_grpc_rest(rest: axum::Router, grpc: axum::Router) -> axum::Router {
     rest.merge(grpc)
 }
+
+/// Swagger UI HTML page served from CDN. Loads the OpenAPI spec from `/api/v1/openapi.json`.
+const SWAGGER_UI_HTML: &str = r#"<!DOCTYPE html>
+<html>
+<head>
+  <title>Mnemo API — Swagger UI</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    SwaggerUIBundle({
+      url: '/api/v1/openapi.json',
+      dom_id: '#swagger-ui',
+      deepLinking: true,
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+      layout: 'StandaloneLayout'
+    });
+  </script>
+</body>
+</html>"#;

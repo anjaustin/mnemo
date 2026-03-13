@@ -15,7 +15,7 @@ use uuid::Uuid;
 /// Context blocks combine results from multiple retrieval strategies
 /// (semantic search, full-text search, graph traversal) into a single
 /// string optimized for LLM consumption.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ContextBlock {
     /// The assembled context string, ready to inject into a system prompt.
     pub context: String,
@@ -48,7 +48,7 @@ pub struct ContextBlock {
     pub routing_decision: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TemporalDiagnostics {
     pub resolved_intent: TemporalIntent,
     pub temporal_weight: f32,
@@ -60,7 +60,7 @@ pub struct TemporalDiagnostics {
 }
 
 /// Lightweight entity reference included in context responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EntitySummary {
     pub id: Uuid,
     pub name: String,
@@ -75,7 +75,7 @@ pub struct EntitySummary {
 }
 
 /// Lightweight fact reference included in context responses.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct FactSummary {
     pub id: Uuid,
     pub source_entity: String,
@@ -92,7 +92,7 @@ pub struct FactSummary {
 }
 
 /// Lightweight episode reference included in context responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EpisodeSummary {
     pub id: Uuid,
     pub session_id: Uuid,
@@ -105,7 +105,7 @@ pub struct EpisodeSummary {
 }
 
 /// Which retrieval strategy contributed results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RetrievalSource {
     SemanticSearch,
@@ -117,7 +117,7 @@ pub enum RetrievalSource {
 }
 
 /// The search types a caller can request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchType {
     Semantic,
@@ -127,7 +127,7 @@ pub enum SearchType {
 }
 
 /// Temporal intent guides how recency and validity are weighted during retrieval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TemporalIntent {
     /// Let Mnemo infer intent from the query text.
@@ -141,7 +141,7 @@ pub enum TemporalIntent {
 }
 
 /// Request for context retrieval.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ContextRequest {
     /// The session to retrieve context for.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,7 +182,7 @@ pub struct ContextRequest {
 }
 
 /// A message provided as query context for retrieval.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ContextMessage {
     pub role: String,
     pub content: String,
@@ -205,7 +205,7 @@ fn default_temporal_intent() -> TemporalIntent {
 }
 
 /// Generic search request for the search API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchRequest {
     /// The search query text.
     pub query: String,
@@ -236,7 +236,7 @@ fn default_search_limit() -> u32 {
 }
 
 /// A search result with score and source.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchResult {
     /// What kind of object was matched.
     pub result_type: SearchResultType,
@@ -258,7 +258,7 @@ pub struct SearchResult {
     pub metadata: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchResultType {
     Entity,

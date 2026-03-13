@@ -17,7 +17,7 @@ use super::classification::Classification;
 /// A declarative constraint rule evaluated at write time (ingestion) and/or
 /// read time (retrieval).  Rules are defined per-user or globally and enforced
 /// automatically by the guardrails evaluation pipeline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GuardrailRule {
     pub id: Uuid,
 
@@ -52,7 +52,7 @@ pub struct GuardrailRule {
 // ─── Trigger ───────────────────────────────────────────────────────
 
 /// When a guardrail rule fires.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardrailTrigger {
     /// Evaluated when episodes are ingested.
@@ -78,7 +78,7 @@ impl GuardrailTrigger {
 
 /// What a guardrail rule checks.  Conditions form a composable tree via
 /// `And`, `Or`, and `Not` combinators.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuardrailCondition {
     /// Fact/entity classification is strictly above the threshold.
@@ -106,7 +106,7 @@ pub enum GuardrailCondition {
 // ─── Action ────────────────────────────────────────────────────────
 
 /// What happens when a guardrail condition matches.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuardrailAction {
     /// Reject the operation with an error message.
@@ -124,7 +124,7 @@ pub enum GuardrailAction {
 // ─── Scope ─────────────────────────────────────────────────────────
 
 /// Whether a guardrail rule applies globally or to a specific user.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuardrailScope {
     /// Applies to all users.
@@ -160,7 +160,7 @@ pub struct EvalContext {
 // ─── Evaluation Result ─────────────────────────────────────────────
 
 /// Result of evaluating a single guardrail rule.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GuardrailEvalResult {
     pub rule_id: Uuid,
     pub rule_name: String,
@@ -313,7 +313,7 @@ pub fn evaluate_rules(
 // ─── Request / Response types ──────────────────────────────────────
 
 /// Request body for `POST /api/v1/guardrails`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct CreateGuardrailRequest {
     pub name: String,
     pub description: String,
@@ -337,7 +337,7 @@ fn default_scope() -> GuardrailScope {
 }
 
 /// Request body for the dry-run evaluate endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct EvaluateGuardrailsRequest {
     pub trigger: GuardrailTrigger,
     #[serde(default)]
@@ -375,7 +375,7 @@ impl EvaluateGuardrailsRequest {
 }
 
 /// Response for the dry-run evaluate endpoint.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct EvaluateGuardrailsResponse {
     pub blocked: bool,
     pub block_reason: Option<String>,
@@ -386,7 +386,7 @@ pub struct EvaluateGuardrailsResponse {
     pub rule_results: Vec<GuardrailEvalResult>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuditEntry {
     pub rule_name: String,
     pub severity: String,

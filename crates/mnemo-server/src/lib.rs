@@ -27,5 +27,6 @@ pub mod config;
 pub mod dashboard;
 pub mod grpc;
 pub mod middleware;
+pub mod openapi;
 pub mod routes;
 pub mod state;

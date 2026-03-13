@@ -14,7 +14,7 @@ use super::classification::Classification;
 // ─── Temporal Scope ────────────────────────────────────────────────
 
 /// Constrains which facts are visible based on time.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TemporalScope {
     /// Only facts created/valid within the last N days.
@@ -34,7 +34,7 @@ pub enum TemporalScope {
 /// using `internal_full` sees everything.
 ///
 /// Views are stored in Redis and resolved by name during context requests.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MemoryView {
     pub id: Uuid,
 
@@ -165,7 +165,7 @@ impl ViewConstraints {
 }
 
 /// Request body for creating or updating a MemoryView.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateViewRequest {
     pub name: String,
     pub description: String,

@@ -70,6 +70,9 @@ hex = "0.4"
 # Config
 toml = "0.8"
 
+# OpenAPI
+utoipa = { version = "5", features = ["chrono", "uuid"] }
+
 # Embedded assets
 rust-embed = "8"
 mime_guess = "2"

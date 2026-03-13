@@ -10,7 +10,7 @@ use uuid::Uuid;
 ///
 /// Sent over a `tokio::mpsc` channel from the ingest worker to the server,
 /// which translates it into a webhook delivery.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum IngestWebhookEvent {
     /// A new edge (fact) was created during episode processing.
     FactAdded {

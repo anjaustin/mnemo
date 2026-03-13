@@ -13,7 +13,7 @@ use uuid::Uuid;
 ///
 /// Users own sessions, episodes, and their associated knowledge graph.
 /// All graph data is isolated per-user (multi-tenant by default).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct User {
     /// Unique identifier. UUIDv7 for time-ordered sorting.
     pub id: Uuid,
@@ -39,7 +39,7 @@ pub struct User {
 }
 
 /// Request to create a new user.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateUserRequest {
     /// Optional: provide your own ID. If omitted, a UUIDv7 is generated.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,7 +58,7 @@ pub struct CreateUserRequest {
 }
 
 /// Request to update an existing user. All fields optional — only provided fields are updated.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct UpdateUserRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

@@ -20,7 +20,7 @@ use uuid::Uuid;
 /// The identity layer is **agent-scoped** (keyed by `agent_id` string), not
 /// user-scoped. A single agent serves many users; its identity evolves across
 /// all of them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AgentIdentityProfile {
     /// Unique identifier for the agent (arbitrary string, e.g. `"support-bot-v2"`).
     pub agent_id: String,
@@ -53,7 +53,7 @@ impl AgentIdentityProfile {
 }
 
 /// Request body for `PUT /api/v1/agents/:agent_id/identity`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateAgentIdentityRequest {
     /// Replacement `core` value. The entire blob is replaced (not merged).
     #[serde(default)]
@@ -66,7 +66,7 @@ pub struct UpdateAgentIdentityRequest {
 /// pipeline. They accumulate over time and decay according to
 /// `decay_half_life_days`; the effective weight of an event at query time is
 /// `weight * 0.5^(age_days / decay_half_life_days)`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExperienceEvent {
     /// Unique event ID (UUIDv7, lexicographically sortable by creation time).
     pub id: Uuid,
@@ -105,7 +105,7 @@ pub struct ExperienceEvent {
 }
 
 /// Request body for `POST /api/v1/agents/:agent_id/experience`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateExperienceRequest {
     /// Optional client-supplied ID (UUIDv7). Server generates one if absent.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -175,7 +175,7 @@ impl ExperienceEvent {
 }
 
 /// Audit action recorded whenever an agent identity is mutated.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentIdentityAuditAction {
     /// Identity profile created for the first time.
@@ -192,7 +192,7 @@ pub enum AgentIdentityAuditAction {
 /// the preceding event) and `event_hash` (SHA-256 of canonical fields). This
 /// makes the audit log tamper-evident — any deletion, reordering, or field
 /// modification breaks the hash chain and is detectable by walking the chain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AgentIdentityAuditEvent {
     pub id: Uuid,
     pub agent_id: String,
@@ -221,7 +221,7 @@ pub struct AgentIdentityAuditEvent {
 }
 
 /// Result of walking and verifying the audit witness chain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuditChainVerification {
     /// `true` if every event's `event_hash` matches recomputation and the
     /// `prev_hash` chain is unbroken.
@@ -233,7 +233,7 @@ pub struct AuditChainVerification {
 }
 
 /// Description of a single chain break.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuditChainBreak {
     /// 0-based index in the oldest-first event list.
     pub index: usize,
@@ -348,7 +348,7 @@ pub fn verify_audit_chain(events: &[AgentIdentityAuditEvent]) -> AuditChainVerif
 }
 
 /// Request body for `POST /api/v1/agents/:agent_id/identity/rollback`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct IdentityRollbackRequest {
     /// The historical `version` number to restore.
     pub target_version: u64,
@@ -358,7 +358,7 @@ pub struct IdentityRollbackRequest {
 }
 
 /// Lifecycle state of a promotion proposal.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PromotionStatus {
     /// Awaiting human review.
@@ -377,7 +377,7 @@ pub enum PromotionStatus {
 /// explicit approval via `POST /api/v1/agents/:agent_id/promotions/:id/approve`
 /// before they are applied to the live `AgentIdentityProfile`. This approval
 /// gate prevents unreviewed identity drift.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PromotionProposal {
     pub id: Uuid,
     pub agent_id: String,
@@ -413,7 +413,7 @@ pub struct PromotionProposal {
 }
 
 /// Request body for `POST /api/v1/agents/:agent_id/promotions`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreatePromotionProposalRequest {
     /// Optional client-supplied ID.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -490,7 +490,7 @@ impl PromotionProposal {
 
 /// Defines how many approvers are needed per risk level for an agent's
 /// promotion proposals.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApprovalPolicy {
     pub agent_id: String,
     pub low_risk: ApprovalRequirement,
@@ -500,7 +500,7 @@ pub struct ApprovalPolicy {
 }
 
 /// Requirements for a single risk level.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApprovalRequirement {
     /// Minimum number of distinct approvers required.
     pub min_approvers: u32,
@@ -554,7 +554,7 @@ impl ApprovalPolicy {
 }
 
 /// Request body for `PUT /api/v1/agents/:agent_id/approval-policy`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SetApprovalPolicyRequest {
     pub low_risk: ApprovalRequirement,
     pub medium_risk: ApprovalRequirement,
@@ -564,7 +564,7 @@ pub struct SetApprovalPolicyRequest {
 // ─── Conflict Analysis ─────────────────────────────────────────────
 
 /// Result of analyzing experience events for conflicts with a promotion proposal.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConflictAnalysis {
     pub proposal_id: Uuid,
     pub agent_id: String,
@@ -578,7 +578,7 @@ pub struct ConflictAnalysis {
 }
 
 /// Recommendation based on conflict analysis.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictRecommendation {
     /// Low conflict — safe to approve.
@@ -772,7 +772,7 @@ pub fn compute_fisher_importance(
 /// conversations, compare metrics against main, then merge or discard.
 /// The branch stores a full copy of the identity core at fork time and
 /// evolves independently from the main identity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BranchMetadata {
     /// Name of the branch (e.g. `"experiment-1"`, `"tone-warmer"`).
     pub branch_name: String,
@@ -791,7 +791,7 @@ pub struct BranchMetadata {
 }
 
 /// Request body for creating a new branch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateBranchRequest {
     /// Name of the branch (alphanumeric + hyphens, max 64 chars).
     pub branch_name: String,
@@ -805,7 +805,7 @@ pub struct CreateBranchRequest {
 }
 
 /// Response for branch operations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BranchInfo {
     /// Branch metadata.
     pub metadata: BranchMetadata,
@@ -814,7 +814,7 @@ pub struct BranchInfo {
 }
 
 /// Result of merging a branch back into the parent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MergeResult {
     /// The branch that was merged.
     pub branch_name: String,
@@ -849,7 +849,7 @@ pub fn validate_branch_name(name: &str) -> Result<(), String> {
 
 /// Filter criteria for selecting which experience events to transfer
 /// when forking an agent.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExperienceFilter {
     /// Only transfer events in these categories. Empty = all categories.
     #[serde(default)]
@@ -889,7 +889,7 @@ impl ExperienceFilter {
 }
 
 /// Request body for `POST /api/v1/agents/:agent_id/fork`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ForkAgentRequest {
     /// The agent ID for the new forked agent. Must be unique.
     pub new_agent_id: String,
@@ -930,7 +930,7 @@ pub fn validate_fork_agent_id(id: &str) -> Result<(), String> {
 }
 
 /// Lineage metadata tracking the fork relationship.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ForkLineage {
     /// The parent agent this was forked from.
     pub parent_agent_id: String,
@@ -947,7 +947,7 @@ pub struct ForkLineage {
 }
 
 /// Result of a fork operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ForkResult {
     /// The newly created agent identity.
     pub new_agent: AgentIdentityProfile,
@@ -1013,7 +1013,7 @@ fn node_hash(left: &MerkleHash, right: &MerkleHash) -> MerkleHash {
 ///
 /// Leaves are sorted alphabetically and hashed with a domain separator.
 /// If the number of leaves is odd, the last leaf is duplicated.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AllowlistMerkleTree {
     /// The Merkle root hash (hex-encoded for JSON).
     pub root: String,
@@ -1129,7 +1129,7 @@ impl AllowlistMerkleTree {
 }
 
 /// Which side the sibling is on in the Merkle proof path.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SiblingPosition {
     Left,
@@ -1137,7 +1137,7 @@ pub enum SiblingPosition {
 }
 
 /// A single sibling in a Merkle proof path.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProofSibling {
     /// Hex-encoded SHA-256 hash of the sibling node.
     pub hash: String,
@@ -1146,7 +1146,7 @@ pub struct ProofSibling {
 }
 
 /// Proof that a single key is a member of the identity allowlist.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AllowlistMembershipProof {
     /// The key being proved.
     pub key: String,
@@ -1160,7 +1160,7 @@ pub struct AllowlistMembershipProof {
 
 /// A complete proof covering all top-level keys in a candidate identity core.
 /// Each key must have a valid membership proof.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct IdentityUpdateProof {
     /// Merkle root hash (hex) the proofs are verified against.
     pub merkle_root: String,
@@ -1169,7 +1169,7 @@ pub struct IdentityUpdateProof {
 }
 
 /// Request body for `POST /api/v1/agents/:agent_id/identity/verified`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VerifiedIdentityUpdateRequest {
     /// The candidate identity core (same as `UpdateAgentIdentityRequest.core`).
     pub core: serde_json::Value,
@@ -1178,7 +1178,7 @@ pub struct VerifiedIdentityUpdateRequest {
 }
 
 /// Result of proof verification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProofVerificationResult {
     /// Whether all proofs verified successfully.
     pub verified: bool,
@@ -1189,7 +1189,7 @@ pub struct ProofVerificationResult {
 }
 
 /// Per-key verification result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct KeyVerificationResult {
     /// The key being verified.
     pub key: String,

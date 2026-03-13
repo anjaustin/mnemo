@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// The type of an episode, determining how it's processed during graph construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EpisodeType {
     /// A chat message with role and optional speaker name.
@@ -22,7 +22,7 @@ pub enum EpisodeType {
 }
 
 /// The role of a message episode sender.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRole {
     User,
@@ -41,7 +41,7 @@ pub enum MessageRole {
 /// The bi-temporal model tracks:
 /// - `created_at`: when the event occurred in the real world
 /// - `ingested_at`: when Mnemo received and processed it
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Episode {
     pub id: Uuid,
     pub session_id: Uuid,
@@ -94,7 +94,7 @@ pub struct Episode {
 }
 
 /// Tracks the async processing state of an episode through the ingestion pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessingStatus {
     /// Received and stored, awaiting processing.
@@ -109,7 +109,7 @@ pub enum ProcessingStatus {
     Skipped,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateEpisodeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Uuid>,
@@ -134,13 +134,13 @@ pub struct CreateEpisodeRequest {
 }
 
 /// Batch ingestion request for backfilling conversation history.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BatchCreateEpisodesRequest {
     pub episodes: Vec<CreateEpisodeRequest>,
 }
 
 /// Pagination for listing episodes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ListEpisodesParams {
     #[serde(default = "default_limit")]
     pub limit: u32,

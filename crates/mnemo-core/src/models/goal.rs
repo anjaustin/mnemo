@@ -16,7 +16,7 @@ use uuid::Uuid;
 ///
 /// Goals can be pre-defined `GoalProfile`s (stored in Redis) or free-form
 /// strings that the semantic router interprets heuristically.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum RetrievalGoal {
     /// A named goal that maps to a stored `GoalProfile`.
@@ -40,7 +40,7 @@ impl RetrievalGoal {
 /// - Which entity categories to boost or suppress
 /// - Temporal window preferences (recent vs. historical)
 /// - Edge type priorities (which relationship types matter most)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GoalProfile {
     /// Unique identifier.
     pub id: Uuid,
@@ -177,7 +177,7 @@ impl GoalProfile {
 }
 
 /// Request body for creating a goal profile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateGoalProfileRequest {
     pub name: String,
 
@@ -204,7 +204,7 @@ pub struct CreateGoalProfileRequest {
 }
 
 /// Request body for updating a goal profile.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct UpdateGoalProfileRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Status of a clarification request in the self-healing pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClarificationStatus {
     /// Question generated, waiting for answer.
@@ -29,7 +29,7 @@ pub enum ClarificationStatus {
 /// generates a targeted question to resolve the ambiguity. When answered
 /// (either via ingestion or manual resolution), the system reconciles the
 /// conflicting facts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClarificationRequest {
     /// Unique ID for this clarification.
     pub id: Uuid,
@@ -135,7 +135,7 @@ impl ClarificationRequest {
 }
 
 /// Request body for manually resolving a clarification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ResolveClarificationRequest {
     /// The answer to the clarification question.
     pub answer: String,
@@ -145,7 +145,7 @@ pub struct ResolveClarificationRequest {
 }
 
 /// Request body for generating clarifications from conflicts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GenerateClarificationsRequest {
     /// Minimum conflict severity to generate clarifications for (default: 0.6).
     #[serde(default = "default_min_severity")]
