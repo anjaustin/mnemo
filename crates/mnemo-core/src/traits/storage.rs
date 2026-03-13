@@ -596,8 +596,14 @@ pub trait RegionStore: Send + Sync {
     /// Get a region by ID.
     async fn get_region(&self, id: Uuid) -> StorageResult<Option<MemoryRegion>>;
 
-    /// List all regions (optionally filtered to regions an agent can access).
-    async fn list_regions(&self, agent_id: Option<&str>) -> StorageResult<Vec<MemoryRegion>>;
+    /// List regions, optionally filtered by user and/or agent.
+    /// - `user_id`: if provided, only return regions for this user.
+    /// - `agent_id`: if provided, only return regions the agent owns or has non-expired ACL access to.
+    async fn list_regions(
+        &self,
+        user_id: Option<Uuid>,
+        agent_id: Option<&str>,
+    ) -> StorageResult<Vec<MemoryRegion>>;
 
     /// Update a region.
     async fn update_region(&self, region: &MemoryRegion) -> StorageResult<()>;

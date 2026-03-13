@@ -8950,6 +8950,7 @@ async fn create_region(
 #[derive(Debug, Deserialize)]
 struct ListRegionsQuery {
     agent_id: Option<String>,
+    user_id: Option<Uuid>,
 }
 
 async fn list_regions(
@@ -8962,7 +8963,7 @@ async fn list_regions(
 
     let regions = state
         .state_store
-        .list_regions(params.agent_id.as_deref())
+        .list_regions(params.user_id, params.agent_id.as_deref())
         .await?;
     Ok(Json(regions))
 }

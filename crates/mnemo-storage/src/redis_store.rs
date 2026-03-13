@@ -2361,32 +2361,50 @@ impl GuardrailStore for RedisStateStore {
 }
 
 // ─── RegionStore ───────────────────────────────────────────────────
+//
+// Key schema:
+//   {prefix}region:{id}                          — JSON document
+//   {prefix}regions                              — sorted set (all region IDs, score = created_at ms)
+//   {prefix}user_regions:{user_id}               — sorted set (region IDs for a user)
+//   {prefix}agent_regions:{agent_id}             — sorted set (region IDs an agent owns or has ACL for)
+//   {prefix}region_acl:{region_id}               — sorted set (agent_ids with ACLs, score = granted_at ms)
+//   {prefix}region_acl_entry:{region_id}:{agent} — JSON document for each ACL entry
 
 impl RegionStore for RedisStateStore {
     async fn create_region(&self, region: &MemoryRegion) -> StorageResult<()> {
         let pk = self.key(&["region", &region.id.to_string()]);
-        self.set_json(&pk, region).await?;
-
-        // Global index: sorted by created_at
-        let idx = self.key(&["regions"]);
-        let score = region.created_at.timestamp_millis() as f64;
-        let mut conn = self.conn.clone();
-        redis::cmd("ZADD")
-            .arg(&idx)
-            .arg(score)
-            .arg(region.id.to_string())
-            .query_async::<()>(&mut conn)
-            .await
-            .map_err(|e| MnemoError::Redis(e.to_string()))?;
-
-        // Owner reverse index
+        let json = serde_json::to_string(region)?;
+        let global_idx = self.key(&["regions"]);
+        let user_idx = self.key(&["user_regions", &region.user_id.to_string()]);
         let owner_idx = self.key(&["agent_regions", &region.owner_agent_id]);
+        let score = region.created_at.timestamp_millis() as f64;
+        let id_str = region.id.to_string();
+
+        // Atomic: JSON.SET + 3× ZADD (global, user, owner indices)
         let mut conn = self.conn.clone();
-        redis::cmd("ZADD")
+        redis::pipe()
+            .atomic()
+            .cmd("JSON.SET")
+            .arg(&pk)
+            .arg("$")
+            .arg(&json)
+            .ignore()
+            .cmd("ZADD")
+            .arg(&global_idx)
+            .arg(score)
+            .arg(&id_str)
+            .ignore()
+            .cmd("ZADD")
+            .arg(&user_idx)
+            .arg(score)
+            .arg(&id_str)
+            .ignore()
+            .cmd("ZADD")
             .arg(&owner_idx)
             .arg(score)
-            .arg(region.id.to_string())
-            .query_async::<()>(&mut conn)
+            .arg(&id_str)
+            .ignore()
+            .exec_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
@@ -2398,36 +2416,44 @@ impl RegionStore for RedisStateStore {
         self.get_json::<MemoryRegion>(&pk).await
     }
 
-    async fn list_regions(&self, agent_id: Option<&str>) -> StorageResult<Vec<MemoryRegion>> {
-        match agent_id {
-            Some(aid) => {
-                // Delegate to list_agent_accessible_regions which properly
-                // checks ACL expiry and ownership
-                self.list_agent_accessible_regions(aid).await
+    async fn list_regions(
+        &self,
+        user_id: Option<Uuid>,
+        agent_id: Option<&str>,
+    ) -> StorageResult<Vec<MemoryRegion>> {
+        // If agent_id is provided, delegate to list_agent_accessible_regions
+        // (which checks ACL expiry) then optionally post-filter by user_id.
+        if let Some(aid) = agent_id {
+            let mut regions = self.list_agent_accessible_regions(aid).await?;
+            if let Some(uid) = user_id {
+                regions.retain(|r| r.user_id == uid);
             }
-            None => {
-                // Return all regions
-                let idx = self.key(&["regions"]);
-                let mut conn = self.conn.clone();
-                let ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
-                    .arg(&idx)
-                    .arg("-inf")
-                    .arg("+inf")
-                    .query_async(&mut conn)
-                    .await
-                    .map_err(|e| MnemoError::Redis(e.to_string()))?;
+            return Ok(regions);
+        }
 
-                let mut regions = Vec::new();
-                for id_str in &ids {
-                    if let Ok(id) = id_str.parse::<Uuid>() {
-                        if let Some(r) = self.get_region(id).await? {
-                            regions.push(r);
-                        }
-                    }
+        // No agent_id — list by user or all.
+        let idx = match user_id {
+            Some(uid) => self.key(&["user_regions", &uid.to_string()]),
+            None => self.key(&["regions"]),
+        };
+        let mut conn = self.conn.clone();
+        let ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(&idx)
+            .arg("-inf")
+            .arg("+inf")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut regions = Vec::new();
+        for id_str in &ids {
+            if let Ok(id) = id_str.parse::<Uuid>() {
+                if let Some(r) = self.get_region(id).await? {
+                    regions.push(r);
                 }
-                Ok(regions)
             }
         }
+        Ok(regions)
     }
 
     async fn update_region(&self, region: &MemoryRegion) -> StorageResult<()> {
@@ -2436,97 +2462,106 @@ impl RegionStore for RedisStateStore {
     }
 
     async fn delete_region(&self, id: Uuid) -> StorageResult<()> {
-        // Get region first to clean up indices
+        // Phase 1: Read region + ACL agent list (non-atomic, needed for key names)
         let region = match self.get_region(id).await? {
             Some(r) => r,
             None => return Ok(()),
         };
 
-        // Remove from global index
-        let idx = self.key(&["regions"]);
-        let mut conn = self.conn.clone();
-        redis::cmd("ZREM")
-            .arg(&idx)
-            .arg(id.to_string())
-            .query_async::<()>(&mut conn)
-            .await
-            .map_err(|e| MnemoError::Redis(e.to_string()))?;
-
-        // Remove from owner reverse index
-        let owner_idx = self.key(&["agent_regions", &region.owner_agent_id]);
-        let mut conn = self.conn.clone();
-        redis::cmd("ZREM")
-            .arg(&owner_idx)
-            .arg(id.to_string())
-            .query_async::<()>(&mut conn)
-            .await
-            .map_err(|e| MnemoError::Redis(e.to_string()))?;
-
-        // Delete all ACLs for this region
-        let acl_idx = self.key(&["region_acl", &id.to_string()]);
+        let acl_idx_key = self.key(&["region_acl", &id.to_string()]);
         let mut conn = self.conn.clone();
         let acl_agent_ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
-            .arg(&acl_idx)
+            .arg(&acl_idx_key)
             .arg("-inf")
             .arg("+inf")
             .query_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
-        for agent_id in &acl_agent_ids {
-            // Remove from agent reverse index
-            let agent_idx = self.key(&["agent_regions", agent_id]);
-            let mut conn = self.conn.clone();
-            redis::cmd("ZREM")
-                .arg(&agent_idx)
-                .arg(id.to_string())
-                .query_async::<()>(&mut conn)
-                .await
-                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        // Phase 2: Atomic delete of everything
+        let pk = self.key(&["region", &id.to_string()]);
+        let global_idx = self.key(&["regions"]);
+        let user_idx = self.key(&["user_regions", &region.user_id.to_string()]);
+        let owner_idx = self.key(&["agent_regions", &region.owner_agent_id]);
+        let id_str = id.to_string();
 
-            // Delete ACL entry
-            let acl_key = self.key(&["region_acl_entry", &id.to_string(), agent_id]);
-            self.del(&acl_key).await?;
+        let mut pipe = redis::pipe();
+        pipe.atomic()
+            // Delete region document
+            .del(&pk)
+            .ignore()
+            // Remove from global index
+            .cmd("ZREM")
+            .arg(&global_idx)
+            .arg(&id_str)
+            .ignore()
+            // Remove from user index
+            .cmd("ZREM")
+            .arg(&user_idx)
+            .arg(&id_str)
+            .ignore()
+            // Remove from owner reverse index
+            .cmd("ZREM")
+            .arg(&owner_idx)
+            .arg(&id_str)
+            .ignore();
+
+        // Delete each ACL entry + remove from each agent's reverse index
+        for agent_id in &acl_agent_ids {
+            let acl_entry_key =
+                self.key(&["region_acl_entry", &id_str, agent_id]);
+            let agent_idx = self.key(&["agent_regions", agent_id]);
+            pipe.del(&acl_entry_key)
+                .ignore()
+                .cmd("ZREM")
+                .arg(&agent_idx)
+                .arg(&id_str)
+                .ignore();
         }
 
-        // Delete ACL index
-        self.del(&acl_idx).await?;
+        // Delete the ACL index itself
+        pipe.del(&acl_idx_key).ignore();
 
-        // Delete region document
-        let pk = self.key(&["region", &id.to_string()]);
-        self.del(&pk).await
+        let mut conn = self.conn.clone();
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn grant_region_access(&self, acl: &MemoryRegionAcl) -> StorageResult<()> {
-        // Store ACL entry
         let acl_key = self.key(&[
             "region_acl_entry",
             &acl.region_id.to_string(),
             &acl.agent_id,
         ]);
-        self.set_json(&acl_key, acl).await?;
-
-        // Add to region's ACL index (keyed by agent_id for easy lookup)
+        let json = serde_json::to_string(acl)?;
         let acl_idx = self.key(&["region_acl", &acl.region_id.to_string()]);
+        let agent_idx = self.key(&["agent_regions", &acl.agent_id]);
         let score = acl.granted_at.timestamp_millis() as f64;
+        let region_id_str = acl.region_id.to_string();
+
+        // Atomic: JSON.SET + 2× ZADD (region ACL index + agent reverse index)
         let mut conn = self.conn.clone();
-        redis::cmd("ZADD")
+        redis::pipe()
+            .atomic()
+            .cmd("JSON.SET")
+            .arg(&acl_key)
+            .arg("$")
+            .arg(&json)
+            .ignore()
+            .cmd("ZADD")
             .arg(&acl_idx)
             .arg(score)
             .arg(&acl.agent_id)
-            .query_async::<()>(&mut conn)
-            .await
-            .map_err(|e| MnemoError::Redis(e.to_string()))?;
-
-        // Add to agent's reverse index (agent → region mapping)
-        let agent_idx = self.key(&["agent_regions", &acl.agent_id]);
-        let region_score = acl.granted_at.timestamp_millis() as f64;
-        let mut conn = self.conn.clone();
-        redis::cmd("ZADD")
+            .ignore()
+            .cmd("ZADD")
             .arg(&agent_idx)
-            .arg(region_score)
-            .arg(acl.region_id.to_string())
-            .query_async::<()>(&mut conn)
+            .arg(score)
+            .arg(&region_id_str)
+            .ignore()
+            .exec_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
@@ -2555,27 +2590,26 @@ impl RegionStore for RedisStateStore {
     }
 
     async fn revoke_region_access(&self, region_id: Uuid, agent_id: &str) -> StorageResult<()> {
-        // Remove ACL entry
         let acl_key = self.key(&["region_acl_entry", &region_id.to_string(), agent_id]);
-        self.del(&acl_key).await?;
-
-        // Remove from region's ACL index
         let acl_idx = self.key(&["region_acl", &region_id.to_string()]);
+        let agent_idx = self.key(&["agent_regions", agent_id]);
+        let region_id_str = region_id.to_string();
+
+        // Atomic: DEL + 2× ZREM (ACL index + agent reverse index)
         let mut conn = self.conn.clone();
-        redis::cmd("ZREM")
+        redis::pipe()
+            .atomic()
+            .del(&acl_key)
+            .ignore()
+            .cmd("ZREM")
             .arg(&acl_idx)
             .arg(agent_id)
-            .query_async::<()>(&mut conn)
-            .await
-            .map_err(|e| MnemoError::Redis(e.to_string()))?;
-
-        // Remove from agent's reverse index
-        let agent_idx = self.key(&["agent_regions", agent_id]);
-        let mut conn = self.conn.clone();
-        redis::cmd("ZREM")
+            .ignore()
+            .cmd("ZREM")
             .arg(&agent_idx)
-            .arg(region_id.to_string())
-            .query_async::<()>(&mut conn)
+            .arg(&region_id_str)
+            .ignore()
+            .exec_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
@@ -2586,7 +2620,6 @@ impl RegionStore for RedisStateStore {
         &self,
         agent_id: &str,
     ) -> StorageResult<Vec<MemoryRegion>> {
-        // Get all region IDs from the agent's reverse index
         let agent_idx = self.key(&["agent_regions", agent_id]);
         let mut conn = self.conn.clone();
         let region_ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
@@ -2598,18 +2631,21 @@ impl RegionStore for RedisStateStore {
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
         let mut regions = Vec::new();
+        // Collect expired ACL entries for lazy cleanup
+        let mut expired_cleanup: Vec<(String, String)> = Vec::new();
+
         for id_str in &region_ids {
             if let Ok(id) = id_str.parse::<Uuid>() {
-                // Check if the ACL entry exists and is not expired
                 let acl_key = self.key(&["region_acl_entry", id_str, agent_id]);
                 if let Some(acl) = self.get_json::<MemoryRegionAcl>(&acl_key).await? {
-                    if !acl.is_expired() {
-                        if let Some(region) = self.get_region(id).await? {
-                            regions.push(region);
-                        }
+                    if acl.is_expired() {
+                        // Collect for lazy cleanup
+                        expired_cleanup.push((id_str.clone(), agent_id.to_string()));
+                    } else if let Some(region) = self.get_region(id).await? {
+                        regions.push(region);
                     }
                 } else {
-                    // No ACL entry — might be the owner. Check region ownership.
+                    // No ACL entry — might be the owner.
                     if let Some(region) = self.get_region(id).await? {
                         if region.owner_agent_id == agent_id {
                             regions.push(region);
@@ -2618,6 +2654,31 @@ impl RegionStore for RedisStateStore {
                 }
             }
         }
+
+        // Lazy cleanup: remove expired ACL entries from indices (fire-and-forget)
+        if !expired_cleanup.is_empty() {
+            let mut pipe = redis::pipe();
+            // Don't wrap cleanup in atomic — best-effort is fine
+            for (region_id_str, aid) in &expired_cleanup {
+                let acl_key = self.key(&["region_acl_entry", region_id_str, &aid]);
+                let acl_idx = self.key(&["region_acl", region_id_str]);
+                let agent_rev_idx = self.key(&["agent_regions", &aid]);
+                pipe.del(&acl_key)
+                    .ignore()
+                    .cmd("ZREM")
+                    .arg(&acl_idx)
+                    .arg(aid.as_str())
+                    .ignore()
+                    .cmd("ZREM")
+                    .arg(&agent_rev_idx)
+                    .arg(region_id_str.as_str())
+                    .ignore();
+            }
+            let mut conn = self.conn.clone();
+            // Best-effort — ignore errors from cleanup
+            let _ = pipe.exec_async(&mut conn).await;
+        }
+
         Ok(regions)
     }
 }

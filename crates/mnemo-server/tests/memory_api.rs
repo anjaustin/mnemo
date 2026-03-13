@@ -19,7 +19,7 @@ use mnemo_core::models::edge::{Edge, ExtractedRelationship};
 use mnemo_core::models::entity::{Entity, EntityType, ExtractedEntity};
 use mnemo_core::traits::fulltext::FullTextStore;
 use mnemo_core::traits::llm::EmbeddingConfig;
-use mnemo_core::traits::storage::{EdgeStore, EntityStore, UserStore};
+use mnemo_core::traits::storage::{EdgeStore, EntityStore, RegionStore, UserStore};
 use mnemo_graph::GraphEngine;
 use mnemo_llm::{EmbedderKind, OpenAiCompatibleEmbedder};
 use mnemo_retrieval::RetrievalEngine;
@@ -12934,4 +12934,217 @@ async fn f6_rt_unicode_agent_id_rejected() {
     ).await;
     assert_eq!(status, StatusCode::BAD_REQUEST,
         "unicode in owner_agent_id should be rejected");
+}
+
+// RT-17: list_regions with user_id filter scopes correctly
+#[tokio::test]
+async fn f6_rt_list_regions_user_scoped() {
+    let app = build_test_app().await;
+    let user_a = create_test_user(&app, "rt-user-scope-a").await;
+    let user_b = create_test_user(&app, "rt-user-scope-b").await;
+
+    // Create a region for each user
+    let (status, _) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "region_user_a",
+            "owner_agent_id": "bot-a",
+            "user_id": user_a,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "region_user_b",
+            "owner_agent_id": "bot-b",
+            "user_id": user_b,
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // List regions for user_a only
+    let (status, regions) = json_request(
+        &app, "GET", &format!("/api/v1/regions?user_id={user_a}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    let arr = regions.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "should only see user_a's region");
+    assert_eq!(arr[0]["name"], "region_user_a");
+
+    // List regions for user_b only
+    let (status, regions) = json_request(
+        &app, "GET", &format!("/api/v1/regions?user_id={user_b}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    let arr = regions.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "should only see user_b's region");
+    assert_eq!(arr[0]["name"], "region_user_b");
+}
+
+// RT-18: list_regions with user_id + agent_id combined filtering
+#[tokio::test]
+async fn f6_rt_list_regions_user_and_agent_scoped() {
+    let app = build_test_app().await;
+    let user_a = create_test_user(&app, "rt-user-combo-a").await;
+    let user_b = create_test_user(&app, "rt-user-combo-b").await;
+
+    // Same agent owns regions for different users
+    json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "combo_region_a",
+            "owner_agent_id": "shared-bot",
+            "user_id": user_a,
+        }),
+    ).await;
+
+    json_request(
+        &app, "POST", "/api/v1/regions",
+        serde_json::json!({
+            "name": "combo_region_b",
+            "owner_agent_id": "shared-bot",
+            "user_id": user_b,
+        }),
+    ).await;
+
+    // Filter by agent + user_a → should only see user_a's region
+    let (status, regions) = json_request(
+        &app, "GET", &format!("/api/v1/regions?agent_id=shared-bot&user_id={user_a}"),
+        serde_json::json!({}),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    let arr = regions.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["name"], "combo_region_a");
+}
+
+// RT-19: Lazy cleanup removes expired ACL entries from indices
+#[tokio::test]
+async fn f6_rt_lazy_cleanup_expired_acls() {
+    let (_, store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    }).await;
+
+    // Create user and region directly via store
+    let user_id = Uuid::now_v7();
+    store.create_user(mnemo_core::models::user::CreateUserRequest {
+        id: Some(user_id),
+        external_id: Some("cleanup-user".into()),
+        name: "cleanup-user".into(),
+        email: None,
+        metadata: serde_json::json!({}),
+    }).await.unwrap();
+
+    let region_id = Uuid::now_v7();
+    let region = mnemo_core::models::region::MemoryRegion {
+        id: region_id,
+        name: "cleanup_test".into(),
+        owner_agent_id: "owner-bot".into(),
+        user_id,
+        entity_filter: None,
+        edge_filter: None,
+        classification_ceiling: mnemo_core::models::classification::Classification::Internal,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    store.create_region(&region).await.unwrap();
+
+    // Grant an ACL that is already expired
+    let expired_acl = mnemo_core::models::region::MemoryRegionAcl {
+        region_id,
+        agent_id: "expired-agent".into(),
+        permission: mnemo_core::models::region::RegionPermission::Read,
+        granted_by: "owner-bot".into(),
+        granted_at: chrono::Utc::now() - chrono::Duration::hours(48),
+        expires_at: Some(chrono::Utc::now() - chrono::Duration::hours(1)),
+    };
+    store.grant_region_access(&expired_acl).await.unwrap();
+
+    // Raw ACL list should still contain it (list_region_acls doesn't filter)
+    let raw_acls = store.list_region_acls(region_id).await.unwrap();
+    assert_eq!(raw_acls.len(), 1, "raw list should have the expired ACL");
+
+    // list_agent_accessible_regions triggers lazy cleanup
+    let accessible = store.list_agent_accessible_regions("expired-agent").await.unwrap();
+    assert_eq!(accessible.len(), 0, "expired ACL should not grant access");
+
+    // After lazy cleanup, the raw ACL list should be empty
+    // Give Redis a moment to process the pipeline
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let raw_acls_after = store.list_region_acls(region_id).await.unwrap();
+    assert_eq!(raw_acls_after.len(), 0,
+        "lazy cleanup should have removed the expired ACL entry");
+}
+
+// RT-20: delete_region atomically removes all indices (verify via raw store)
+#[tokio::test]
+async fn f6_rt_delete_region_cleans_all_indices() {
+    let (_, store) = build_test_harness_with_prefilter(MetadataPrefilterConfig {
+        enabled: false,
+        scan_limit: 400,
+        relax_if_empty: false,
+    }).await;
+
+    let user_id = Uuid::now_v7();
+    store.create_user(mnemo_core::models::user::CreateUserRequest {
+        id: Some(user_id),
+        external_id: Some("idx-user".into()),
+        name: "idx-user".into(),
+        email: None,
+        metadata: serde_json::json!({}),
+    }).await.unwrap();
+
+    let region_id = Uuid::now_v7();
+    let region = mnemo_core::models::region::MemoryRegion {
+        id: region_id,
+        name: "idx_test".into(),
+        owner_agent_id: "idx-owner".into(),
+        user_id,
+        entity_filter: None,
+        edge_filter: None,
+        classification_ceiling: mnemo_core::models::classification::Classification::Internal,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    store.create_region(&region).await.unwrap();
+
+    // Grant ACL to another agent
+    let acl = mnemo_core::models::region::MemoryRegionAcl {
+        region_id,
+        agent_id: "guest-agent".into(),
+        permission: mnemo_core::models::region::RegionPermission::Write,
+        granted_by: "idx-owner".into(),
+        granted_at: chrono::Utc::now(),
+        expires_at: None,
+    };
+    store.grant_region_access(&acl).await.unwrap();
+
+    // Verify region appears in listings
+    let owner_regions = store.list_agent_accessible_regions("idx-owner").await.unwrap();
+    assert_eq!(owner_regions.len(), 1);
+    let guest_regions = store.list_agent_accessible_regions("guest-agent").await.unwrap();
+    assert_eq!(guest_regions.len(), 1);
+    let user_regions = store.list_regions(Some(user_id), None).await.unwrap();
+    assert_eq!(user_regions.len(), 1);
+
+    // Delete the region
+    store.delete_region(region_id).await.unwrap();
+
+    // Verify complete cleanup
+    assert!(store.get_region(region_id).await.unwrap().is_none(),
+        "region document should be gone");
+    let owner_regions = store.list_agent_accessible_regions("idx-owner").await.unwrap();
+    assert_eq!(owner_regions.len(), 0, "owner index should be clean");
+    let guest_regions = store.list_agent_accessible_regions("guest-agent").await.unwrap();
+    assert_eq!(guest_regions.len(), 0, "guest agent index should be clean");
+    let user_regions = store.list_regions(Some(user_id), None).await.unwrap();
+    assert_eq!(user_regions.len(), 0, "user index should be clean");
+    let acls = store.list_region_acls(region_id).await.unwrap();
+    assert_eq!(acls.len(), 0, "ACL entries should be gone");
 }
