@@ -1,3 +1,10 @@
+//! Cross-session narrative summaries.
+//!
+//! A [`UserNarrative`] is an evolving "story of the user" that updates after
+//! each session. Narratives contain versioned [`NarrativeChapter`]s with
+//! period, summary, and key changes. Used as a preamble in context assembly
+//! to give agents long-term user understanding.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

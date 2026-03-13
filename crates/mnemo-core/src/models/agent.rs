@@ -1,3 +1,11 @@
+//! Agent identity, experience memory, and governance.
+//!
+//! Defines [`AgentIdentityProfile`] (versioned personality core with experience
+//! events and EWC++ consolidation), COW branching for A/B testing, domain fork
+//! with selective experience transfer, Merkle-proof-carrying identity updates,
+//! SHA-256 witness chain audit trail, and promotion proposals with configurable
+//! approval policies and conflict analysis.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

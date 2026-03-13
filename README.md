@@ -61,6 +61,7 @@ All 10 targets fully falsified (5-gate test: health, write, context, list-episod
 
 - **Temporal memory, not static notes**: facts can be superseded while preserving history for point-in-time recall (`docs/TEMPORAL_VECTORIZATION.md`).
 - **Fast context assembly**: hybrid retrieval and pre-assembled context blocks optimized for LLM prompts (`docs/ARCHITECTURE.md`).
+- **Enterprise access control**: RBAC with scoped API keys, data classification labels, policy-scoped memory views, a guardrails engine, multi-agent shared memory regions with ACLs, and agent promotion governance with approval workflows.
 - **Agent identity controls**: identity core, experience weighting, versioning, audit, rollback, and promotion flow (`docs/AGENT_IDENTITY_SUBSTRATE.md`).
 - **Proof over claims**: benchmark harness plus falsification and CI gates are first-class (`docs/EVALUATION.md`, `docs/COMPETITIVE.md`, `.github/workflows/quality-gates.yml`).
 
@@ -108,7 +109,12 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Governance audit trail | :green_circle: | :green_circle: | :yellow_circle: | :red_circle: |
 | SOC 2 Type II certification | :yellow_circle: | :green_circle: | :green_circle: | :red_circle: |
 | HIPAA compliance (BAA available) | :red_circle: | :green_circle: | :red_circle: | :red_circle: |
-| RBAC / role-based access control | :red_circle: | :green_circle: | :red_circle: | :red_circle: |
+| RBAC / role-based access control | :green_circle: | :green_circle: | :red_circle: | :red_circle: |
+| Data classification labels | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Policy-scoped memory views | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Memory guardrails engine | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Multi-agent shared memory regions | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| Agent promotion governance | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | BYOK (customer-managed encryption keys) | :red_circle: | :green_circle: | :red_circle: | :red_circle: |
 
 ### Webhooks & Events
@@ -133,7 +139,7 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | LangChain adapter | :green_circle: | :green_circle: | :green_circle: | :red_circle: |
 | LlamaIndex adapter | :green_circle: | :red_circle: | :green_circle: | :red_circle: |
 | Vercel AI SDK adapter | :green_circle: | :red_circle: | :green_circle: | :red_circle: |
-| MCP server | :red_circle: | :green_circle: | :green_circle: | :green_circle: |
+| MCP server | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
 | Multi-modal (images, audio) | :red_circle: | :red_circle: | :green_circle: | :red_circle: |
 
 ### Deployment & Operations
@@ -152,8 +158,6 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 - **Zep self-hosted**: Zep's open-source offering is [Graphiti](https://github.com/getzep/graphiti) (the graph engine). The full Zep platform is cloud-only.
 - **Mem0 graph**: Graph memory is available but returns relations as a side-channel alongside vector results, not a traversable graph API.
 - **Letta sleep-time**: Letta agents can self-modify their memory blocks, which provides a form of background consolidation, though it is agent-initiated rather than system-scheduled.
-- **Mnemo MCP**: Not yet implemented. This is a known gap.
-- **Mnemo RBAC**: API-key authentication only. No per-user roles or scoped tokens.
 - **Mnemo reranking caveat**: MMR uses score-proximity approximation rather than full embedding dot-product.
 
 ## Core Capabilities
@@ -179,6 +183,13 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 - **Raw Vector API** - General-purpose vector database endpoints for external integrations (upsert, similarity search, delete, count, namespace lifecycle).
 - **AnythingLLM Integration** - Drop-in vector DB provider for [AnythingLLM](https://github.com/Mintplex-Labs/anything-llm) (55.5k stars). See `integrations/anythingllm/`.
 - **LLM Agnostic** - Works with Anthropic, OpenAI, Ollama, Liquid AI, or no external LLM.
+- **Scoped API Keys (RBAC)** - Role-based access control (`read`/`write`/`admin`) with optional user, agent, and classification scoping. Key rotation and revocation via API.
+- **Data Classification** - Four-tier labeling (`public`/`internal`/`confidential`/`restricted`) on entities and edges, enforced at retrieval time.
+- **Memory Views** - Named, reusable access policies that filter context by classification ceiling, entity types, edge labels, temporal scope, and fact count.
+- **Memory Guardrails** - Composable rule engine with condition predicates (classification, confidence, age, regex, role) and actions (block, redact, reclassify, audit, warn). Dry-run evaluation endpoint.
+- **Multi-Agent Shared Memory** - Memory regions with per-agent ACLs (`read`/`write`/`manage`), owner-only mutation, optional expiry, and lazy cleanup of stale grants.
+- **Agent Promotion Governance** - Proposal-based approval workflows for agent identity changes with configurable quorum, cooling periods, auto-reject deadlines, and conflict analysis.
+- **MCP Server** - Model Context Protocol over stdio transport with 7 tools and 2 resource templates for Claude Code and compatible clients.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
 ## Quality Gates

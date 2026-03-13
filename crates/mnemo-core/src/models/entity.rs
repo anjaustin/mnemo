@@ -1,3 +1,9 @@
+//! Knowledge graph entities (nodes).
+//!
+//! An [`Entity`] represents a named concept extracted from episodes — people,
+//! organizations, locations, concepts, or custom types. Entities track aliases,
+//! mention counts, first/last seen timestamps, and data classification.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

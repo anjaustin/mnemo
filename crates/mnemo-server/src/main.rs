@@ -1,3 +1,27 @@
+//! Mnemo server binary entry point.
+//!
+//! Loads configuration from environment variables, initializes Redis and
+//! Qdrant connections, sets up the Axum router with auth middleware, and
+//! starts the HTTP listener.
+//!
+//! # Environment Variables
+//!
+//! Core:
+//! - `MNEMO_HOST` / `MNEMO_PORT` — Bind address (default `0.0.0.0:8080`)
+//! - `MNEMO_REDIS_URL` — Redis connection string
+//! - `MNEMO_QDRANT_URL` — Qdrant gRPC endpoint
+//!
+//! Auth:
+//! - `MNEMO_AUTH_ENABLED` — Enable API key authentication (default `false`)
+//! - `MNEMO_AUTH_BOOTSTRAP_KEYS` — Comma-separated bootstrap API keys
+//!
+//! LLM:
+//! - `MNEMO_LLM_PROVIDER` — `openai`, `anthropic`, or `ollama`
+//! - `MNEMO_LLM_MODEL` — Model name for extraction/summarization
+//! - `MNEMO_EMBEDDING_PROVIDER` — `openai`, `local`, or `ollama`
+//! - `MNEMO_EMBEDDING_MODEL` — Embedding model name
+//! - `MNEMO_EMBEDDING_DIMENSIONS` — Embedding vector dimensions
+
 use std::sync::Arc;
 
 use axum::middleware::from_fn_with_state;

@@ -1,3 +1,10 @@
+//! Scoped API keys and RBAC authentication.
+//!
+//! Defines [`ApiKey`] with role-based access control (`Read`/`Write`/`Admin`),
+//! optional [`ApiKeyScope`] for user, agent, and classification restrictions,
+//! SHA-256 key hashing with `mnk_` prefix identification, and [`CallerContext`]
+//! for per-request authorization enforcement.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

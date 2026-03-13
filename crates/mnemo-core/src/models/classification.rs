@@ -1,3 +1,10 @@
+//! Data classification labels for access control.
+//!
+//! Four-tier classification system: `Public` < `Internal` < `Confidential` <
+//! `Restricted`. Applied to entities and edges at ingestion time, enforced
+//! during retrieval via API key scope ceilings and memory view constraints.
+//! Defaults to `Internal` for backward compatibility.
+
 use serde::{Deserialize, Serialize};
 
 // ─── Data Classification ──────────────────────────────────────────

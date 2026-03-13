@@ -17,6 +17,9 @@ version = "0.6.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/anjaustin/mnemo"
+homepage = "https://github.com/anjaustin/mnemo"
+documentation = "https://github.com/anjaustin/mnemo/blob/main/docs/API.md"
+description = "Memory infrastructure for production AI agents — temporal knowledge graph, hybrid retrieval, enterprise access control."
 rust-version = "1.85"
 
 [workspace.dependencies]

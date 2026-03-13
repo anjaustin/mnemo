@@ -1,3 +1,10 @@
+//! Multi-agent shared memory regions with ACLs.
+//!
+//! A [`MemoryRegion`] scopes a subset of a user's knowledge graph for shared
+//! access by multiple agents. [`MemoryRegionAcl`] entries grant per-agent
+//! permissions (`Read`/`Write`/`Manage`) with optional expiry. Includes
+//! [`validate_agent_id`] and [`validate_region_name`] input sanitization.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

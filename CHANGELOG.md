@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-03-13
+
+### Added
+
+- **Scoped API keys (RBAC)** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Role-based access control via API key management. `ApiKey` model with `Admin`, `Write`, `Read` roles and optional `ApiKeyScope` (user/agent restrictions). `ApiKeyStore` trait with Redis persistence — keys stored as salted SHA-256 hashes with `mnk_` prefix for identification. CRUD endpoints: `POST /api/v1/keys` (create), `GET /api/v1/keys` (list), `DELETE /api/v1/keys/:id` (revoke), `POST /api/v1/keys/:id/rotate` (rotate with automatic old-key revocation). `CallerContext` extracted by auth middleware for per-request role enforcement. `require_role()` guard on all mutating endpoints. 20 tests + adversarial falsification tests.
+- **Data classification labels** (`mnemo-core`, `mnemo-server`): Four-tier classification system — `Public`, `Internal`, `Confidential`, `Restricted` — applied to entities and edges at ingestion time. `Classification` enum with ordinal ordering and `#[serde(default)]` backward compatibility (defaults to `Internal`). Classification filters in context assembly and retrieval. `CallerContext::max_classification()` enforces ceiling based on API key role. 12 tests.
+- **Policy-scoped memory views** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Named, reusable access policies that filter memory by classification ceiling, entity type whitelist, edge label blacklist, and temporal scope. `MemoryView` model with `ViewConstraints` enforcement. `ViewStore` trait with Redis persistence (JSON + sorted set + name index). CRUD endpoints at `/api/v1/views`. Views applied at context assembly time via `?view=` query parameter. 14 tests + adversarial falsification tests.
+- **Memory guardrails engine** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Rule-based policy engine for memory access control. `GuardrailRule` with composable `GuardrailCondition` predicates (classification thresholds, confidence floors, entity/edge type filters, content regex, caller role checks, age limits) and `GuardrailAction` outcomes (allow, block, redact, reclassify, audit). `GuardrailStore` trait with Redis persistence. CRUD endpoints at `/api/v1/guardrails` plus `POST /api/v1/guardrails/evaluate` for rule evaluation. Priority-ordered evaluation with short-circuit on block. 22 tests + adversarial falsification tests.
+- **Agent identity phase B — governance & conflict handling** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Promotion proposals with approval workflows for agent identity changes. `PromotionProposal` with `Pending/Approved/Rejected/Expired` lifecycle, configurable `ApprovalPolicy` (quorum, auto-reject deadline, cooling period, risk-level thresholds). `ConflictAnalysis` engine scores experience evidence for/against proposed changes. Endpoints: `POST /api/v1/agents/:agent_id/promotions` (propose), `POST .../approve` / `POST .../reject`, `GET .../conflicts`, `PUT/GET /api/v1/agents/:agent_id/approval-policy`. 25 tests + adversarial falsification tests.
+- **Multi-agent shared memory with ACLs** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): Shared memory regions with granular access control. `MemoryRegion` model with owner agent, user scope, classification ceiling, entity/edge type filters. `MemoryRegionAcl` with `Read/Write/Manage` permissions and optional expiry. `RegionStore` trait with Redis persistence — atomic MULTI/EXEC pipelines, user-scoped indices, agent reverse indices, lazy expired ACL cleanup. CRUD endpoints at `/api/v1/regions` with `?user_id=` and `?agent_id=` filters. ACL management at `/api/v1/regions/:region_id/acl`. `validate_agent_id()` rejects path traversal, colons, slashes, unicode, control chars. Full RBAC + ownership enforcement on all endpoints. 36 model tests + 37 integration tests (17 functional + 20 red-team/adversarial).
+
+### Changed
+
+- Workspace version: `0.5.5` -> `0.6.0`.
+- `mnemo-core` test count: 364 -> 478 (+114 tests).
+- Total workspace test count: ~702 -> ~1,091 (+389 tests).
+- `StateStore` composite trait now includes `ApiKeyStore`, `ViewStore`, `GuardrailStore`, `RegionStore`.
+- `AppState` struct: added `auth_config` field for API key authentication middleware.
+- Auth middleware: `AuthConfig` with key cache (`Arc<RwLock<HashMap<String, CachedKey>>>`), bootstrap key support, `CallerContext` extraction into request extensions.
+- `MemoryWebhookEventType` enum expanded with governance events.
+- All mutating endpoints now enforce `require_role()` authorization checks.
+- `RegionStore::list_regions` accepts `user_id: Option<Uuid>` and `agent_id: Option<&str>` filter parameters.
+- Region operations use atomic Redis pipelines (`MULTI/EXEC`) for create, delete, grant, and revoke.
+- Expired ACLs lazily cleaned from agent reverse indices during `list_agent_accessible_regions`.
+
+### Security
+
+- Red-team round 1: Fixed 10 of 13 findings — RBAC on all region endpoints, ownership verification on grant/revoke/update, `validate_agent_id()` input sanitization, expired ACL filtering, user existence validation. 16 red-team integration tests.
+- Red-team round 2: Resolved remaining 3 accepted risks — atomic Redis pipelines prevent partial writes, user-scoped region index prevents full-scan enumeration, lazy ACL cleanup removes stale index entries. 4 additional integration tests.
+
 ## [0.5.5] — 2026-03-11
 
 ### Added

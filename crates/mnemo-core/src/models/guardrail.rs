@@ -1,3 +1,10 @@
+//! Memory guardrails — rule-based policy engine.
+//!
+//! [`GuardrailRule`] defines composable condition predicates (classification
+//! thresholds, confidence floors, entity/edge type filters, content regex,
+//! caller role checks) paired with actions (block, redact, reclassify, audit,
+//! warn). Rules are priority-ordered with short-circuit on block.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

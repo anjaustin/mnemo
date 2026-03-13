@@ -1,3 +1,10 @@
+//! Policy-scoped memory views.
+//!
+//! A [`MemoryView`] is a named, reusable access policy that filters memory
+//! during context assembly. Views constrain by classification ceiling, entity
+//! type whitelist, edge label blacklist, temporal scope, fact count limit,
+//! and narrative inclusion. Applied via `?view=<name>` on context endpoints.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

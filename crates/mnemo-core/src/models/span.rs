@@ -1,3 +1,9 @@
+//! LLM call tracing spans.
+//!
+//! An [`LlmSpan`] records a single LLM API call with model, provider,
+//! input/output token counts, latency, and optional error information.
+//! Used for cost tracking, debugging, and operator observability.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

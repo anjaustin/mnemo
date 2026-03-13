@@ -1,3 +1,10 @@
+//! User identity and metadata.
+//!
+//! A [`User`] is the top-level tenant in Mnemo. All sessions, episodes,
+//! entities, edges, narratives, goals, and memory regions are scoped to a
+//! user. Users are identified by both an internal UUID and an external ID
+//! for integration with upstream systems.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -1,3 +1,9 @@
+//! Sleep-time memory digests.
+//!
+//! [`MemoryDigest`] captures per-user topic summaries generated during idle
+//! windows by the ingestion pipeline's consolidation step. Used for proactive
+//! context enrichment and progressive summarization.
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

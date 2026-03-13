@@ -23,6 +23,8 @@ use crate::models::{
 
 // ─── Agent Identity Storage ────────────────────────────────────────
 
+/// Persistence for agent identity profiles, experience events, COW branches,
+/// promotion proposals, approval policies, and witness chain audit events.
 #[allow(async_fn_in_trait)]
 pub trait AgentStore: Send + Sync {
     async fn get_agent_identity(&self, agent_id: &str) -> StorageResult<AgentIdentityProfile>;
@@ -154,6 +156,7 @@ pub trait UserStore: Send + Sync {
 
 // ─── Session Storage ───────────────────────────────────────────────
 
+/// Persistence for conversation sessions that group related episodes.
 #[allow(async_fn_in_trait)]
 pub trait SessionStore: Send + Sync {
     async fn create_session(&self, req: CreateSessionRequest) -> StorageResult<Session>;
@@ -169,6 +172,8 @@ pub trait SessionStore: Send + Sync {
 
 // ─── Episode Storage ───────────────────────────────────────────────
 
+/// Persistence for episodes (messages/events) with processing state management,
+/// atomic claiming for concurrent worker safety, and requeue on failure.
 #[allow(async_fn_in_trait)]
 pub trait EpisodeStore: Send + Sync {
     async fn create_episode(
@@ -215,6 +220,8 @@ pub trait EpisodeStore: Send + Sync {
 
 // ─── Entity Storage ────────────────────────────────────────────────
 
+/// Persistence for knowledge graph entities (nodes) with alias-based lookup,
+/// name search, and per-user listing with classification filtering.
 #[allow(async_fn_in_trait)]
 pub trait EntityStore: Send + Sync {
     async fn create_entity(&self, entity: Entity) -> StorageResult<Entity>;
@@ -238,6 +245,8 @@ pub trait EntityStore: Send + Sync {
 
 // ─── Edge Storage ──────────────────────────────────────────────────
 
+/// Persistence for knowledge graph edges (facts) with temporal queries,
+/// directional traversal, conflict detection, and invalidation tracking.
 #[allow(async_fn_in_trait)]
 pub trait EdgeStore: Send + Sync {
     async fn create_edge(&self, edge: Edge) -> StorageResult<Edge>;
@@ -539,6 +548,8 @@ pub trait ApiKeyStore: Send + Sync {
 
 // ─── Memory View Storage ───────────────────────────────────────────
 
+/// Persistence for named memory view policies that filter context assembly
+/// by classification ceiling, entity types, edge labels, and temporal scope.
 #[allow(async_fn_in_trait)]
 pub trait ViewStore: Send + Sync {
     /// Save a new memory view definition.

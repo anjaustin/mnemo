@@ -3069,3 +3069,791 @@ The embedded operator dashboard is served at `/_/`. No deployment or configurati
 | `GET /_/explorer` | Knowledge graph explorer page (SPA route) |
 
 All `/_/*` routes that don't match a static asset serve the SPA index; client-side JavaScript handles routing.
+
+---
+
+## Authentication (v0.6.0)
+
+All API endpoints (except `/health`, `/healthz`, `/metrics`, and dashboard `/_/` routes) require authentication when auth is enabled.
+
+### Headers
+
+Provide your API key via either:
+
+- `Authorization: Bearer <key>`
+- `X-Api-Key: <key>`
+
+When auth is disabled (`MNEMO_AUTH_ENABLED=false`), all callers receive implicit Admin context.
+
+### Roles
+
+| Role | Ordinal | Permissions |
+|------|---------|-------------|
+| `read` | 0 | Read-only access to memory, views, guardrails |
+| `write` | 1 | Read + create/update episodes, entities, regions |
+| `admin` | 2 | Full access including key management, view/guardrail CRUD, region deletion |
+
+Higher roles inherit all lower-role permissions. A handler requiring `write` accepts both `write` and `admin` keys.
+
+### Scoped Keys
+
+API keys may include an optional `scope` restricting access to specific users, agents, or classification levels:
+
+```json
+{
+  "allowed_user_ids": ["uuid-1", "uuid-2"],
+  "allowed_agent_ids": ["bot-a", "bot-b"],
+  "max_classification": "confidential"
+}
+```
+
+---
+
+## API Keys
+
+Manage API keys for RBAC authentication. All key management endpoints require `admin` role.
+
+### Create API Key
+
+```
+POST /api/v1/keys
+```
+
+**Auth**: `admin`
+
+**Request Body**:
+
+```json
+{
+  "name": "my-service-key",
+  "role": "write",
+  "scope": {
+    "allowed_user_ids": ["550e8400-e29b-41d4-a716-446655440000"],
+    "allowed_agent_ids": ["bot-a"],
+    "max_classification": "confidential"
+  },
+  "expires_at": "2026-12-31T23:59:59Z"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Display name (1-128 chars, trimmed) |
+| `role` | string | Yes | `"read"`, `"write"`, or `"admin"` |
+| `scope` | object | No | Access restrictions (see Scoped Keys above) |
+| `expires_at` | datetime | No | Automatic expiry timestamp |
+
+**Response**: `201 Created`
+
+```json
+{
+  "raw_key": "mnk_a1b2c3d4...",
+  "id": "uuid",
+  "name": "my-service-key",
+  "key_hash": "sha256-hash",
+  "key_prefix": "mnk_a1b2",
+  "role": "write",
+  "scope": { ... },
+  "created_by": "admin-bootstrap",
+  "created_at": "2026-03-13T...",
+  "expires_at": "2026-12-31T...",
+  "revoked": false
+}
+```
+
+> **Important**: The `raw_key` is returned exactly once and cannot be retrieved again. Store it securely.
+
+### List API Keys
+
+```
+GET /api/v1/keys?limit=50
+```
+
+**Auth**: `admin`
+
+| Query Param | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `limit` | integer | 50 | Max keys to return (1-200) |
+
+**Response**: `200 OK`
+
+```json
+{
+  "keys": [
+    {
+      "id": "uuid",
+      "name": "my-service-key",
+      "key_prefix": "mnk_a1b2",
+      "role": "write",
+      "scope": { ... },
+      "created_by": "admin-bootstrap",
+      "created_at": "2026-03-13T...",
+      "last_used_at": null,
+      "expires_at": "2026-12-31T...",
+      "revoked": false
+    }
+  ]
+}
+```
+
+> Note: `key_hash` is intentionally omitted from list responses.
+
+### Revoke API Key
+
+```
+DELETE /api/v1/keys/:key_id
+```
+
+**Auth**: `admin`
+
+**Response**: `204 No Content`
+
+### Rotate API Key
+
+```
+POST /api/v1/keys/:key_id/rotate
+```
+
+**Auth**: `admin`
+
+Revokes the old key and creates a new one with the same name, role, scope, and expiry. Returns the new key in the same format as Create.
+
+**Response**: `201 Created` (same shape as Create API Key)
+
+---
+
+## Data Classification
+
+Entities and edges carry a classification label that controls access:
+
+| Level | Ordinal | Description |
+|-------|---------|-------------|
+| `public` | 0 | Unrestricted |
+| `internal` | 1 | Default for all data |
+| `confidential` | 2 | Sensitive business data |
+| `restricted` | 3 | Highest sensitivity |
+
+Classification is assigned at ingestion time and enforced during retrieval. API key scope can set a `max_classification` ceiling — facts above the ceiling are excluded from context assembly.
+
+---
+
+## Memory Views
+
+Named, reusable access policies that filter memory by classification, entity types, edge labels, and temporal scope.
+
+### Create View
+
+```
+POST /api/v1/views
+```
+
+**Auth**: `admin`
+
+**Request Body**:
+
+```json
+{
+  "name": "customer-facing",
+  "description": "Read-only view for customer-facing agents",
+  "max_classification": "internal",
+  "allowed_entity_types": ["person", "organization"],
+  "blocked_edge_labels": ["internal_note", "salary"],
+  "max_facts": 100,
+  "include_narrative": true,
+  "temporal_scope": {
+    "type": "last_n_days",
+    "days": 90
+  }
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Unique name (1-128 chars) |
+| `description` | string | Yes | — | Human-readable description |
+| `max_classification` | string | Yes | — | Classification ceiling |
+| `allowed_entity_types` | string[] | No | all types | Whitelist of entity types |
+| `blocked_edge_labels` | string[] | No | none | Blacklist of edge labels |
+| `max_facts` | integer | No | unlimited | Max facts in context |
+| `include_narrative` | boolean | No | `true` | Include user narrative |
+| `temporal_scope` | object | No | all time | Time-based filter |
+
+**Temporal Scope** variants:
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `last_n_days` | `days: integer` | Facts from the last N days |
+| `since` | `since: datetime` | Facts since a specific timestamp |
+| `current_only` | — | Only the most recent session |
+
+**Response**: `201 Created` with the created `MemoryView`.
+
+### List Views
+
+```
+GET /api/v1/views
+```
+
+**Auth**: `read`
+
+**Response**: `200 OK`
+
+```json
+{
+  "views": [ ... ]
+}
+```
+
+### Get View
+
+```
+GET /api/v1/views/:name
+```
+
+**Auth**: `read`
+
+Path parameter is the view **name** (not UUID).
+
+**Response**: `200 OK` with `MemoryView`.
+
+### Update View
+
+```
+PUT /api/v1/views/:name
+```
+
+**Auth**: `admin`
+
+Full replacement of all mutable fields. Same request body as Create.
+
+**Response**: `200 OK` with updated `MemoryView`.
+
+### Delete View
+
+```
+DELETE /api/v1/views/:name
+```
+
+**Auth**: `admin`
+
+**Response**: `204 No Content`
+
+### Using Views in Context Requests
+
+Apply a view by adding the `?view=` query parameter to context endpoints:
+
+```
+GET /api/v1/memory/:user/context?query=...&view=customer-facing
+```
+
+The view's constraints are applied during context assembly, filtering facts by classification ceiling, entity types, edge labels, temporal scope, and fact count limit.
+
+---
+
+## Memory Guardrails
+
+Rule-based policy engine for memory access control. Guardrails evaluate conditions against memory operations and execute actions (block, redact, reclassify, audit, warn).
+
+### Create Guardrail
+
+```
+POST /api/v1/guardrails
+```
+
+**Auth**: `admin`
+
+**Request Body**:
+
+```json
+{
+  "name": "block-restricted-for-readers",
+  "description": "Prevent read-only keys from accessing restricted data",
+  "trigger": "on_retrieval",
+  "condition": {
+    "type": "and",
+    "conditions": [
+      { "type": "classification_above", "classification": "confidential" },
+      { "type": "caller_role_below", "role": "write" }
+    ]
+  },
+  "action": {
+    "type": "block",
+    "reason": "Insufficient role for restricted data"
+  },
+  "priority": 10,
+  "enabled": true,
+  "scope": { "type": "global" }
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Unique name (1-64 chars, alphanumeric/`_`/`-`) |
+| `description` | string | Yes | — | Human-readable description |
+| `trigger` | string | Yes | — | When to evaluate (see Triggers) |
+| `condition` | object | Yes | — | Predicate tree (see Conditions) |
+| `action` | object | Yes | — | What to do when matched (see Actions) |
+| `priority` | integer | No | 0 | Evaluation order (lower = first) |
+| `enabled` | boolean | No | `true` | Whether this rule is active |
+| `scope` | object | No | `global` | Applicability scope |
+
+**Triggers**: `on_ingest`, `on_fact_creation`, `on_retrieval`, `on_entity_creation`, `on_any`
+
+**Conditions** (composable tree):
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `classification_above` | `classification` | Matches if fact classification > threshold |
+| `entity_type_in` | `entity_types: string[]` | Matches entity types |
+| `edge_label_in` | `labels: string[]` | Matches edge labels |
+| `content_matches_regex` | `pattern: string` | Regex match on content |
+| `caller_role_below` | `role` | Matches if caller role < threshold |
+| `fact_age_above_days` | `days: integer` | Matches facts older than N days |
+| `confidence_below` | `confidence: float` | Matches low-confidence facts |
+| `and` | `conditions: condition[]` | All must match |
+| `or` | `conditions: condition[]` | Any must match |
+| `not` | `condition: condition` | Invert match |
+
+**Actions**:
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `block` | `reason: string` | Reject the operation |
+| `redact` | — | Remove content from output |
+| `reclassify` | `classification` | Upgrade classification level |
+| `audit_only` | `severity: string` | Allow but log |
+| `warn` | `message: string` | Allow with warning |
+
+**Scope**: `{ "type": "global" }` or `{ "type": "user", "user_id": "uuid" }`
+
+**Response**: `201 Created` with `GuardrailRule`.
+
+### List Guardrails
+
+```
+GET /api/v1/guardrails
+```
+
+**Auth**: `read`
+
+**Response**: `200 OK` with `{ "guardrails": [...] }`
+
+### Get Guardrail
+
+```
+GET /api/v1/guardrails/:id
+```
+
+**Auth**: `read`
+
+**Response**: `200 OK` with `GuardrailRule`.
+
+### Update Guardrail
+
+```
+PUT /api/v1/guardrails/:id
+```
+
+**Auth**: `admin`
+
+Full replacement. Same request body as Create.
+
+**Response**: `200 OK` with updated `GuardrailRule`.
+
+### Delete Guardrail
+
+```
+DELETE /api/v1/guardrails/:id
+```
+
+**Auth**: `admin`
+
+**Response**: `204 No Content`
+
+### Evaluate Guardrails (Dry-Run)
+
+```
+POST /api/v1/guardrails/evaluate
+```
+
+**Auth**: `read`
+
+Test which guardrail rules would fire for a given context without executing any actions.
+
+**Request Body**:
+
+```json
+{
+  "trigger": "on_retrieval",
+  "classification": "restricted",
+  "entity_type": "person",
+  "edge_label": "salary",
+  "content": "annual compensation is $150,000",
+  "caller_role": "read",
+  "fact_age_days": 30,
+  "confidence": 0.6,
+  "user_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+All fields except `trigger` are optional.
+
+**Response**: `200 OK`
+
+```json
+{
+  "blocked": true,
+  "block_reason": "Insufficient role for restricted data",
+  "redact": false,
+  "reclassify_to": null,
+  "warnings": [],
+  "audit_entries": [],
+  "rule_results": [
+    {
+      "rule_id": "uuid",
+      "rule_name": "block-restricted-for-readers",
+      "matched": true,
+      "action": { "type": "block", "reason": "..." }
+    }
+  ]
+}
+```
+
+---
+
+## Agent Promotions & Governance
+
+Promotion proposals enable controlled, auditable changes to agent identity with approval workflows, conflict analysis, and configurable policies.
+
+### Create Promotion Proposal
+
+```
+POST /api/v1/agents/:agent_id/promotions
+```
+
+**Request Body**:
+
+```json
+{
+  "proposal": "Increase formality based on enterprise feedback",
+  "candidate_core": {
+    "tone": "formal",
+    "domain_expertise": ["enterprise", "compliance"]
+  },
+  "reason": "Customer satisfaction improved 15% with formal tone in pilot",
+  "risk_level": "medium",
+  "source_event_ids": ["uuid-1", "uuid-2", "uuid-3"]
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `proposal` | string | Yes | — | Description of proposed change |
+| `candidate_core` | object | Yes | `{}` | Proposed identity core values |
+| `reason` | string | Yes | — | Justification for the change |
+| `risk_level` | string | No | `"medium"` | `"low"`, `"medium"`, or `"high"` |
+| `source_event_ids` | uuid[] | Yes | — | Supporting evidence (minimum 3 events) |
+
+**Response**: `201 Created` with `PromotionProposal`.
+
+### List Promotion Proposals
+
+```
+GET /api/v1/agents/:agent_id/promotions?limit=50
+```
+
+| Query Param | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `limit` | integer | 50 | Max proposals to return (1-500) |
+
+**Response**: `200 OK` with `[PromotionProposal, ...]`
+
+### Approve Promotion Proposal
+
+```
+POST /api/v1/agents/:agent_id/promotions/:proposal_id/approve
+```
+
+No request body required. The caller's identity is recorded as the approver.
+
+**Behavior**:
+1. Checks proposal is `pending` (rejects if expired, already approved/rejected)
+2. Validates cooling period from approval policy has elapsed
+3. Records approver (deduplicated by key name)
+4. Checks quorum requirement from approval policy
+5. If quorum not met: saves partial approval, returns proposal still as `pending`
+6. If quorum met: applies `candidate_core` to live agent identity, sets status to `approved`
+
+**Response**: `200 OK` with `PromotionProposal` (check `status` field).
+
+### Reject Promotion Proposal
+
+```
+POST /api/v1/agents/:agent_id/promotions/:proposal_id/reject
+```
+
+**Request Body** (optional):
+
+```json
+{
+  "reason": "Insufficient evidence for this personality change"
+}
+```
+
+**Response**: `200 OK` with `PromotionProposal` (status = `rejected`).
+
+### Get Promotion Conflicts
+
+```
+GET /api/v1/agents/:agent_id/promotions/:proposal_id/conflicts
+```
+
+Analyzes the agent's experience events for evidence supporting or conflicting with the proposal.
+
+**Response**: `200 OK`
+
+```json
+{
+  "proposal_id": "uuid",
+  "agent_id": "bot-a",
+  "supporting_signals": ["event-uuid-1", "event-uuid-2"],
+  "conflicting_signals": ["event-uuid-3"],
+  "conflict_score": 0.35,
+  "recommendation": "review_conflicts"
+}
+```
+
+| `conflict_score` | `recommendation` |
+|-------------------|------------------|
+| < 0.3 | `proceed` |
+| 0.3 – 0.7 | `review_conflicts` |
+| >= 0.7 | `reject` |
+
+### Set Approval Policy
+
+```
+PUT /api/v1/agents/:agent_id/approval-policy
+```
+
+**Auth**: `admin`
+
+**Request Body**:
+
+```json
+{
+  "low_risk": {
+    "min_approvers": 1,
+    "cooling_period_hours": null,
+    "auto_reject_after_hours": 168
+  },
+  "medium_risk": {
+    "min_approvers": 2,
+    "cooling_period_hours": 24,
+    "auto_reject_after_hours": 72
+  },
+  "high_risk": {
+    "min_approvers": 3,
+    "cooling_period_hours": 48,
+    "auto_reject_after_hours": 48
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `min_approvers` | integer | Minimum approvals needed for quorum |
+| `cooling_period_hours` | integer? | Hours to wait after creation before approvals count |
+| `auto_reject_after_hours` | integer? | Auto-reject pending proposals after this many hours |
+
+**Response**: `200 OK` with `ApprovalPolicy`.
+
+### Get Approval Policy
+
+```
+GET /api/v1/agents/:agent_id/approval-policy
+```
+
+Returns the agent's approval policy, or a default policy (1 approver for all risk levels) if none is configured.
+
+**Response**: `200 OK` with `ApprovalPolicy`.
+
+---
+
+## Memory Regions & ACLs
+
+Shared memory regions with granular access control for multi-agent architectures.
+
+### Create Region
+
+```
+POST /api/v1/regions
+```
+
+**Auth**: `write`
+
+**Request Body**:
+
+```json
+{
+  "name": "shared-customer-context",
+  "owner_agent_id": "sales-bot",
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "entity_filter": {
+    "entity_types": ["person", "organization"],
+    "name_patterns": ["acme"]
+  },
+  "edge_filter": {
+    "labels": ["works_at", "purchased"],
+    "min_confidence": 0.7
+  },
+  "classification_ceiling": "confidential"
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Region name (1-128 chars, no control chars) |
+| `owner_agent_id` | string | Yes | — | Owning agent (1-128 chars, validated format) |
+| `user_id` | uuid | Yes | — | User this region belongs to (must exist) |
+| `entity_filter` | object | No | all entities | Filter by entity types and name patterns |
+| `edge_filter` | object | No | all edges | Filter by labels and min confidence |
+| `classification_ceiling` | string | No | `"internal"` | Max classification level in this region |
+
+**Agent ID validation**: Must be 1-128 characters, alphanumeric plus `-`, `_`, `.`, and space. Rejects `:`, `/`, `..`, control characters, null bytes, and non-ASCII unicode.
+
+**Response**: `201 Created` with `MemoryRegion`.
+
+### List Regions
+
+```
+GET /api/v1/regions?user_id=uuid&agent_id=bot-a
+```
+
+**Auth**: `read`
+
+| Query Param | Type | Description |
+|-------------|------|-------------|
+| `user_id` | uuid | Filter regions by user |
+| `agent_id` | string | Filter regions by owner or ACL-granted agent |
+
+Both filters are optional and can be combined.
+
+**Response**: `200 OK` with `[MemoryRegion, ...]`
+
+### Get Region
+
+```
+GET /api/v1/regions/:region_id
+```
+
+**Auth**: `read`
+
+**Response**: `200 OK` with `MemoryRegion`.
+
+### Update Region
+
+```
+PUT /api/v1/regions/:region_id
+```
+
+**Auth**: `write`
+
+**Ownership**: Only the region owner or an `admin` key may update. Returns `403 Forbidden` otherwise.
+
+**Request Body** (partial update — only provided fields are changed):
+
+```json
+{
+  "name": "renamed-region",
+  "classification_ceiling": "restricted",
+  "entity_filter": {
+    "entity_types": ["person"]
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | No | New name (1-128 chars) |
+| `entity_filter` | object | No | Replace entity filter |
+| `edge_filter` | object | No | Replace edge filter |
+| `classification_ceiling` | string | No | New classification ceiling |
+
+**Response**: `200 OK` with updated `MemoryRegion`.
+
+### Delete Region
+
+```
+DELETE /api/v1/regions/:region_id
+```
+
+**Auth**: `admin`
+
+Deletes the region and all associated ACL entries. Cleans all reverse indices atomically.
+
+**Response**: `204 No Content`
+
+### Grant Region Access
+
+```
+POST /api/v1/regions/:region_id/acl
+```
+
+**Auth**: `write`
+
+**Ownership**: Only the region owner or an `admin` key may grant access. Returns `403 Forbidden` otherwise.
+
+**Request Body**:
+
+```json
+{
+  "agent_id": "support-bot",
+  "permission": "read",
+  "expires_at": "2026-06-01T00:00:00Z"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agent_id` | string | Yes | Agent to grant access to (validated format) |
+| `permission` | string | Yes | `"read"`, `"write"`, or `"manage"` |
+| `expires_at` | datetime | No | Auto-expiry timestamp |
+
+**Permission hierarchy**: `read` (0) < `write` (1) < `manage` (2). Higher permissions include all lower ones.
+
+**Response**: `201 Created` with `MemoryRegionAcl`.
+
+```json
+{
+  "region_id": "uuid",
+  "agent_id": "support-bot",
+  "permission": "read",
+  "granted_by": "admin-key",
+  "granted_at": "2026-03-13T...",
+  "expires_at": "2026-06-01T..."
+}
+```
+
+### List Region ACLs
+
+```
+GET /api/v1/regions/:region_id/acl
+```
+
+**Auth**: `read`
+
+Returns only active (non-expired) ACL entries. Expired entries are filtered out.
+
+**Response**: `200 OK` with `[MemoryRegionAcl, ...]`
+
+### Revoke Region Access
+
+```
+DELETE /api/v1/regions/:region_id/acl/:agent_id
+```
+
+**Auth**: `write`
+
+**Ownership**: Only the region owner or an `admin` key may revoke access. Returns `403 Forbidden` otherwise.
+
+**Response**: `204 No Content`

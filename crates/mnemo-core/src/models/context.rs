@@ -1,3 +1,10 @@
+//! Context assembly for LLM prompts.
+//!
+//! Defines [`ContextRequest`] parameters and [`ContextBlock`] output used to
+//! assemble memory-aware prompts with token budgeting, temporal intent
+//! detection, entity/fact summaries, routing decisions, and optional narrative
+//! preamble.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

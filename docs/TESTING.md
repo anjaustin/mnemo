@@ -4,16 +4,17 @@
 
 | Location | Tests | Type |
 |----------|-------|------|
-| `crates/mnemo-server/tests/memory_api.rs` | 91 | Integration (requires Redis + Qdrant) |
-| `crates/mnemo-server/src/config.rs` | 24 | Unit (inline `#[cfg(test)]`) |
-| `crates/mnemo-server/src/middleware/auth.rs` | 7 | Unit (inline) |
-| `crates/mnemo-graph/src/lib.rs` | 10 | Unit (inline) |
-| `crates/mnemo-llm/src/openai_compat.rs` | 24 | Unit (wiremock) |
-| `crates/mnemo-llm/src/anthropic.rs` | 7 | Unit (wiremock) |
-| `crates/mnemo-retrieval/src/lib.rs` | 11 | Unit (6 existing + 5 RRF) |
-| `crates/mnemo-storage/tests/qdrant.rs` | 6 | Integration (requires Qdrant) |
-| `crates/mnemo-storage/tests/storage.rs` | ~7 | Integration (requires Redis) |
-| `crates/mnemo-ingest/tests/ingest.rs` | ~4 | Integration (requires Redis + Qdrant) |
+| `crates/mnemo-core/src/` | 478 | Unit (inline `#[cfg(test)]` across 19 model modules + error + sync) |
+| `crates/mnemo-server/tests/memory_api.rs` | ~244 | Integration (requires Redis + Qdrant) |
+| `crates/mnemo-server/src/` | ~35 | Unit (config: 24, auth middleware: 7, state: 4) |
+| `crates/mnemo-retrieval/src/` | 130 | Unit (router, coherence, compression, hyperbolic, RRF/MMR) |
+| `crates/mnemo-mcp/src/` | 68 | Unit (protocol, tools, resources, transport) |
+| `crates/mnemo-ingest/src/` | 43 | Unit (DAG pipeline, digest parsing) |
+| `crates/mnemo-ingest/tests/ingest.rs` | 9 | Integration (requires Redis + Qdrant + mock LLM) |
+| `crates/mnemo-graph/src/lib.rs` | 18 | Unit (BFS, shortest path, community detection) |
+| `crates/mnemo-gnn/src/lib.rs` | 14 | Unit (GAT forward, feedback, subgraph) |
+| `crates/mnemo-llm/src/` | ~38 | Unit (wiremock: openai_compat 24, anthropic 7, embedder 7) |
+| `crates/mnemo-storage/tests/` | ~14 | Integration (qdrant: 6, redis: ~8) |
 | `sdk/python/tests/test_sdk.py` | 65 assertions | Python (requires live server) |
 | `sdk/python/tests/test_async_client.py` | 18 | Python (aioresponses, no server needed) |
 | `tests/credential_scan.sh` | 5 gates | Bash script |
@@ -25,7 +26,8 @@
 | `tests/phase_b_screenshots.py` | 8 screenshots | Playwright (requires running server) |
 | Phase B falsification | 35 gates | Playwright (manual, requires running server) |
 | `tests/eval_recall_quality.py` | 3 quality gates (40-fact dataset) | Python (requires running server + embedding model) |
-| **Total** | **~295+** | |
+| **Total Rust tests** | **~1,091** | |
+| **Total (all languages)** | **~1,200+** | |
 
 This project has several practical testing layers.
 

@@ -1,3 +1,9 @@
+//! Conversation sessions.
+//!
+//! A [`Session`] groups related episodes into a conversation. Sessions track
+//! episode counts, start/end timestamps, and provide the unit of progressive
+//! summarization and narrative chapter generation.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

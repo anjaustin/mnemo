@@ -1,3 +1,10 @@
+//! Goal-conditioned memory retrieval.
+//!
+//! A [`GoalProfile`] conditions retrieval by active objective rather than only
+//! semantic similarity. Profiles include entity/edge label boosts, temporal
+//! bias, and boost/suppress keywords. [`compute_relevance_adjustment`]
+//! re-scores retrieval results based on the active goal.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

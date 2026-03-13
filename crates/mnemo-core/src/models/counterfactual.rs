@@ -1,3 +1,10 @@
+//! Counterfactual memory simulation.
+//!
+//! Allows read-only "what if" queries that apply hypothetical fact overrides
+//! without modifying persisted state. [`apply_hypotheticals`] replaces matching
+//! facts (case-insensitive entity+label match) and injects novel hypotheticals,
+//! returning a [`CounterfactualDiff`] for transparency.
+
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -1,3 +1,10 @@
+//! Self-healing memory clarification requests.
+//!
+//! When the system detects low-confidence conflicts between facts, it generates
+//! targeted [`ClarificationRequest`]s with lifecycle states (`Pending`,
+//! `Resolved`, `Expired`, `Dismissed`). Resolution can invalidate the losing
+//! edge to restore graph consistency.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

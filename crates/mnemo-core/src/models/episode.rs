@@ -1,3 +1,10 @@
+//! Episodes — the atomic unit of memory ingestion.
+//!
+//! An [`Episode`] is a single message or interaction event ingested into the
+//! memory system. Episodes progress through processing states (`Pending`,
+//! `Processing`, `Done`, `Failed`) and are the source material from which
+//! entities and edges are extracted.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

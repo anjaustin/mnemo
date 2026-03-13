@@ -1,3 +1,10 @@
+//! Knowledge graph edges (facts) with bi-temporal reasoning.
+//!
+//! An [`Edge`] represents a typed relationship between two entities with
+//! temporal validity, confidence decay, corroboration boosting, Fisher
+//! importance scoring, and invalidation tracking. The bi-temporal model
+//! distinguishes "when the fact was true" from "when we learned it."
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
