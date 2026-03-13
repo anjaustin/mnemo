@@ -39,7 +39,10 @@ fn validate_identifier(id: &str, field_name: &str) -> Result<(), String> {
     }
     // Limit identifier length to prevent abuse
     if id.len() > 256 {
-        return Err(format!("{} exceeds maximum length of 256 characters", field_name));
+        return Err(format!(
+            "{} exceeds maximum length of 256 characters",
+            field_name
+        ));
     }
     Ok(())
 }
@@ -233,7 +236,10 @@ mod tests {
         // "../admin" in agent segment: splitn produces ["agents", "..", "admin/identity"]
         // which doesn't match ["agents", agent_id, "identity"] pattern, so rejected by mismatch
         let result = read_resource(&server, "mnemo://agents/../admin/identity").await;
-        assert!(result.is_err(), "Path traversal in agent_id must be rejected");
+        assert!(
+            result.is_err(),
+            "Path traversal in agent_id must be rejected"
+        );
 
         // Test a traversal that matches the pattern shape
         let result2 = read_resource(&server, "mnemo://agents/..evil/identity").await;

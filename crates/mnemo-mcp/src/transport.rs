@@ -79,7 +79,8 @@ pub async fn handle_message(server: &McpServer, line: &str) -> Option<String> {
         }
     };
 
-    let response_value = dispatch_method(server, &request.method, request.params.as_ref(), &id).await;
+    let response_value =
+        dispatch_method(server, &request.method, request.params.as_ref(), &id).await;
     Some(response_value)
 }
 
@@ -156,10 +157,7 @@ fn handle_initialize(params: Option<&serde_json::Value>, id: &serde_json::Value)
 
 fn handle_tools_list(id: &serde_json::Value) -> String {
     let tools = crate::tools::list_tools();
-    let resp = JsonRpcResponse::new(
-        id.clone(),
-        serde_json::json!({ "tools": tools }),
-    );
+    let resp = JsonRpcResponse::new(id.clone(), serde_json::json!({ "tools": tools }));
     serde_json::to_string(&resp).unwrap_or_default()
 }
 
@@ -201,10 +199,7 @@ async fn handle_tools_call(
 
 fn handle_resources_list(id: &serde_json::Value) -> String {
     // Static resources are not listed (we use templates); return empty.
-    let resp = JsonRpcResponse::new(
-        id.clone(),
-        serde_json::json!({ "resources": [] }),
-    );
+    let resp = JsonRpcResponse::new(id.clone(), serde_json::json!({ "resources": [] }));
     serde_json::to_string(&resp).unwrap_or_default()
 }
 
@@ -225,8 +220,7 @@ async fn handle_resources_read(
     let params = match params {
         Some(p) => p,
         None => {
-            let err =
-                JsonRpcError::invalid_params(id.clone(), "Missing params for resources/read");
+            let err = JsonRpcError::invalid_params(id.clone(), "Missing params for resources/read");
             return serde_json::to_string(&err).unwrap_or_default();
         }
     };
@@ -336,7 +330,10 @@ mod tests {
         // Notification: no "id" field
         let msg = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
         let resp = handle_message(&server, msg).await;
-        assert!(resp.is_none(), "Notifications should not produce a response");
+        assert!(
+            resp.is_none(),
+            "Notifications should not produce a response"
+        );
     }
 
     #[tokio::test]
@@ -374,7 +371,8 @@ mod tests {
     #[tokio::test]
     async fn test_resources_read_invalid_uri() {
         let server = test_server();
-        let msg = r#"{"jsonrpc":"2.0","id":8,"method":"resources/read","params":{"uri":"https://bad"}}"#;
+        let msg =
+            r#"{"jsonrpc":"2.0","id":8,"method":"resources/read","params":{"uri":"https://bad"}}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
@@ -401,7 +399,10 @@ mod tests {
         let msg = r#"{"jsonrpc":"1.0","id":100,"method":"ping"}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(parsed["error"]["code"], -32600, "Should reject non-2.0 jsonrpc version");
+        assert_eq!(
+            parsed["error"]["code"], -32600,
+            "Should reject non-2.0 jsonrpc version"
+        );
         assert!(
             parsed["error"]["message"].as_str().unwrap().contains("2.0"),
             "Error should mention expected version"
@@ -419,7 +420,11 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&resp.unwrap()).unwrap();
         // Either parse error or invalid request
         let code = parsed["error"]["code"].as_i64().unwrap();
-        assert!(code == -32700 || code == -32600, "Should be parse error or invalid request, got {}", code);
+        assert!(
+            code == -32700 || code == -32600,
+            "Should be parse error or invalid request, got {}",
+            code
+        );
     }
 
     #[tokio::test]
@@ -431,8 +436,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
         // Server should respond with its own version, not echo the client's
         assert_eq!(
-            parsed["result"]["protocolVersion"],
-            MCP_PROTOCOL_VERSION,
+            parsed["result"]["protocolVersion"], MCP_PROTOCOL_VERSION,
             "Server must return its own protocol version"
         );
     }
@@ -445,17 +449,24 @@ mod tests {
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
         // Should dispatch (may fail at HTTP level) but not panic or return protocol error
-        assert!(parsed["result"]["content"].is_array(), "Should get tool result even with null arguments");
+        assert!(
+            parsed["result"]["content"].is_array(),
+            "Should get tool result even with null arguments"
+        );
     }
 
     #[tokio::test]
     async fn test_falsify_tools_call_without_arguments_field() {
         let server = test_server();
         // Entirely missing arguments field
-        let msg = r#"{"jsonrpc":"2.0","id":104,"method":"tools/call","params":{"name":"mnemo_health"}}"#;
+        let msg =
+            r#"{"jsonrpc":"2.0","id":104,"method":"tools/call","params":{"name":"mnemo_health"}}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
-        assert!(parsed["result"]["content"].is_array(), "Should handle missing arguments gracefully");
+        assert!(
+            parsed["result"]["content"].is_array(),
+            "Should handle missing arguments gracefully"
+        );
     }
 
     #[tokio::test]
@@ -502,7 +513,10 @@ mod tests {
         let msg = r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#;
         let resp = handle_message(&server, msg).await;
         // serde deserializes null as None, so this is treated as notification
-        assert!(resp.is_none(), "id:null is deserialized as None (notification)");
+        assert!(
+            resp.is_none(),
+            "id:null is deserialized as None (notification)"
+        );
     }
 
     #[tokio::test]
@@ -521,6 +535,9 @@ mod tests {
         let msg = r#"{"jsonrpc":"2.0","id":111,"method":"tools/call","params":"not an object"}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(parsed["error"]["code"], -32602, "Should reject non-object params");
+        assert_eq!(
+            parsed["error"]["code"], -32602,
+            "Should reject non-object params"
+        );
     }
 }

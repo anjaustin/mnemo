@@ -251,23 +251,59 @@ impl TrackingVectorStore {
 
 impl VectorStore for TrackingVectorStore {
     async fn upsert_entity_embedding(
-        &self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value,
-    ) -> StorageResult<()> { Ok(()) }
+        &self,
+        _: Uuid,
+        _: Uuid,
+        _: Vec<f32>,
+        _: serde_json::Value,
+    ) -> StorageResult<()> {
+        Ok(())
+    }
     async fn upsert_edge_embedding(
-        &self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value,
-    ) -> StorageResult<()> { Ok(()) }
+        &self,
+        _: Uuid,
+        _: Uuid,
+        _: Vec<f32>,
+        _: serde_json::Value,
+    ) -> StorageResult<()> {
+        Ok(())
+    }
     async fn upsert_episode_embedding(
-        &self, _: Uuid, _: Uuid, _: Vec<f32>, _: serde_json::Value,
-    ) -> StorageResult<()> { Ok(()) }
+        &self,
+        _: Uuid,
+        _: Uuid,
+        _: Vec<f32>,
+        _: serde_json::Value,
+    ) -> StorageResult<()> {
+        Ok(())
+    }
     async fn search_entities(
-        &self, _: Uuid, _: Vec<f32>, _: u32, _: f32,
-    ) -> StorageResult<Vec<(Uuid, f32)>> { Ok(Vec::new()) }
+        &self,
+        _: Uuid,
+        _: Vec<f32>,
+        _: u32,
+        _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> {
+        Ok(Vec::new())
+    }
     async fn search_edges(
-        &self, _: Uuid, _: Vec<f32>, _: u32, _: f32,
-    ) -> StorageResult<Vec<(Uuid, f32)>> { Ok(Vec::new()) }
+        &self,
+        _: Uuid,
+        _: Vec<f32>,
+        _: u32,
+        _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> {
+        Ok(Vec::new())
+    }
     async fn search_episodes(
-        &self, _: Uuid, _: Vec<f32>, _: u32, _: f32,
-    ) -> StorageResult<Vec<(Uuid, f32)>> { Ok(Vec::new()) }
+        &self,
+        _: Uuid,
+        _: Vec<f32>,
+        _: u32,
+        _: f32,
+    ) -> StorageResult<Vec<(Uuid, f32)>> {
+        Ok(Vec::new())
+    }
     async fn set_entity_payload(&self, id: Uuid, payload: serde_json::Value) -> StorageResult<()> {
         self.entity_payloads.write().await.push((id, payload));
         Ok(())
@@ -276,7 +312,9 @@ impl VectorStore for TrackingVectorStore {
         self.edge_payloads.write().await.push((id, payload));
         Ok(())
     }
-    async fn delete_user_vectors(&self, _: Uuid) -> StorageResult<()> { Ok(()) }
+    async fn delete_user_vectors(&self, _: Uuid) -> StorageResult<()> {
+        Ok(())
+    }
 }
 
 async fn setup_user_session(store: &RedisStateStore) -> (Uuid, Uuid) {
@@ -1129,10 +1167,14 @@ async fn test_proactive_fact_superseded_webhook_event() {
     assert!(
         !superseded.is_empty(),
         "Should have received at least one FactSuperseded event, got events: {:?}",
-        events.iter().map(|e| match e {
-            IngestWebhookEvent::FactAdded { label, .. } => format!("FactAdded({})", label),
-            IngestWebhookEvent::FactSuperseded { label, .. } => format!("FactSuperseded({})", label),
-        }).collect::<Vec<_>>()
+        events
+            .iter()
+            .map(|e| match e {
+                IngestWebhookEvent::FactAdded { label, .. } => format!("FactAdded({})", label),
+                IngestWebhookEvent::FactSuperseded { label, .. } =>
+                    format!("FactSuperseded({})", label),
+            })
+            .collect::<Vec<_>>()
     );
 
     if let IngestWebhookEvent::FactSuperseded {

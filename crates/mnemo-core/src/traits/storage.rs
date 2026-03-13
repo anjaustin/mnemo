@@ -3,22 +3,22 @@ use uuid::Uuid;
 use crate::error::MnemoError;
 use crate::models::{
     agent::{
-        AgentIdentityAuditEvent, AgentIdentityProfile, ApprovalPolicy,
-        AuditChainVerification, BranchInfo, BranchMetadata, CreateBranchRequest,
-        CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
-        MergeResult, PromotionProposal, UpdateAgentIdentityRequest,
+        AgentIdentityAuditEvent, AgentIdentityProfile, ApprovalPolicy, AuditChainVerification,
+        BranchInfo, BranchMetadata, CreateBranchRequest, CreateExperienceRequest,
+        CreatePromotionProposalRequest, ExperienceEvent, MergeResult, PromotionProposal,
+        UpdateAgentIdentityRequest,
     },
     api_key::ApiKey,
     digest::MemoryDigest,
-    guardrail::GuardrailRule,
-    region::{MemoryRegion, MemoryRegionAcl},
-    view::MemoryView,
     edge::{Edge, EdgeFilter},
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams},
+    guardrail::GuardrailRule,
+    region::{MemoryRegion, MemoryRegionAcl},
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     span::LlmSpan,
     user::{CreateUserRequest, UpdateUserRequest, User},
+    view::MemoryView,
 };
 
 // ─── Agent Identity Storage ────────────────────────────────────────
@@ -91,10 +91,7 @@ pub trait AgentStore: Send + Sync {
         req: CreateBranchRequest,
     ) -> StorageResult<BranchInfo>;
     /// List all branches for an agent.
-    async fn list_agent_branches(
-        &self,
-        agent_id: &str,
-    ) -> StorageResult<Vec<BranchMetadata>>;
+    async fn list_agent_branches(&self, agent_id: &str) -> StorageResult<Vec<BranchMetadata>>;
     /// Get a specific branch's info (metadata + current identity).
     async fn get_agent_branch(
         &self,
@@ -115,11 +112,7 @@ pub trait AgentStore: Send + Sync {
         branch_name: &str,
     ) -> StorageResult<MergeResult>;
     /// Delete a branch without merging.
-    async fn delete_agent_branch(
-        &self,
-        agent_id: &str,
-        branch_name: &str,
-    ) -> StorageResult<()>;
+    async fn delete_agent_branch(&self, agent_id: &str, branch_name: &str) -> StorageResult<()>;
     /// Fork an agent: create a new independent agent from an existing one,
     /// optionally transferring filtered experience events.
     async fn fork_agent(
@@ -132,10 +125,7 @@ pub trait AgentStore: Send + Sync {
     /// Save (create or update) the approval policy for an agent.
     async fn save_approval_policy(&self, policy: &ApprovalPolicy) -> StorageResult<()>;
     /// Get the approval policy for an agent, or `None` if not set.
-    async fn get_approval_policy(
-        &self,
-        agent_id: &str,
-    ) -> StorageResult<Option<ApprovalPolicy>>;
+    async fn get_approval_policy(&self, agent_id: &str) -> StorageResult<Option<ApprovalPolicy>>;
 }
 
 /// Result type for all storage operations.

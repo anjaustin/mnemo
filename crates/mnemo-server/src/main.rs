@@ -170,9 +170,8 @@ async fn main() -> anyhow::Result<()> {
     // The ingest worker sends events after creating or invalidating edges;
     // a receiver task (spawned after AppState is built) translates them
     // into webhook deliveries.
-    let (webhook_tx, webhook_rx) = tokio::sync::mpsc::channel::<
-        mnemo_core::models::webhook_event::IngestWebhookEvent,
-    >(256);
+    let (webhook_tx, webhook_rx) =
+        tokio::sync::mpsc::channel::<mnemo_core::models::webhook_event::IngestWebhookEvent>(256);
 
     // Spawn ingestion worker with provider-specific LLM type
     // (generics require concrete types, so we branch here).
@@ -238,7 +237,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Auth — shared between REST and gRPC via Arc
     let auth_config = Arc::new(if config.auth.enabled {
-        tracing::info!(keys = config.auth.api_keys.len(), "API key auth enabled (scoped keys via Redis)");
+        tracing::info!(
+            keys = config.auth.api_keys.len(),
+            "API key auth enabled (scoped keys via Redis)"
+        );
         AuthConfig::with_keys_and_store(config.auth.api_keys.clone(), state_store.clone())
     } else {
         tracing::warn!("API key auth DISABLED");
@@ -373,8 +375,8 @@ async fn main() -> anyhow::Result<()> {
             dc
         })),
         sync_status: Arc::new(tokio::sync::RwLock::new({
-            let node_id_str = std::env::var("MNEMO_SYNC_NODE_ID")
-                .unwrap_or_else(|_| "standalone".to_string());
+            let node_id_str =
+                std::env::var("MNEMO_SYNC_NODE_ID").unwrap_or_else(|_| "standalone".to_string());
             let enabled = std::env::var("MNEMO_SYNC_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false);
@@ -493,7 +495,9 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     } else {
-        tracing::debug!("Temporal compression disabled (MNEMO_EMBEDDING_COMPRESSION_ENABLED=false)");
+        tracing::debug!(
+            "Temporal compression disabled (MNEMO_EMBEDDING_COMPRESSION_ENABLED=false)"
+        );
     }
 
     // ─── REST (Axum) router ───────────────────────────────────────
@@ -537,18 +541,14 @@ async fn main() -> anyhow::Result<()> {
     let grpc_routes = tonic::service::Routes::new(health_service)
         .add_service(reflection)
         .add_service(
-            mnemo_proto::proto::memory_service_server::MemoryServiceServer::new(
-                grpc_state.clone(),
-            )
-            .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
-            .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
+            mnemo_proto::proto::memory_service_server::MemoryServiceServer::new(grpc_state.clone())
+                .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
         )
         .add_service(
-            mnemo_proto::proto::entity_service_server::EntityServiceServer::new(
-                grpc_state.clone(),
-            )
-            .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
-            .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
+            mnemo_proto::proto::entity_service_server::EntityServiceServer::new(grpc_state.clone())
+                .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
         )
         .add_service(
             mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state)
@@ -557,7 +557,9 @@ async fn main() -> anyhow::Result<()> {
         );
     let grpc = grpc_routes.into_axum_router();
 
-    tracing::info!("gRPC services registered: MemoryService, EntityService, EdgeService + health + reflection");
+    tracing::info!(
+        "gRPC services registered: MemoryService, EntityService, EdgeService + health + reflection"
+    );
 
     // ─── Multiplex: gRPC + REST on the same port ────────────────
     // Route based on content-type header: "application/grpc" → tonic, else → Axum.

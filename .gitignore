@@ -33,6 +33,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# ONNX model cache (fastembed)
+.fastembed_cache/
+
 # Docker volumes
 redis-data/
 qdrant-data/

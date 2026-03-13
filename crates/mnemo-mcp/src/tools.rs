@@ -19,7 +19,10 @@ fn validate_path_segment(value: &str, field_name: &str) -> Result<(), String> {
         ));
     }
     if value.len() > 256 {
-        return Err(format!("'{}' exceeds maximum length of 256 characters", field_name));
+        return Err(format!(
+            "'{}' exceeds maximum length of 256 characters",
+            field_name
+        ));
     }
     Ok(())
 }
@@ -228,12 +231,7 @@ async fn handle_remember(server: &McpServer, args: &Value) -> ToolCallResult {
         "session": session,
     });
 
-    match server
-        .post("/api/v1/memory")
-        .json(&body)
-        .send()
-        .await
-    {
+    match server.post("/api/v1/memory").json(&body).send().await {
         Ok(resp) => {
             let status = resp.status();
             match resp.json::<Value>().await {
@@ -409,7 +407,10 @@ async fn handle_agent_identity(server: &McpServer, args: &Value) -> ToolCallResu
                 Err(e) => ToolCallResult::error(format!("HTTP request failed: {}", e)),
             }
         }
-        _ => ToolCallResult::error(format!("Unknown action '{}'. Must be 'get' or 'update'", action)),
+        _ => ToolCallResult::error(format!(
+            "Unknown action '{}'. Must be 'get' or 'update'",
+            action
+        )),
     }
 }
 
@@ -579,9 +580,7 @@ mod tests {
             .into_iter()
             .find(|t| t.name == "mnemo_remember")
             .unwrap();
-        let required = tool.input_schema["required"]
-            .as_array()
-            .unwrap();
+        let required = tool.input_schema["required"].as_array().unwrap();
         assert!(required.contains(&serde_json::json!("text")));
     }
 
@@ -591,9 +590,7 @@ mod tests {
             .into_iter()
             .find(|t| t.name == "mnemo_recall")
             .unwrap();
-        let required = tool.input_schema["required"]
-            .as_array()
-            .unwrap();
+        let required = tool.input_schema["required"].as_array().unwrap();
         assert!(required.contains(&serde_json::json!("query")));
     }
 
@@ -630,12 +627,8 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result = dispatch_tool(
-            &server,
-            "mnemo_remember",
-            &serde_json::json!({"text": ""}),
-        )
-        .await;
+        let result =
+            dispatch_tool(&server, "mnemo_remember", &serde_json::json!({"text": ""})).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("non-empty"));
     }
@@ -647,12 +640,8 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result = dispatch_tool(
-            &server,
-            "mnemo_recall",
-            &serde_json::json!({"query": "  "}),
-        )
-        .await;
+        let result =
+            dispatch_tool(&server, "mnemo_recall", &serde_json::json!({"query": "  "})).await;
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -884,12 +873,7 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result = dispatch_tool(
-            &server,
-            "mnemo_graph_query",
-            &serde_json::json!({}),
-        )
-        .await;
+        let result = dispatch_tool(&server, "mnemo_graph_query", &serde_json::json!({})).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("operation"));
     }
@@ -901,12 +885,7 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result = dispatch_tool(
-            &server,
-            "mnemo_recall",
-            &serde_json::json!({}),
-        )
-        .await;
+        let result = dispatch_tool(&server, "mnemo_recall", &serde_json::json!({})).await;
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -935,12 +914,7 @@ mod tests {
             api_key: None,
             default_user: Some("../../../etc/shadow".to_string()),
         });
-        let result = dispatch_tool(
-            &server,
-            "mnemo_coherence",
-            &serde_json::json!({}),
-        )
-        .await;
+        let result = dispatch_tool(&server, "mnemo_coherence", &serde_json::json!({})).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("illegal characters"));
     }

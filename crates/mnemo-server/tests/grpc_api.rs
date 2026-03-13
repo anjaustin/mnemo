@@ -27,12 +27,10 @@ use mnemo_server::state::{
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
 use mnemo_proto::proto::{
-    edge_service_client::EdgeServiceClient,
-    entity_service_client::EntityServiceClient,
-    memory_service_client::MemoryServiceClient,
-    ContextMessage, CreateEpisodeRequest, DeleteEpisodeRequest, GetContextRequest,
-    GetEdgeRequest, GetEntityRequest, ListEpisodesRequest, ListEntitiesRequest,
-    QueryEdgesRequest,
+    edge_service_client::EdgeServiceClient, entity_service_client::EntityServiceClient,
+    memory_service_client::MemoryServiceClient, ContextMessage, CreateEpisodeRequest,
+    DeleteEpisodeRequest, GetContextRequest, GetEdgeRequest, GetEntityRequest, ListEntitiesRequest,
+    ListEpisodesRequest, QueryEdgesRequest,
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -94,12 +92,8 @@ async fn build_test_state() -> (AppState, Arc<RedisStateStore>) {
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        memory_webhook_events: Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
-        memory_webhook_audit: Arc::new(tokio::sync::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
+        memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        memory_webhook_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         user_policies: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         governance_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         webhook_runtime: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -703,13 +697,12 @@ async fn test_grpc_auth_rejects_wrong_key() {
         .unwrap();
 
     // Attach a WRONG key via interceptor
-    let mut client = MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
-        req.metadata_mut().insert(
-            "authorization",
-            "Bearer wrong-key".parse().unwrap(),
-        );
-        Ok(req)
-    });
+    let mut client =
+        MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
+            req.metadata_mut()
+                .insert("authorization", "Bearer wrong-key".parse().unwrap());
+            Ok(req)
+        });
 
     let resp = client
         .create_episode(CreateEpisodeRequest {
@@ -740,13 +733,12 @@ async fn test_grpc_auth_accepts_valid_bearer() {
         .unwrap();
 
     // Attach the CORRECT key
-    let mut client = MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
-        req.metadata_mut().insert(
-            "authorization",
-            "Bearer valid-key-abc".parse().unwrap(),
-        );
-        Ok(req)
-    });
+    let mut client =
+        MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
+            req.metadata_mut()
+                .insert("authorization", "Bearer valid-key-abc".parse().unwrap());
+            Ok(req)
+        });
 
     let resp = client
         .create_episode(CreateEpisodeRequest {
@@ -778,13 +770,12 @@ async fn test_grpc_auth_accepts_x_api_key() {
         .unwrap();
 
     // Use x-api-key metadata instead of authorization
-    let mut client = MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
-        req.metadata_mut().insert(
-            "x-api-key",
-            "x-key-456".parse().unwrap(),
-        );
-        Ok(req)
-    });
+    let mut client =
+        MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
+            req.metadata_mut()
+                .insert("x-api-key", "x-key-456".parse().unwrap());
+            Ok(req)
+        });
 
     let resp = client
         .create_episode(CreateEpisodeRequest {

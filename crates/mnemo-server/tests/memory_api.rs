@@ -67,10 +67,7 @@ async fn build_test_app_require_tls() -> axum::Router {
     )
     .await;
     state.require_tls = true;
-    build_router(state.clone()).layer(from_fn_with_state(
-        state,
-        request_context_middleware,
-    ))
+    build_router(state.clone()).layer(from_fn_with_state(state, request_context_middleware))
 }
 
 async fn build_test_harness_with_prefilter(
@@ -185,7 +182,9 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
         pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
-        sync_status: Arc::new(tokio::sync::RwLock::new(mnemo_core::sync::SyncStatus::disabled())),
+        sync_status: Arc::new(tokio::sync::RwLock::new(
+            mnemo_core::sync::SyncStatus::disabled(),
+        )),
     };
 
     let app = build_router(state.clone()).layer(from_fn_with_state(
@@ -2833,7 +2832,11 @@ async fn test_agent_promotion_gating_and_approval_flow() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "fabricated event IDs must be rejected: {body:?}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "fabricated event IDs must be rejected: {body:?}"
+    );
 
     // Create 2 more real experience events so we have 3 total
     let (status, ev2) = json_request(
@@ -5052,7 +5055,9 @@ async fn test_webhook_persistence_survives_restart() {
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
         pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
-        sync_status: Arc::new(tokio::sync::RwLock::new(mnemo_core::sync::SyncStatus::disabled())),
+        sync_status: Arc::new(tokio::sync::RwLock::new(
+            mnemo_core::sync::SyncStatus::disabled(),
+        )),
     };
 
     let app1 = build_router(state1.clone()).layer(from_fn_with_state(
@@ -5150,7 +5155,9 @@ async fn test_webhook_persistence_survives_restart() {
         embedding_dimensions: 384,
         hyperbolic_config: mnemo_retrieval::hyperbolic::HyperbolicConfig::default(),
         pipeline_metrics: Arc::new(mnemo_ingest::dag::PipelineMetrics::default()),
-        sync_status: Arc::new(tokio::sync::RwLock::new(mnemo_core::sync::SyncStatus::disabled())),
+        sync_status: Arc::new(tokio::sync::RwLock::new(
+            mnemo_core::sync::SyncStatus::disabled(),
+        )),
     };
 
     // Verify state2 starts empty
@@ -7420,12 +7427,12 @@ async fn test_spans_by_request_from_redis() {
     state_store.save_span(&span2).await.unwrap();
 
     // Query via API
-    let (status, body) = get_request(
-        &app,
-        &format!("/api/v1/spans/request/{rid}"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "spans by request should succeed: {body}");
+    let (status, body) = get_request(&app, &format!("/api/v1/spans/request/{rid}")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "spans by request should succeed: {body}"
+    );
     assert_eq!(body["request_id"].as_str().unwrap(), rid);
     assert_eq!(body["count"].as_u64().unwrap(), 2);
     assert_eq!(body["total_tokens"].as_u64().unwrap(), 300); // 150 * 2
@@ -7462,12 +7469,12 @@ async fn test_spans_by_user_from_redis() {
     state_store.save_span(&span2).await.unwrap();
 
     // Query via API
-    let (status, body) = get_request(
-        &app,
-        &format!("/api/v1/spans/user/{user_id}?limit=10"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "spans by user should succeed: {body}");
+    let (status, body) = get_request(&app, &format!("/api/v1/spans/user/{user_id}?limit=10")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "spans by user should succeed: {body}"
+    );
     assert_eq!(body["count"].as_u64().unwrap(), 2);
 
     let spans = body["spans"].as_array().unwrap();
@@ -7481,11 +7488,7 @@ async fn test_spans_by_user_from_redis() {
 async fn test_spans_by_request_empty_returns_empty() {
     let app = build_test_app().await;
 
-    let (status, body) = get_request(
-        &app,
-        "/api/v1/spans/request/nonexistent-request-id",
-    )
-    .await;
+    let (status, body) = get_request(&app, "/api/v1/spans/request/nonexistent-request-id").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["count"].as_u64().unwrap(), 0);
     assert_eq!(body["spans"].as_array().unwrap().len(), 0);
@@ -7550,11 +7553,7 @@ async fn test_patch_webhook_updates_fields() {
     assert_eq!(events.len(), 2);
 
     // GET should return updated values
-    let (status, got) = get_request(
-        &app,
-        &format!("/api/v1/memory/webhooks/{webhook_id}"),
-    )
-    .await;
+    let (status, got) = get_request(&app, &format!("/api/v1/memory/webhooks/{webhook_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(got["target_url"], "https://updated.example/hook");
     assert_eq!(got["enabled"], false);
@@ -7701,7 +7700,11 @@ async fn test_patch_webhook_enforces_domain_allowlist() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "PATCH with allowed subdomain should succeed: {updated}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "PATCH with allowed subdomain should succeed: {updated}"
+    );
     assert_eq!(
         updated["webhook"]["target_url"],
         "https://sub.allowed.example/hook"
@@ -7782,10 +7785,7 @@ fn test_hmac_tampered_body_does_not_verify() {
     let tampered_sig = compute_expected_signature(secret, timestamp, tampered_body);
 
     // Original signature must verify against original body
-    assert!(
-        !original_sig.is_empty(),
-        "Signature should not be empty"
-    );
+    assert!(!original_sig.is_empty(), "Signature should not be empty");
     assert!(
         original_sig.starts_with("t="),
         "Signature must start with t= prefix"
@@ -7802,7 +7802,8 @@ fn test_hmac_tampered_body_does_not_verify() {
     );
 
     // Wrong secret must also produce a different signature
-    let wrong_secret_sig = compute_expected_signature("whsec_wrong_secret", timestamp, original_body);
+    let wrong_secret_sig =
+        compute_expected_signature("whsec_wrong_secret", timestamp, original_body);
     assert_ne!(
         original_sig, wrong_secret_sig,
         "Wrong signing secret must produce a different HMAC signature"
@@ -7824,12 +7825,19 @@ fn test_hmac_signature_format_correctness() {
     assert_eq!(parts.len(), 2, "Signature must have t= and v1= components");
 
     let t_part = parts[0];
-    assert!(t_part.starts_with("t="), "First component must be t=<timestamp>");
+    assert!(
+        t_part.starts_with("t="),
+        "First component must be t=<timestamp>"
+    );
     let ts = &t_part[2..];
     assert_eq!(ts, timestamp, "Timestamp in signature must match input");
 
     let hex_digest = parts[1];
-    assert_eq!(hex_digest.len(), 64, "HMAC-SHA256 hex digest must be 64 characters");
+    assert_eq!(
+        hex_digest.len(),
+        64,
+        "HMAC-SHA256 hex digest must be 64 characters"
+    );
     assert!(
         hex_digest.chars().all(|c| c.is_ascii_hexdigit()),
         "Digest must be valid hex"
@@ -7897,7 +7905,10 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(rejected["status"], "rejected");
-    assert!(rejected["rejected_at"].is_string(), "rejected_at must be set");
+    assert!(
+        rejected["rejected_at"].is_string(),
+        "rejected_at must be set"
+    );
 
     // Step 5: Verify identity is completely unchanged
     let (status, identity_after) = json_request(
@@ -7908,8 +7919,14 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(identity_after["version"], 1, "version must stay at 1 after rejection");
-    assert_eq!(identity_after["core"], core_before, "core must be identical after rejection");
+    assert_eq!(
+        identity_after["version"], 1,
+        "version must stay at 1 after rejection"
+    );
+    assert_eq!(
+        identity_after["core"], core_before,
+        "core must be identical after rejection"
+    );
 
     // Step 6: Verify the proposal shows up as rejected in the list
     let (status, proposals) = json_request(
@@ -7932,7 +7949,11 @@ async fn test_agent_reject_promotion_leaves_identity_core_unchanged() {
         serde_json::json!({"reason": "double reject attempt"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "re-rejecting must fail: {body:?}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "re-rejecting must fail: {body:?}"
+    );
 }
 
 #[tokio::test]
@@ -7969,7 +7990,11 @@ async fn test_gnn_retrieval_feedback_endpoint() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "empty positives must fail: {body:?}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "empty positives must fail: {body:?}"
+    );
 }
 
 // ─── EWC++ Experience Weight Consolidation ─────────────────────────
@@ -8079,7 +8104,10 @@ async fn test_ewc_experience_importance_endpoint() {
 
     // First event (domain, sole in category) should have highest fisher
     assert_eq!(list[0]["category"], "domain");
-    assert!((fishers[0] - 1.0).abs() < 0.01, "sole-category event should have fisher ~1.0");
+    assert!(
+        (fishers[0] - 1.0).abs() < 0.01,
+        "sole-category event should have fisher ~1.0"
+    );
 
     // Each entry should have the expected fields
     for entry in list {
@@ -8345,15 +8373,15 @@ async fn test_coherence_healthy_graph_scores_well() {
         .await
         .unwrap();
 
-    let (status, body) = get_request(
-        &app,
-        &format!("/api/v1/users/{}/coherence", user_id),
-    )
-    .await;
+    let (status, body) = get_request(&app, &format!("/api/v1/users/{}/coherence", user_id)).await;
     assert_eq!(status, StatusCode::OK);
 
     let score = body["score"].as_f64().unwrap();
-    assert!(score > 0.5, "healthy graph should score reasonably: {}", score);
+    assert!(
+        score > 0.5,
+        "healthy graph should score reasonably: {}",
+        score
+    );
     assert_eq!(body["diagnostics"]["total_entities"], 3);
     assert_eq!(body["diagnostics"]["active_edges"], 2);
     assert_eq!(body["diagnostics"]["conflicting_groups"], 0);
@@ -8468,11 +8496,7 @@ async fn test_coherence_detects_fact_conflicts() {
         .await
         .unwrap();
 
-    let (status, body) = get_request(
-        &app,
-        &format!("/api/v1/users/{}/coherence", user_id),
-    )
-    .await;
+    let (status, body) = get_request(&app, &format!("/api/v1/users/{}/coherence", user_id)).await;
     assert_eq!(status, StatusCode::OK);
 
     // Fact coherence should be reduced due to conflict
@@ -8511,8 +8535,7 @@ async fn test_coherence_user_by_external_id() {
     assert_eq!(status, StatusCode::CREATED);
 
     // Access coherence by external_id
-    let (status, body) =
-        get_request(&app, "/api/v1/users/coherence-ext-lookup/coherence").await;
+    let (status, body) = get_request(&app, "/api/v1/users/coherence-ext-lookup/coherence").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["score"].as_f64().is_some());
 }
@@ -8521,11 +8544,8 @@ async fn test_coherence_user_by_external_id() {
 async fn test_coherence_nonexistent_user_404() {
     let app = build_test_app().await;
 
-    let (status, _body) = get_request(
-        &app,
-        &format!("/api/v1/users/{}/coherence", Uuid::now_v7()),
-    )
-    .await;
+    let (status, _body) =
+        get_request(&app, &format!("/api/v1/users/{}/coherence", Uuid::now_v7())).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -8595,7 +8615,11 @@ async fn test_coherence_response_all_fields_present() {
 
     // Score should be in [0, 1]
     let score = body["score"].as_f64().unwrap();
-    assert!(score >= 0.0 && score <= 1.0, "score must be in [0,1]: {}", score);
+    assert!(
+        score >= 0.0 && score <= 1.0,
+        "score must be in [0,1]: {}",
+        score
+    );
 }
 
 // =============================================================================
@@ -8608,26 +8632,25 @@ async fn test_coherence_response_all_fields_present() {
 async fn build_authed_test_app_with_store(
     admin_keys: Vec<String>,
 ) -> (axum::Router, Arc<RedisStateStore>, String) {
-    let (base_app, _state, state_store) =
-        build_test_harness_with_state_and_prefilter_and_webhooks(
-            MetadataPrefilterConfig {
-                enabled: true,
-                scan_limit: 400,
-                relax_if_empty: false,
-            },
-            WebhookDeliveryConfig {
-                enabled: false,
-                max_attempts: 3,
-                base_backoff_ms: 20,
-                request_timeout_ms: 150,
-                max_events_per_webhook: 1000,
-                rate_limit_per_minute: 120,
-                circuit_breaker_threshold: 5,
-                circuit_breaker_cooldown_ms: 200,
-                persistence_enabled: false,
-            },
-        )
-        .await;
+    let (base_app, _state, state_store) = build_test_harness_with_state_and_prefilter_and_webhooks(
+        MetadataPrefilterConfig {
+            enabled: true,
+            scan_limit: 400,
+            relax_if_empty: false,
+        },
+        WebhookDeliveryConfig {
+            enabled: false,
+            max_attempts: 3,
+            base_backoff_ms: 20,
+            request_timeout_ms: 150,
+            max_events_per_webhook: 1000,
+            rate_limit_per_minute: 120,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_cooldown_ms: 200,
+            persistence_enabled: false,
+        },
+    )
+    .await;
 
     let admin_key = admin_keys[0].clone();
 
@@ -8664,7 +8687,10 @@ async fn rbac01a_create_api_key_returns_raw_key_and_metadata() {
 
     // raw_key must start with "mnk_" and be shown exactly once
     let raw_key = body["raw_key"].as_str().unwrap();
-    assert!(raw_key.starts_with("mnk_"), "raw_key should start with mnk_");
+    assert!(
+        raw_key.starts_with("mnk_"),
+        "raw_key should start with mnk_"
+    );
     assert_eq!(raw_key.len(), 68, "mnk_ + 64 hex chars = 68");
 
     // Metadata fields
@@ -8699,7 +8725,12 @@ async fn rbac01a_create_api_key_with_scope() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::CREATED, "create scoped key failed: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create scoped key failed: {:?}",
+        body
+    );
     assert_eq!(body["role"].as_str().unwrap(), "write");
     assert_eq!(
         body["scope"]["allowed_user_ids"][0].as_str().unwrap(),
@@ -8730,7 +8761,12 @@ async fn rbac01a_create_api_key_rejects_empty_name() {
     .await;
 
     // Empty/whitespace-only name should be rejected
-    assert_eq!(status, StatusCode::BAD_REQUEST, "blank name should fail: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "blank name should fail: {:?}",
+        body
+    );
 }
 
 #[tokio::test]
@@ -8750,7 +8786,12 @@ async fn rbac01a_create_api_key_without_auth_returns_401() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "no-auth should 401: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "no-auth should 401: {:?}",
+        body
+    );
 }
 
 // ---- RBAC-01b: List API keys ----
@@ -8787,11 +8828,18 @@ async fn rbac01b_list_api_keys_returns_created_keys() {
 
     assert_eq!(status, StatusCode::OK, "list keys failed: {:?}", body);
     let keys = body["keys"].as_array().unwrap();
-    assert!(keys.len() >= 2, "should have at least 2 keys, got {}", keys.len());
+    assert!(
+        keys.len() >= 2,
+        "should have at least 2 keys, got {}",
+        keys.len()
+    );
 
     // Verify no key_hash is exposed
     for key in keys {
-        assert!(key.get("key_hash").is_none(), "key_hash must not be exposed in list");
+        assert!(
+            key.get("key_hash").is_none(),
+            "key_hash must not be exposed in list"
+        );
     }
 }
 
@@ -8874,8 +8922,14 @@ async fn rbac01c_revoke_api_key_sets_revoked_flag() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let keys = list_body["keys"].as_array().unwrap();
-    let revoked_key = keys.iter().find(|k| k["id"].as_str().unwrap() == key_id).unwrap();
-    assert!(revoked_key["revoked"].as_bool().unwrap(), "key should be revoked");
+    let revoked_key = keys
+        .iter()
+        .find(|k| k["id"].as_str().unwrap() == key_id)
+        .unwrap();
+    assert!(
+        revoked_key["revoked"].as_bool().unwrap(),
+        "key should be revoked"
+    );
 }
 
 #[tokio::test]
@@ -8927,7 +8981,12 @@ async fn rbac01d_rotate_api_key_revokes_old_creates_new() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "rotate should return 201: {:?}", rotate_body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "rotate should return 201: {:?}",
+        rotate_body
+    );
 
     let new_key_id = rotate_body["id"].as_str().unwrap();
     let new_raw_key = rotate_body["raw_key"].as_str().unwrap();
@@ -8939,7 +8998,10 @@ async fn rbac01d_rotate_api_key_revokes_old_creates_new() {
     // New key should have same name and role
     assert_eq!(rotate_body["name"].as_str().unwrap(), "to-rotate");
     assert_eq!(rotate_body["role"].as_str().unwrap(), "write");
-    assert!(!rotate_body["revoked"].as_bool().unwrap(), "new key should not be revoked");
+    assert!(
+        !rotate_body["revoked"].as_bool().unwrap(),
+        "new key should not be revoked"
+    );
 
     // Old key should now be revoked (verify via list)
     let (status, list_body) = json_request_with_header(
@@ -8953,8 +9015,14 @@ async fn rbac01d_rotate_api_key_revokes_old_creates_new() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let keys = list_body["keys"].as_array().unwrap();
-    let old = keys.iter().find(|k| k["id"].as_str().unwrap() == old_key_id).unwrap();
-    assert!(old["revoked"].as_bool().unwrap(), "old key must be revoked after rotation");
+    let old = keys
+        .iter()
+        .find(|k| k["id"].as_str().unwrap() == old_key_id)
+        .unwrap();
+    assert!(
+        old["revoked"].as_bool().unwrap(),
+        "old key must be revoked after rotation"
+    );
 }
 
 #[tokio::test]
@@ -8972,7 +9040,11 @@ async fn rbac01d_rotate_nonexistent_key_returns_404() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "rotate nonexistent should 404");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "rotate nonexistent should 404"
+    );
 }
 
 // =============================================================================
@@ -9013,7 +9085,12 @@ async fn rbac02a_scoped_key_authenticates_via_middleware() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "scoped write key should be able to ingest: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "scoped write key should be able to ingest: {:?}",
+        body
+    );
 }
 
 // ---- RBAC-02b: Role escalation prevention ----
@@ -9046,7 +9123,12 @@ async fn rbac02b_read_key_cannot_access_admin_endpoints() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not list keys: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "read key should not list keys: {:?}",
+        body
+    );
 
     // Try to create a key (Admin-only) with the read key — should fail
     let (status, body) = json_request_with_header(
@@ -9058,7 +9140,12 @@ async fn rbac02b_read_key_cannot_access_admin_endpoints() {
         serde_json::json!({ "name": "escalated", "role": "admin" }),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not create keys: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "read key should not create keys: {:?}",
+        body
+    );
 }
 
 #[tokio::test]
@@ -9089,7 +9176,12 @@ async fn rbac02b_write_key_cannot_access_admin_endpoints() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "write key should not list keys: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "write key should not list keys: {:?}",
+        body
+    );
 }
 
 // ---- RBAC-02c: Revoked key rejection ----
@@ -9147,7 +9239,11 @@ async fn rbac02c_revoked_key_cannot_authenticate() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "revoked key must be rejected");
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "revoked key must be rejected"
+    );
 }
 
 // ---- RBAC-02d: Expired key rejection ----
@@ -9189,7 +9285,11 @@ async fn rbac02d_expired_key_cannot_authenticate() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "expired key must be rejected");
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "expired key must be rejected"
+    );
 }
 
 // ---- RBAC-02e: Rotated key — old key stops working, new key works ----
@@ -9240,7 +9340,11 @@ async fn rbac02e_rotated_old_key_rejected_new_key_works() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "old key after rotation must be rejected");
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "old key after rotation must be rejected"
+    );
 
     // New key should work
     let (status, body) = json_request_with_header(
@@ -9256,7 +9360,12 @@ async fn rbac02e_rotated_old_key_rejected_new_key_works() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "new rotated key should work: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "new rotated key should work: {:?}",
+        body
+    );
 }
 
 // ---- RBAC-02f: Fabricated / invalid key rejected ----
@@ -9280,7 +9389,11 @@ async fn rbac02f_fabricated_key_rejected() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "fabricated key must be rejected");
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "fabricated key must be rejected"
+    );
 }
 
 // ---- RBAC-02g: Key name length validation ----
@@ -9303,7 +9416,11 @@ async fn rbac02g_key_name_too_long_rejected() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "name >128 chars should fail");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "name >128 chars should fail"
+    );
 }
 
 // =============================================================================
@@ -9411,7 +9528,12 @@ async fn classify01c_patch_entity_classification() {
         serde_json::json!({ "classification": "confidential" }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "patch entity classification failed: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "patch entity classification failed: {:?}",
+        body
+    );
     assert_eq!(body["classification"].as_str().unwrap(), "confidential");
 
     // Verify via GET
@@ -9458,7 +9580,12 @@ async fn classify01d_patch_edge_classification() {
         serde_json::json!({ "classification": "restricted" }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "patch edge classification failed: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "patch edge classification failed: {:?}",
+        body
+    );
     assert_eq!(body["classification"].as_str().unwrap(), "restricted");
 }
 
@@ -9511,7 +9638,12 @@ async fn classify01e_edge_filter_max_classification() {
         ..Default::default()
     };
     let results = state_store.query_edges(user_id, filter).await.unwrap();
-    assert_eq!(results.len(), 2, "Internal filter should return 2 edges, got {}", results.len());
+    assert_eq!(
+        results.len(),
+        2,
+        "Internal filter should return 2 edges, got {}",
+        results.len()
+    );
     for edge in &results {
         assert!(
             edge.classification <= Classification::Internal,
@@ -9536,7 +9668,11 @@ async fn classify01e_edge_filter_max_classification() {
         ..Default::default()
     };
     let results = state_store.query_edges(user_id, filter).await.unwrap();
-    assert_eq!(results.len(), 4, "Restricted filter should return all 4 edges");
+    assert_eq!(
+        results.len(),
+        4,
+        "Restricted filter should return all 4 edges"
+    );
 
     // No classification filter — should also get all 4
     let filter = mnemo_core::models::edge::EdgeFilter::default();
@@ -9580,17 +9716,33 @@ async fn classify01f_entity_list_max_classification() {
     // List with max_classification=internal — should get 2 (Public + Internal)
     let (status, body) = get_request(
         &app,
-        &format!("/api/v1/users/{}/entities?max_classification=internal", user_id),
+        &format!(
+            "/api/v1/users/{}/entities?max_classification=internal",
+            user_id
+        ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "list entities with classification filter: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "list entities with classification filter: {:?}",
+        body
+    );
     let entities = body["data"].as_array().unwrap();
-    assert_eq!(entities.len(), 2, "Internal filter should return 2 entities, got {}", entities.len());
+    assert_eq!(
+        entities.len(),
+        2,
+        "Internal filter should return 2 entities, got {}",
+        entities.len()
+    );
 
     // List with max_classification=public — should get 1
     let (status, body) = get_request(
         &app,
-        &format!("/api/v1/users/{}/entities?max_classification=public", user_id),
+        &format!(
+            "/api/v1/users/{}/entities?max_classification=public",
+            user_id
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -9620,7 +9772,11 @@ async fn classify01g_backward_compat_missing_classification_defaults_internal() 
         "updated_at": "2024-01-01T00:00:00Z"
     });
     let edge: Edge = serde_json::from_value(json).unwrap();
-    assert_eq!(edge.classification, Classification::Internal, "missing classification should default to Internal");
+    assert_eq!(
+        edge.classification,
+        Classification::Internal,
+        "missing classification should default to Internal"
+    );
 }
 
 // ---- CLASSIFY-01h: Classification from extraction flows through ----
@@ -9644,19 +9800,41 @@ async fn classify01h_extraction_classification_flows_through() {
         Uuid::from_u128(4),
         chrono::Utc::now(),
     );
-    assert_eq!(edge.classification, Classification::Restricted, "LLM-suggested classification should flow through");
+    assert_eq!(
+        edge.classification,
+        Classification::Restricted,
+        "LLM-suggested classification should flow through"
+    );
 }
 
 // ---- CLASSIFY-01i: Classification::from_str_flexible ----
 
 #[tokio::test]
 async fn classify01i_from_str_flexible_parsing() {
-    assert_eq!(Classification::from_str_flexible("public"), Classification::Public);
-    assert_eq!(Classification::from_str_flexible("PUBLIC"), Classification::Public);
-    assert_eq!(Classification::from_str_flexible("  confidential  "), Classification::Confidential);
-    assert_eq!(Classification::from_str_flexible("restricted"), Classification::Restricted);
-    assert_eq!(Classification::from_str_flexible("unknown_value"), Classification::Internal);
-    assert_eq!(Classification::from_str_flexible(""), Classification::Internal);
+    assert_eq!(
+        Classification::from_str_flexible("public"),
+        Classification::Public
+    );
+    assert_eq!(
+        Classification::from_str_flexible("PUBLIC"),
+        Classification::Public
+    );
+    assert_eq!(
+        Classification::from_str_flexible("  confidential  "),
+        Classification::Confidential
+    );
+    assert_eq!(
+        Classification::from_str_flexible("restricted"),
+        Classification::Restricted
+    );
+    assert_eq!(
+        Classification::from_str_flexible("unknown_value"),
+        Classification::Internal
+    );
+    assert_eq!(
+        Classification::from_str_flexible(""),
+        Classification::Internal
+    );
 }
 
 // ---- CLASSIFY-01j: PATCH classification requires Write role (falsification) ----
@@ -9691,7 +9869,11 @@ async fn classify01j_patch_classification_rejects_read_key() {
     .await;
     // NotFound or Forbidden — either is acceptable since the entity doesn't exist,
     // but the important thing is the role check happens first (Forbidden)
-    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not be able to PATCH classification");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "read key should not be able to PATCH classification"
+    );
 }
 
 // =============================================================================
@@ -9721,7 +9903,12 @@ async fn view01a_create_view_returns_created() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::CREATED, "create view failed: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create view failed: {:?}",
+        body
+    );
     assert_eq!(body["name"].as_str().unwrap(), "support_safe");
     assert_eq!(body["max_classification"].as_str().unwrap(), "internal");
     assert_eq!(body["max_facts"].as_u64().unwrap(), 50);
@@ -9743,14 +9930,31 @@ async fn view01b_duplicate_view_name_rejected() {
     });
 
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key", view_body.clone(),
-    ).await;
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
+        view_body.clone(),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key", view_body,
-    ).await;
-    assert_eq!(status, StatusCode::CONFLICT, "duplicate should be rejected: {:?}", body);
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
+        view_body,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "duplicate should be rejected: {:?}",
+        body
+    );
 }
 
 // ---- VIEW-01c: List views ----
@@ -9763,20 +9967,30 @@ async fn view01c_list_views() {
     // Create two views
     for name in &["list_v1", "list_v2"] {
         let (status, _) = json_request_with_header(
-            &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+            &app,
+            "POST",
+            "/api/v1/views",
+            "authorization",
+            "Bearer view-admin-key",
             serde_json::json!({
                 "name": name,
                 "description": "test",
                 "max_classification": "public",
             }),
-        ).await;
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED);
     }
 
     let (status, body) = json_request_with_header(
-        &app, "GET", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "GET",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "list views failed: {:?}", body);
     let views = body["views"].as_array().unwrap();
     assert!(views.len() >= 2);
@@ -9790,19 +10004,29 @@ async fn view01d_get_view_by_name() {
         build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
 
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "get_test_view",
             "description": "For GET test",
             "max_classification": "confidential",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, body) = json_request_with_header(
-        &app, "GET", "/api/v1/views/get_test_view", "authorization", "Bearer view-admin-key",
+        &app,
+        "GET",
+        "/api/v1/views/get_test_view",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "get view failed: {:?}", body);
     assert_eq!(body["name"].as_str().unwrap(), "get_test_view");
     assert_eq!(body["max_classification"].as_str().unwrap(), "confidential");
@@ -9816,24 +10040,34 @@ async fn view01e_update_view() {
         build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
 
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "update_test",
             "description": "Original",
             "max_classification": "internal",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, body) = json_request_with_header(
-        &app, "PUT", "/api/v1/views/update_test", "authorization", "Bearer view-admin-key",
+        &app,
+        "PUT",
+        "/api/v1/views/update_test",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "update_test",
             "description": "Updated",
             "max_classification": "public",
             "max_facts": 25,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "update view failed: {:?}", body);
     assert_eq!(body["description"].as_str().unwrap(), "Updated");
     assert_eq!(body["max_classification"].as_str().unwrap(), "public");
@@ -9848,26 +10082,41 @@ async fn view01f_delete_view() {
         build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
 
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "delete_test",
             "description": "To be deleted",
             "max_classification": "internal",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, _) = json_request_with_header(
-        &app, "DELETE", "/api/v1/views/delete_test", "authorization", "Bearer view-admin-key",
+        &app,
+        "DELETE",
+        "/api/v1/views/delete_test",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "delete view failed");
 
     // Verify it's gone
     let (status, _) = json_request_with_header(
-        &app, "GET", "/api/v1/views/delete_test", "authorization", "Bearer view-admin-key",
+        &app,
+        "GET",
+        "/api/v1/views/delete_test",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -9880,29 +10129,52 @@ async fn view01g_read_key_can_list_but_not_create() {
 
     // Create a read-only key
     let (status, create_body) = json_request_with_header(
-        &app, "POST", "/api/v1/keys", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({ "name": "view-reader", "role": "read" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let read_key = create_body["raw_key"].as_str().unwrap().to_string();
 
     // Listing should succeed (read role)
     let (status, _) = json_request_with_header(
-        &app, "GET", "/api/v1/views", "authorization", &format!("Bearer {}", read_key),
+        &app,
+        "GET",
+        "/api/v1/views",
+        "authorization",
+        &format!("Bearer {}", read_key),
         serde_json::json!({}),
-    ).await;
-    assert_eq!(status, StatusCode::OK, "read key should be able to list views");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "read key should be able to list views"
+    );
 
     // Creating should fail (requires admin)
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", &format!("Bearer {}", read_key),
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        &format!("Bearer {}", read_key),
         serde_json::json!({
             "name": "should_fail",
             "description": "nope",
             "max_classification": "internal",
         }),
-    ).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not create views");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "read key should not create views"
+    );
 }
 
 // ---- VIEW-01h: Get nonexistent view returns 404 ----
@@ -9913,9 +10185,14 @@ async fn view01h_get_nonexistent_view_returns_404() {
         build_authed_test_app_with_store(vec!["view-admin-key".to_string()]).await;
 
     let (status, _) = json_request_with_header(
-        &app, "GET", "/api/v1/views/nonexistent_view_xyz", "authorization", "Bearer view-admin-key",
+        &app,
+        "GET",
+        "/api/v1/views/nonexistent_view_xyz",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -9929,30 +10206,53 @@ async fn view02a_context_view_filters_entities_by_classification() {
     // Create a user
     let user_name = format!("view02a_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
 
     // Create entities with different classification levels
     let ep_id = Uuid::from_u128(10);
     let public_entity = Entity::from_extraction(
-        &ExtractedEntity { name: "Coffee Shop".into(), entity_type: EntityType::Location, summary: Some("A public coffee shop".into()), classification: Classification::Public },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Coffee Shop".into(),
+            entity_type: EntityType::Location,
+            summary: Some("A public coffee shop".into()),
+            classification: Classification::Public,
+        },
+        user_id,
+        ep_id,
     );
     let public_entity = store.create_entity(public_entity).await.unwrap();
 
     let confidential_entity = Entity::from_extraction(
-        &ExtractedEntity { name: "Bank Account".into(), entity_type: EntityType::Concept, summary: Some("Private bank account".into()), classification: Classification::Confidential },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Bank Account".into(),
+            entity_type: EntityType::Concept,
+            summary: Some("Private bank account".into()),
+            classification: Classification::Confidential,
+        },
+        user_id,
+        ep_id,
     );
     let confidential_entity = store.create_entity(confidential_entity).await.unwrap();
 
     // Create a target entity for edges
     let target_entity = Entity::from_extraction(
-        &ExtractedEntity { name: "Latte".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Public },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Latte".into(),
+            entity_type: EntityType::Concept,
+            summary: None,
+            classification: Classification::Public,
+        },
+        user_id,
+        ep_id,
     );
     let target_entity = store.create_entity(target_entity).await.unwrap();
 
@@ -9961,44 +10261,69 @@ async fn view02a_context_view_filters_entities_by_classification() {
     // Create edges from these entities
     let public_edge = Edge::from_extraction(
         &ExtractedRelationship {
-            source_name: "Coffee Shop".into(), target_name: "Latte".into(), label: "serves".into(),
-            fact: "Coffee Shop serves Latte".into(), confidence: 0.9,
-            valid_at: None, classification: Classification::Public,
+            source_name: "Coffee Shop".into(),
+            target_name: "Latte".into(),
+            label: "serves".into(),
+            fact: "Coffee Shop serves Latte".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Classification::Public,
         },
-        user_id, public_entity.id, target_entity.id, ep_id, now,
+        user_id,
+        public_entity.id,
+        target_entity.id,
+        ep_id,
+        now,
     );
     store.create_edge(public_edge).await.unwrap();
 
     let confidential_edge = Edge::from_extraction(
         &ExtractedRelationship {
-            source_name: "Bank Account".into(), target_name: "$50,000".into(), label: "balance".into(),
-            fact: "Bank Account has balance $50,000".into(), confidence: 0.9,
-            valid_at: None, classification: Classification::Confidential,
+            source_name: "Bank Account".into(),
+            target_name: "$50,000".into(),
+            label: "balance".into(),
+            fact: "Bank Account has balance $50,000".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Classification::Confidential,
         },
-        user_id, confidential_entity.id, Uuid::from_u128(101), ep_id, now,
+        user_id,
+        confidential_entity.id,
+        Uuid::from_u128(101),
+        ep_id,
+        now,
     );
     store.create_edge(confidential_edge).await.unwrap();
 
     // Create a view that caps classification at Public
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "public_only_view",
             "description": "Only public data",
             "max_classification": "public",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Request context with the view
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "query": "Tell me about coffee and banking",
             "view": "public_only_view",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "context request failed: {:?}", body);
 
     // The view_applied field should be set
@@ -10009,16 +10334,20 @@ async fn view02a_context_view_filters_entities_by_classification() {
     let entities = body["entities"].as_array().unwrap_or(&empty_arr);
     for entity in entities {
         let name = entity["name"].as_str().unwrap_or("");
-        assert_ne!(name, "Bank Account",
-            "Confidential entity should be filtered by public_only view");
+        assert_ne!(
+            name, "Bank Account",
+            "Confidential entity should be filtered by public_only view"
+        );
     }
 
     // Facts with Confidential classification should be filtered out
     let facts = body["facts"].as_array().unwrap_or(&empty_arr);
     for fact in facts {
         let label = fact["label"].as_str().unwrap_or("");
-        assert_ne!(label, "balance",
-            "Confidential fact should be filtered by public_only view");
+        assert_ne!(
+            label, "balance",
+            "Confidential fact should be filtered by public_only view"
+        );
     }
 }
 
@@ -10031,71 +10360,119 @@ async fn view02b_context_view_blocks_edge_labels() {
 
     let user_name = format!("view02b_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
 
     let ep_id = Uuid::from_u128(20);
     let entity = Entity::from_extraction(
-        &ExtractedEntity { name: "Employee".into(), entity_type: EntityType::Person, summary: Some("An employee".into()), classification: Classification::Internal },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Employee".into(),
+            entity_type: EntityType::Person,
+            summary: Some("An employee".into()),
+            classification: Classification::Internal,
+        },
+        user_id,
+        ep_id,
     );
     let entity = store.create_entity(entity).await.unwrap();
 
     let target1 = Entity::from_extraction(
-        &ExtractedEntity { name: "SalaryAmount".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Internal },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "SalaryAmount".into(),
+            entity_type: EntityType::Concept,
+            summary: None,
+            classification: Classification::Internal,
+        },
+        user_id,
+        ep_id,
     );
     let target1 = store.create_entity(target1).await.unwrap();
     let target2 = Entity::from_extraction(
-        &ExtractedEntity { name: "Engineer".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Internal },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Engineer".into(),
+            entity_type: EntityType::Concept,
+            summary: None,
+            classification: Classification::Internal,
+        },
+        user_id,
+        ep_id,
     );
     let target2 = store.create_entity(target2).await.unwrap();
 
     let now = chrono::Utc::now();
     let salary_edge = Edge::from_extraction(
         &ExtractedRelationship {
-            source_name: "Employee".into(), target_name: "SalaryAmount".into(), label: "salary".into(),
-            fact: "Employee earns $100k salary".into(), confidence: 0.9,
-            valid_at: None, classification: Classification::Internal,
+            source_name: "Employee".into(),
+            target_name: "SalaryAmount".into(),
+            label: "salary".into(),
+            fact: "Employee earns $100k salary".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Classification::Internal,
         },
-        user_id, entity.id, target1.id, ep_id, now,
+        user_id,
+        entity.id,
+        target1.id,
+        ep_id,
+        now,
     );
     store.create_edge(salary_edge).await.unwrap();
 
     let role_edge = Edge::from_extraction(
         &ExtractedRelationship {
-            source_name: "Employee".into(), target_name: "Engineer".into(), label: "role".into(),
-            fact: "Employee is an Engineer".into(), confidence: 0.9,
-            valid_at: None, classification: Classification::Internal,
+            source_name: "Employee".into(),
+            target_name: "Engineer".into(),
+            label: "role".into(),
+            fact: "Employee is an Engineer".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Classification::Internal,
         },
-        user_id, entity.id, target2.id, ep_id, now,
+        user_id,
+        entity.id,
+        target2.id,
+        ep_id,
+        now,
     );
     store.create_edge(role_edge).await.unwrap();
 
     // Create view that blocks salary edges
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "no_salary_view",
             "description": "Hides salary info",
             "max_classification": "restricted",
             "blocked_edge_labels": ["salary"],
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "query": "Tell me about the employee",
             "view": "no_salary_view",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
 
     let empty_arr = vec![];
@@ -10115,20 +10492,34 @@ async fn view02c_context_nonexistent_view_returns_404() {
 
     let user_name = format!("view02c_user_{}", Uuid::now_v7());
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "query": "anything",
             "view": "does_not_exist",
         }),
-    ).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "nonexistent view should 404: {:?}", body);
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "nonexistent view should 404: {:?}",
+        body
+    );
 }
 
 // ---- VIEW-02d: Scoped key classification ceiling narrows view ----
@@ -10140,44 +10531,63 @@ async fn view02d_scoped_key_classification_narrows_view() {
 
     // Create a view that allows Confidential
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "wide_view_02d",
             "description": "Allows up to confidential",
             "max_classification": "confidential",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Create a scoped key with max_classification=internal
     let (status, create_body) = json_request_with_header(
-        &app, "POST", "/api/v1/keys", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "internal-only-key",
             "role": "read",
             "scope": { "max_classification": "internal" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let scoped_key = create_body["raw_key"].as_str().unwrap().to_string();
 
     // Create user
     let user_name = format!("view02d_user_{}", Uuid::now_v7());
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Request context with the wide view using the restricted key
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", &format!("Bearer {}", scoped_key),
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        &format!("Bearer {}", scoped_key),
         serde_json::json!({
             "query": "anything",
             "view": "wide_view_02d",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "context request failed: {:?}", body);
     // The view should be applied — even though the view allows Confidential,
     // the scoped key limits to Internal, so view_applied should be set
@@ -10193,67 +10603,101 @@ async fn view02e_view_max_facts_caps_count() {
 
     let user_name = format!("view02e_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
 
     let ep_id = Uuid::from_u128(30);
     let entity = Entity::from_extraction(
-        &ExtractedEntity { name: "MaxFactsEntity".into(), entity_type: EntityType::Concept, summary: Some("Test".into()), classification: Classification::Public },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "MaxFactsEntity".into(),
+            entity_type: EntityType::Concept,
+            summary: Some("Test".into()),
+            classification: Classification::Public,
+        },
+        user_id,
+        ep_id,
     );
     let entity = store.create_entity(entity).await.unwrap();
 
     let now = chrono::Utc::now();
     for i in 0u128..10 {
         let target = Entity::from_extraction(
-            &ExtractedEntity { name: format!("Target{}", i), entity_type: EntityType::Concept, summary: None, classification: Classification::Public },
-            user_id, ep_id,
+            &ExtractedEntity {
+                name: format!("Target{}", i),
+                entity_type: EntityType::Concept,
+                summary: None,
+                classification: Classification::Public,
+            },
+            user_id,
+            ep_id,
         );
         let target = store.create_entity(target).await.unwrap();
 
         let edge = Edge::from_extraction(
             &ExtractedRelationship {
-                source_name: "MaxFactsEntity".into(), target_name: format!("Target{}", i),
+                source_name: "MaxFactsEntity".into(),
+                target_name: format!("Target{}", i),
                 label: "related_to".into(),
                 fact: format!("MaxFactsEntity is related to Target{}", i),
                 confidence: 0.9,
-                valid_at: None, classification: Classification::Public,
+                valid_at: None,
+                classification: Classification::Public,
             },
-            user_id, entity.id, target.id, ep_id, now,
+            user_id,
+            entity.id,
+            target.id,
+            ep_id,
+            now,
         );
         store.create_edge(edge).await.unwrap();
     }
 
     // Create view with max_facts=3
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "limited_facts_view",
             "description": "Only 3 facts max",
             "max_classification": "restricted",
             "max_facts": 3,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "query": "Tell me about MaxFactsEntity",
             "view": "limited_facts_view",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
 
     let empty_arr = vec![];
     let facts = body["facts"].as_array().unwrap_or(&empty_arr);
-    assert!(facts.len() <= 3,
+    assert!(
+        facts.len() <= 3,
         "max_facts=3 view should cap facts to at most 3, got {}",
-        facts.len());
+        facts.len()
+    );
 }
 
 // ---- VIEW-02f: View with include_narrative=false suppresses narrative ----
@@ -10265,36 +10709,53 @@ async fn view02f_view_suppresses_narrative() {
 
     let user_name = format!("view02f_user_{}", Uuid::now_v7());
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Create view with include_narrative=false
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "no_narrative_view",
             "description": "No narrative",
             "max_classification": "restricted",
             "include_narrative": false,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Request context with include_narrative=true at request level, but view says false
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "query": "anything",
             "view": "no_narrative_view",
             "include_narrative": true,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
     // narrative should be null because view suppresses it
-    assert!(body["narrative"].is_null(), "narrative should be suppressed by view");
+    assert!(
+        body["narrative"].is_null(),
+        "narrative should be suppressed by view"
+    );
 }
 
 // ---- VIEW-02g: Context without view but with scoped key still filters ----
@@ -10306,68 +10767,107 @@ async fn view02g_no_view_scoped_key_still_filters() {
 
     // Create a key with max_classification=public
     let (status, create_body) = json_request_with_header(
-        &app, "POST", "/api/v1/keys", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "public-only-key",
             "role": "read",
             "scope": { "max_classification": "public" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let public_key = create_body["raw_key"].as_str().unwrap().to_string();
 
     let user_name = format!("view02g_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
 
     let ep_id = Uuid::from_u128(40);
     // Create an entity with Internal classification
     let internal_entity = Entity::from_extraction(
-        &ExtractedEntity { name: "InternalProject".into(), entity_type: EntityType::Concept, summary: Some("Internal project".into()), classification: Classification::Internal },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "InternalProject".into(),
+            entity_type: EntityType::Concept,
+            summary: Some("Internal project".into()),
+            classification: Classification::Internal,
+        },
+        user_id,
+        ep_id,
     );
     let internal_entity = store.create_entity(internal_entity).await.unwrap();
 
     let now = chrono::Utc::now();
     let target = Entity::from_extraction(
-        &ExtractedEntity { name: "Roadmap".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Internal },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Roadmap".into(),
+            entity_type: EntityType::Concept,
+            summary: None,
+            classification: Classification::Internal,
+        },
+        user_id,
+        ep_id,
     );
     let target = store.create_entity(target).await.unwrap();
 
     // Create edge with Internal classification
     let internal_edge = Edge::from_extraction(
         &ExtractedRelationship {
-            source_name: "InternalProject".into(), target_name: "Roadmap".into(), label: "has".into(),
-            fact: "InternalProject has Roadmap".into(), confidence: 0.9,
-            valid_at: None, classification: Classification::Internal,
+            source_name: "InternalProject".into(),
+            target_name: "Roadmap".into(),
+            label: "has".into(),
+            fact: "InternalProject has Roadmap".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Classification::Internal,
         },
-        user_id, internal_entity.id, target.id, ep_id, now,
+        user_id,
+        internal_entity.id,
+        target.id,
+        ep_id,
+        now,
     );
     store.create_edge(internal_edge).await.unwrap();
 
     // Request context without view, using the public-only key
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", &format!("Bearer {}", public_key),
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        &format!("Bearer {}", public_key),
         serde_json::json!({ "query": "Tell me about InternalProject" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
 
     // No view applied (no explicit view), but scoped key filtering is active
-    assert!(body["view_applied"].is_null(), "no explicit view was applied");
+    assert!(
+        body["view_applied"].is_null(),
+        "no explicit view was applied"
+    );
 
     // Internal entities/facts should be filtered out by the public-only key
     let empty_arr = vec![];
     let entities = body["entities"].as_array().unwrap_or(&empty_arr);
     for entity in entities {
         let name = entity["name"].as_str().unwrap_or("");
-        assert_ne!(name, "InternalProject",
-            "Internal entity should be filtered by public-only key");
+        assert_ne!(
+            name, "InternalProject",
+            "Internal entity should be filtered by public-only key"
+        );
     }
 }
 
@@ -10380,26 +10880,44 @@ async fn view02h_view_name_validation() {
 
     // Empty name
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": "  ",
             "description": "Bad name",
             "max_classification": "internal",
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "empty name should be rejected");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "empty name should be rejected"
+    );
 
     // Very long name (>128 chars)
     let long_name = "a".repeat(200);
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/views", "authorization", "Bearer view-admin-key",
+        &app,
+        "POST",
+        "/api/v1/views",
+        "authorization",
+        "Bearer view-admin-key",
         serde_json::json!({
             "name": long_name,
             "description": "Too long",
             "max_classification": "internal",
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "long name should be rejected");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "long name should be rejected"
+    );
 }
 
 // =============================================================================
@@ -10430,7 +10948,12 @@ async fn gr01a_create_guardrail_returns_created() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::CREATED, "create guardrail failed: {:?}", body);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create guardrail failed: {:?}",
+        body
+    );
     assert_eq!(body["name"].as_str().unwrap(), "block_ssn_storage");
     assert_eq!(body["priority"].as_u64().unwrap(), 10);
     assert!(body["enabled"].as_bool().unwrap());
@@ -10454,14 +10977,31 @@ async fn gr01b_duplicate_guardrail_name_rejected() {
     });
 
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key", body.clone(),
-    ).await;
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
+        body.clone(),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, body2) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key", body,
-    ).await;
-    assert_eq!(status, StatusCode::CONFLICT, "duplicate should be rejected: {:?}", body2);
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
+        body,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "duplicate should be rejected: {:?}",
+        body2
+    );
 }
 
 // ---- GR-01c: List guardrails ----
@@ -10474,7 +11014,11 @@ async fn gr01c_list_guardrails() {
     // Create two rules
     for name in &["gr_list_a", "gr_list_b"] {
         let (status, _) = json_request_with_header(
-            &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+            &app,
+            "POST",
+            "/api/v1/guardrails",
+            "authorization",
+            "Bearer gr-admin-key",
             serde_json::json!({
                 "name": name,
                 "description": "test rule",
@@ -10482,14 +11026,20 @@ async fn gr01c_list_guardrails() {
                 "condition": { "type": "classification_above", "classification": "public" },
                 "action": { "type": "redact" },
             }),
-        ).await;
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED);
     }
 
     let (status, body) = json_request_with_header(
-        &app, "GET", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "GET",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "list failed: {:?}", body);
     let rules = body["guardrails"].as_array().unwrap();
     assert!(rules.len() >= 2);
@@ -10503,7 +11053,11 @@ async fn gr01d_get_guardrail_by_id() {
         build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
 
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "gr_get_test",
             "description": "Get test",
@@ -10511,15 +11065,20 @@ async fn gr01d_get_guardrail_by_id() {
             "condition": { "type": "edge_label_in", "labels": ["salary"] },
             "action": { "type": "block", "reason": "no salary" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let id = body["id"].as_str().unwrap();
 
     let (status, body) = json_request_with_header(
-        &app, "GET", &format!("/api/v1/guardrails/{}", id),
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "GET",
+        &format!("/api/v1/guardrails/{}", id),
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "get failed: {:?}", body);
     assert_eq!(body["name"].as_str().unwrap(), "gr_get_test");
 }
@@ -10532,7 +11091,11 @@ async fn gr01e_update_guardrail() {
         build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
 
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "gr_update_test",
             "description": "Before update",
@@ -10541,13 +11104,17 @@ async fn gr01e_update_guardrail() {
             "action": { "type": "audit_only", "severity": "low" },
             "priority": 50,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let id = body["id"].as_str().unwrap();
 
     let (status, body) = json_request_with_header(
-        &app, "PUT", &format!("/api/v1/guardrails/{}", id),
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "PUT",
+        &format!("/api/v1/guardrails/{}", id),
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "gr_update_test",
             "description": "After update",
@@ -10556,7 +11123,8 @@ async fn gr01e_update_guardrail() {
             "action": { "type": "block", "reason": "upgraded to block" },
             "priority": 5,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "update failed: {:?}", body);
     assert_eq!(body["description"].as_str().unwrap(), "After update");
     assert_eq!(body["priority"].as_u64().unwrap(), 5);
@@ -10570,7 +11138,11 @@ async fn gr01f_delete_guardrail() {
         build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
 
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "gr_delete_test",
             "description": "Will be deleted",
@@ -10578,23 +11150,32 @@ async fn gr01f_delete_guardrail() {
             "condition": { "type": "confidence_below", "confidence": 0.5 },
             "action": { "type": "warn", "message": "low confidence" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let id = body["id"].as_str().unwrap();
 
     let (status, _) = json_request_with_header(
-        &app, "DELETE", &format!("/api/v1/guardrails/{}", id),
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "DELETE",
+        &format!("/api/v1/guardrails/{}", id),
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     // Verify it's gone
     let (status, _) = json_request_with_header(
-        &app, "GET", &format!("/api/v1/guardrails/{}", id),
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "GET",
+        &format!("/api/v1/guardrails/{}", id),
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -10607,15 +11188,24 @@ async fn gr01g_read_key_cannot_create_guardrails() {
 
     // Create a read-only scoped key
     let (status, key_body) = json_request_with_header(
-        &app, "POST", "/api/v1/keys", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "name": "gr-reader", "role": "read" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let read_key = key_body["raw_key"].as_str().unwrap().to_string();
 
     // Try to create a guardrail with the read key — should be forbidden
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", &format!("Bearer {}", read_key),
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        &format!("Bearer {}", read_key),
         serde_json::json!({
             "name": "should_fail",
             "description": "Read cannot create",
@@ -10623,8 +11213,13 @@ async fn gr01g_read_key_cannot_create_guardrails() {
             "condition": { "type": "classification_above", "classification": "public" },
             "action": { "type": "block", "reason": "nope" },
         }),
-    ).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "read key should not create guardrails");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "read key should not create guardrails"
+    );
 }
 
 // ---- GR-01h: Invalid regex rejected ----
@@ -10635,7 +11230,11 @@ async fn gr01h_invalid_regex_rejected() {
         build_authed_test_app_with_store(vec!["gr-admin-key".to_string()]).await;
 
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "bad_regex",
             "description": "Invalid regex pattern",
@@ -10643,8 +11242,14 @@ async fn gr01h_invalid_regex_rejected() {
             "condition": { "type": "content_matches_regex", "pattern": "[invalid" },
             "action": { "type": "block", "reason": "bad pattern" },
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "invalid regex should be rejected: {:?}", body);
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "invalid regex should be rejected: {:?}",
+        body
+    );
 }
 
 // ---- GR-01i: Get nonexistent guardrail returns 404 ----
@@ -10656,10 +11261,14 @@ async fn gr01i_nonexistent_guardrail_returns_404() {
 
     let fake_id = Uuid::from_u128(999999);
     let (status, _) = json_request_with_header(
-        &app, "GET", &format!("/api/v1/guardrails/{}", fake_id),
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "GET",
+        &format!("/api/v1/guardrails/{}", fake_id),
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -10677,21 +11286,35 @@ async fn gr02a_block_rule_prevents_episode_storage() {
     // Create user + session
     let user_name = format!("gr02a_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, session_body) = json_request_with_header(
-        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "user_id": user_body["id"], "name": "test-session" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let session_id = session_body["id"].as_str().unwrap();
 
     // Create a guardrail that blocks SSN content
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "block_ssn_ingest",
             "description": "Block SSN references during ingestion",
@@ -10699,35 +11322,57 @@ async fn gr02a_block_rule_prevents_episode_storage() {
             "condition": { "type": "content_matches_regex", "pattern": "\\bSSN\\b" },
             "action": { "type": "block", "reason": "SSN data not allowed in memory" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Try to ingest an episode with SSN content — should be blocked
     let ep_url = format!("/api/v1/sessions/{}/episodes", session_id);
     let (status, body) = json_request_with_header(
-        &app, "POST", &ep_url,
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        &ep_url,
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "type": "message",
             "content": "My SSN is 123-45-6789, please remember it.",
             "role": "user",
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "SSN content should be blocked: {:?}", body);
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "SSN content should be blocked: {:?}",
+        body
+    );
     let msg = body["error"]["message"].as_str().unwrap_or("");
-    assert!(msg.contains("Guardrail blocked"), "Error should mention guardrail: {}", msg);
+    assert!(
+        msg.contains("Guardrail blocked"),
+        "Error should mention guardrail: {}",
+        msg
+    );
 
     // Ingest an episode WITHOUT SSN — should succeed
     let (status, _) = json_request_with_header(
-        &app, "POST", &ep_url,
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        &ep_url,
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "type": "message",
             "content": "I like coffee.",
             "role": "user",
         }),
-    ).await;
-    assert_eq!(status, StatusCode::CREATED, "safe content should be accepted");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "safe content should be accepted"
+    );
 }
 
 // =============================================================================
@@ -10745,50 +11390,87 @@ async fn gr03a_redact_rule_removes_matching_facts() {
 
     let user_name = format!("gr03a_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
 
     // Create entities + edges (one salary edge, one normal edge)
     let ep_id = Uuid::from_u128(300);
     let person = Entity::from_extraction(
-        &ExtractedEntity { name: "Alice".into(), entity_type: EntityType::Person, summary: Some("An employee".into()), classification: Classification::Internal },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Alice".into(),
+            entity_type: EntityType::Person,
+            summary: Some("An employee".into()),
+            classification: Classification::Internal,
+        },
+        user_id,
+        ep_id,
     );
     let person = store.create_entity(person).await.unwrap();
 
     let company = Entity::from_extraction(
-        &ExtractedEntity { name: "Acme Corp".into(), entity_type: EntityType::Organization, summary: Some("A company".into()), classification: Classification::Internal },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Acme Corp".into(),
+            entity_type: EntityType::Organization,
+            summary: Some("A company".into()),
+            classification: Classification::Internal,
+        },
+        user_id,
+        ep_id,
     );
     let company = store.create_entity(company).await.unwrap();
 
     let now = chrono::Utc::now();
     let salary_edge = Edge::from_extraction(
         &ExtractedRelationship {
-            source_name: "Alice".into(), target_name: "Acme Corp".into(), label: "salary_at".into(),
-            fact: "Alice earns $150k at Acme Corp".into(), confidence: 0.9,
-            valid_at: None, classification: Classification::Internal,
+            source_name: "Alice".into(),
+            target_name: "Acme Corp".into(),
+            label: "salary_at".into(),
+            fact: "Alice earns $150k at Acme Corp".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Classification::Internal,
         },
-        user_id, person.id, company.id, ep_id, now,
+        user_id,
+        person.id,
+        company.id,
+        ep_id,
+        now,
     );
     store.create_edge(salary_edge).await.unwrap();
 
     let works_edge = Edge::from_extraction(
         &ExtractedRelationship {
-            source_name: "Alice".into(), target_name: "Acme Corp".into(), label: "works_at".into(),
-            fact: "Alice works at Acme Corp".into(), confidence: 0.9,
-            valid_at: None, classification: Classification::Internal,
+            source_name: "Alice".into(),
+            target_name: "Acme Corp".into(),
+            label: "works_at".into(),
+            fact: "Alice works at Acme Corp".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Classification::Internal,
         },
-        user_id, person.id, company.id, ep_id, now,
+        user_id,
+        person.id,
+        company.id,
+        ep_id,
+        now,
     );
     store.create_edge(works_edge).await.unwrap();
 
     // Create a guardrail that redacts salary-labeled edges on retrieval
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "redact_salary",
             "description": "Redact salary facts from context",
@@ -10796,15 +11478,20 @@ async fn gr03a_redact_rule_removes_matching_facts() {
             "condition": { "type": "edge_label_in", "labels": ["salary_at"] },
             "action": { "type": "redact" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Request context
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "query": "Tell me about Alice" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
 
     // Salary facts should be redacted
@@ -10812,7 +11499,10 @@ async fn gr03a_redact_rule_removes_matching_facts() {
     let facts = body["facts"].as_array().unwrap_or(&empty_arr);
     for fact in facts {
         let label = fact["label"].as_str().unwrap_or("");
-        assert_ne!(label, "salary_at", "Salary fact should be redacted by guardrail");
+        assert_ne!(
+            label, "salary_at",
+            "Salary fact should be redacted by guardrail"
+        );
     }
 }
 
@@ -10827,39 +11517,68 @@ async fn gr03b_warn_rule_adds_warnings_to_response() {
 
     let user_name = format!("gr03b_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let user_id: Uuid = user_body["id"].as_str().unwrap().parse().unwrap();
 
     // Create an entity + edge with confidential classification
     let ep_id = Uuid::from_u128(301);
     let entity = Entity::from_extraction(
-        &ExtractedEntity { name: "HR Records".into(), entity_type: EntityType::Concept, summary: Some("HR data".into()), classification: Classification::Confidential },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "HR Records".into(),
+            entity_type: EntityType::Concept,
+            summary: Some("HR data".into()),
+            classification: Classification::Confidential,
+        },
+        user_id,
+        ep_id,
     );
     let entity = store.create_entity(entity).await.unwrap();
     let target = Entity::from_extraction(
-        &ExtractedEntity { name: "Sensitive Data".into(), entity_type: EntityType::Concept, summary: None, classification: Classification::Confidential },
-        user_id, ep_id,
+        &ExtractedEntity {
+            name: "Sensitive Data".into(),
+            entity_type: EntityType::Concept,
+            summary: None,
+            classification: Classification::Confidential,
+        },
+        user_id,
+        ep_id,
     );
     let target = store.create_entity(target).await.unwrap();
 
     let now = chrono::Utc::now();
     let edge = Edge::from_extraction(
         &ExtractedRelationship {
-            source_name: "HR Records".into(), target_name: "Sensitive Data".into(), label: "contains".into(),
-            fact: "HR Records contains Sensitive Data".into(), confidence: 0.9,
-            valid_at: None, classification: Classification::Confidential,
+            source_name: "HR Records".into(),
+            target_name: "Sensitive Data".into(),
+            label: "contains".into(),
+            fact: "HR Records contains Sensitive Data".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Classification::Confidential,
         },
-        user_id, entity.id, target.id, ep_id, now,
+        user_id,
+        entity.id,
+        target.id,
+        ep_id,
+        now,
     );
     store.create_edge(edge).await.unwrap();
 
     // Create a guardrail that warns on confidential data access
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "warn_confidential_access",
             "description": "Warn when accessing confidential data",
@@ -10867,24 +11586,37 @@ async fn gr03b_warn_rule_adds_warnings_to_response() {
             "condition": { "type": "classification_above", "classification": "internal" },
             "action": { "type": "warn", "message": "Accessing confidential data" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Request context
     let (status, body) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/memory/{}/context", user_name),
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        &format!("/api/v1/memory/{}/context", user_name),
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "query": "Tell me about HR records" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "context failed: {:?}", body);
 
     // Check for warnings in response
     let warnings = body["guardrail_warnings"].as_array();
-    assert!(warnings.is_some(), "guardrail_warnings should be present: {:?}", body);
+    assert!(
+        warnings.is_some(),
+        "guardrail_warnings should be present: {:?}",
+        body
+    );
     let warnings = warnings.unwrap();
     assert!(!warnings.is_empty(), "Should have at least one warning");
     let first_warning = warnings[0].as_str().unwrap();
-    assert!(first_warning.contains("confidential"), "Warning should mention confidential: {}", first_warning);
+    assert!(
+        first_warning.contains("confidential"),
+        "Warning should mention confidential: {}",
+        first_warning
+    );
 }
 
 // =============================================================================
@@ -10900,7 +11632,11 @@ async fn gr04a_dryrun_evaluate_returns_results() {
 
     // Create a block rule
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "dryrun_block_test",
             "description": "Block test for dry-run",
@@ -10908,29 +11644,43 @@ async fn gr04a_dryrun_evaluate_returns_results() {
             "condition": { "type": "content_matches_regex", "pattern": "\\bpassword\\b" },
             "action": { "type": "block", "reason": "password content blocked" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Dry-run with matching content
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails/evaluate",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "trigger": "on_ingest",
             "content": "My password is secret123",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "evaluate failed: {:?}", body);
     assert!(body["blocked"].as_bool().unwrap(), "Should be blocked");
-    assert_eq!(body["block_reason"].as_str().unwrap(), "password content blocked");
+    assert_eq!(
+        body["block_reason"].as_str().unwrap(),
+        "password content blocked"
+    );
 
     // Dry-run with non-matching content
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails/evaluate",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "trigger": "on_ingest",
             "content": "I like coffee",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "evaluate failed: {:?}", body);
     assert!(!body["blocked"].as_bool().unwrap(), "Should not be blocked");
 }
@@ -10949,21 +11699,35 @@ async fn gr05a_and_combinator_blocks_when_all_match() {
     // Create user + session
     let user_name = format!("gr05a_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, session_body) = json_request_with_header(
-        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "user_id": user_body["id"], "name": "and-test" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let session_id = session_body["id"].as_str().unwrap();
 
     // Create rule: block only if content matches BOTH "credit" AND "card"
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "and_combo_test",
             "description": "Block credit card data",
@@ -10977,7 +11741,8 @@ async fn gr05a_and_combinator_blocks_when_all_match() {
             },
             "action": { "type": "block", "reason": "credit card data not allowed" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // "credit card" → blocked
@@ -10986,7 +11751,11 @@ async fn gr05a_and_combinator_blocks_when_all_match() {
         "authorization", "Bearer gr-admin-key",
         serde_json::json!({ "type": "message", "content": "My credit card number is 4111", "role": "user" }),
     ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "credit card should be blocked");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "credit card should be blocked"
+    );
 
     // "credit score" → NOT blocked (only matches one condition)
     let (status, _) = json_request_with_header(
@@ -10994,7 +11763,11 @@ async fn gr05a_and_combinator_blocks_when_all_match() {
         "authorization", "Bearer gr-admin-key",
         serde_json::json!({ "type": "message", "content": "My credit score is 750", "role": "user" }),
     ).await;
-    assert_eq!(status, StatusCode::CREATED, "credit score should pass AND combinator");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "credit score should pass AND combinator"
+    );
 }
 
 // ---- GR-05b: OR combinator blocks when any condition matches ----
@@ -11006,21 +11779,35 @@ async fn gr05b_or_combinator_blocks_when_any_matches() {
 
     let user_name = format!("gr05b_user_{}", Uuid::now_v7());
     let (status, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "name": user_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, session_body) = json_request_with_header(
-        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "user_id": user_body["id"], "name": "or-test" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let session_id = session_body["id"].as_str().unwrap();
 
     // Create rule: block if content matches SSN OR passport
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "or_combo_test",
             "description": "Block any ID documents",
@@ -11034,7 +11821,8 @@ async fn gr05b_or_combinator_blocks_when_any_matches() {
             },
             "action": { "type": "block", "reason": "ID document data not allowed" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // SSN → blocked
@@ -11051,14 +11839,22 @@ async fn gr05b_or_combinator_blocks_when_any_matches() {
         "authorization", "Bearer gr-admin-key",
         serde_json::json!({ "type": "message", "content": "My passport number is AB123456", "role": "user" }),
     ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "passport should be blocked");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "passport should be blocked"
+    );
 
     // safe content → not blocked
     let (status, _) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/sessions/{}/episodes", session_id),
-        "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{}/episodes", session_id),
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "type": "message", "content": "I like hiking", "role": "user" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "safe content should pass");
 }
 
@@ -11071,7 +11867,11 @@ async fn gr05c_not_combinator_inverts_condition() {
 
     // Create a rule that blocks everything EXCEPT content matching "approved"
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "not_combo_test",
             "description": "Block anything not approved",
@@ -11082,30 +11882,47 @@ async fn gr05c_not_combinator_inverts_condition() {
             },
             "action": { "type": "block", "reason": "Only approved content allowed" },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Dry-run: "this is approved content" → NOT blocked
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails/evaluate",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "trigger": "on_ingest",
             "content": "This is approved content",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(!body["blocked"].as_bool().unwrap(), "Approved content should not be blocked");
+    assert!(
+        !body["blocked"].as_bool().unwrap(),
+        "Approved content should not be blocked"
+    );
 
     // Dry-run: "random text" → blocked
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails/evaluate",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "trigger": "on_ingest",
             "content": "random text without keyword",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["blocked"].as_bool().unwrap(), "Unapproved content should be blocked");
+    assert!(
+        body["blocked"].as_bool().unwrap(),
+        "Unapproved content should be blocked"
+    );
 }
 
 // =============================================================================
@@ -11122,7 +11939,11 @@ async fn gr06a_lower_priority_fires_first() {
     // Create two rules with different priorities
     // Priority 5 → block with "first"
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "priority_high",
             "description": "Higher priority",
@@ -11131,12 +11952,17 @@ async fn gr06a_lower_priority_fires_first() {
             "action": { "type": "block", "reason": "blocked by priority 5" },
             "priority": 5,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Priority 20 → block with "second"
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "priority_low",
             "description": "Lower priority",
@@ -11145,20 +11971,29 @@ async fn gr06a_lower_priority_fires_first() {
             "action": { "type": "block", "reason": "blocked by priority 20" },
             "priority": 20,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Dry-run: the block reason should come from the priority 5 rule
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails/evaluate",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "trigger": "on_ingest",
             "content": "this is a test",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["blocked"].as_bool().unwrap());
-    assert_eq!(body["block_reason"].as_str().unwrap(), "blocked by priority 5");
+    assert_eq!(
+        body["block_reason"].as_str().unwrap(),
+        "blocked by priority 5"
+    );
 }
 
 // ---- GR-06b: Disabled rule does not fire ----
@@ -11170,7 +12005,11 @@ async fn gr06b_disabled_rule_does_not_fire() {
 
     // Create a disabled block rule
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "disabled_block",
             "description": "Disabled rule",
@@ -11179,19 +12018,28 @@ async fn gr06b_disabled_rule_does_not_fire() {
             "action": { "type": "block", "reason": "should not fire" },
             "enabled": false,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Dry-run: should NOT be blocked
     let (status, body) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails/evaluate", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails/evaluate",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "trigger": "on_ingest",
             "content": "everything is fine",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(!body["blocked"].as_bool().unwrap(), "Disabled rule should not block");
+    assert!(
+        !body["blocked"].as_bool().unwrap(),
+        "Disabled rule should not block"
+    );
 }
 
 // =============================================================================
@@ -11208,38 +12056,62 @@ async fn gr07a_user_scoped_rule_only_applies_to_that_user() {
     // Create two users
     let user1_name = format!("gr07a_user1_{}", Uuid::now_v7());
     let (status, user1_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "name": user1_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let user1_id = user1_body["id"].as_str().unwrap();
 
     let user2_name = format!("gr07a_user2_{}", Uuid::now_v7());
     let (status, user2_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "name": user2_name }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let user2_id = user2_body["id"].as_str().unwrap();
 
     // Create sessions for both
     let (status, sess1_body) = json_request_with_header(
-        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "user_id": user1_id, "name": "sess1" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let sess1_id = sess1_body["id"].as_str().unwrap();
 
     let (status, sess2_body) = json_request_with_header(
-        &app, "POST", "/api/v1/sessions", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({ "user_id": user2_id, "name": "sess2" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let sess2_id = sess2_body["id"].as_str().unwrap();
 
     // Create a user-scoped guardrail: block "forbidden" only for user1
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/guardrails", "authorization", "Bearer gr-admin-key",
+        &app,
+        "POST",
+        "/api/v1/guardrails",
+        "authorization",
+        "Bearer gr-admin-key",
         serde_json::json!({
             "name": "user1_block",
             "description": "Block forbidden for user1 only",
@@ -11248,7 +12120,8 @@ async fn gr07a_user_scoped_rule_only_applies_to_that_user() {
             "action": { "type": "block", "reason": "forbidden for user1" },
             "scope": { "type": "user", "user_id": user1_id },
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // User1: "forbidden content" → blocked
@@ -11265,7 +12138,11 @@ async fn gr07a_user_scoped_rule_only_applies_to_that_user() {
         "authorization", "Bearer gr-admin-key",
         serde_json::json!({ "type": "message", "content": "This is forbidden content", "role": "user" }),
     ).await;
-    assert_eq!(status, StatusCode::CREATED, "user2 should not be blocked by user1-scoped rule");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "user2 should not be blocked by user1-scoped rule"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -11275,7 +12152,10 @@ async fn gr07a_user_scoped_rule_only_applies_to_that_user() {
 /// Helper: create 3 experience events for an agent and return their IDs.
 async fn create_three_experience_events(app: &axum::Router, agent_id: &str) -> Vec<String> {
     let mut ids = Vec::new();
-    for (i, signal) in ["signal alpha", "signal beta", "signal gamma"].iter().enumerate() {
+    for (i, signal) in ["signal alpha", "signal beta", "signal gamma"]
+        .iter()
+        .enumerate()
+    {
         let (status, body) = json_request(
             app,
             "POST",
@@ -11287,7 +12167,11 @@ async fn create_three_experience_events(app: &axum::Router, agent_id: &str) -> V
             }),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "experience event {i} failed: {body:?}");
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "experience event {i} failed: {body:?}"
+        );
         ids.push(body["id"].as_str().unwrap().to_string());
     }
     ids
@@ -11304,7 +12188,11 @@ async fn f5_default_approval_policy_returns_defaults() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "get default policy failed: {body:?}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "get default policy failed: {body:?}"
+    );
     assert_eq!(body["agent_id"], "f5-policy-agent");
     assert_eq!(body["low_risk"]["min_approvers"], 1);
     assert_eq!(body["medium_risk"]["min_approvers"], 1);
@@ -11347,7 +12235,11 @@ async fn f5_set_approval_policy_requires_admin() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "read key should be forbidden: {body:?}");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "read key should be forbidden: {body:?}"
+    );
 
     // Admin key should succeed
     let (status, body) = json_request_with_header(
@@ -11489,8 +12381,15 @@ async fn f5_multi_approver_quorum_high_risk() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "partial approve failed: {partial:?}");
-    assert_eq!(partial["status"], "pending", "should stay pending with 1/3 approvers");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "partial approve failed: {partial:?}"
+    );
+    assert_eq!(
+        partial["status"], "pending",
+        "should stay pending with 1/3 approvers"
+    );
     assert_eq!(partial["approvers"].as_array().unwrap().len(), 1);
 }
 
@@ -11505,24 +12404,32 @@ async fn f5_multi_approver_quorum_with_authed_keys() {
 
     // Set policy: high_risk needs 3 approvers
     let (status, _) = json_request_with_header(
-        &app, "PUT", &format!("/api/v1/agents/{agent}/approval-policy"),
-        "authorization", &bearer("f5-quorum-admin"),
+        &app,
+        "PUT",
+        &format!("/api/v1/agents/{agent}/approval-policy"),
+        "authorization",
+        &bearer("f5-quorum-admin"),
         serde_json::json!({
             "low_risk": {"min_approvers": 1},
             "medium_risk": {"min_approvers": 2},
             "high_risk": {"min_approvers": 3},
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Create 3 admin keys
     let mut keys = Vec::new();
     for i in 1..=3 {
         let (status, kb) = json_request_with_header(
-            &app, "POST", "/api/v1/keys",
-            "authorization", &bearer("f5-quorum-admin"),
+            &app,
+            "POST",
+            "/api/v1/keys",
+            "authorization",
+            &bearer("f5-quorum-admin"),
             serde_json::json!({ "name": format!("approver-{i}"), "role": "admin" }),
-        ).await;
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED);
         keys.push(kb["raw_key"].as_str().unwrap().to_string());
     }
@@ -11531,18 +12438,25 @@ async fn f5_multi_approver_quorum_with_authed_keys() {
     let mut event_ids = Vec::new();
     for (_i, sig) in ["a signal", "b signal", "c signal"].iter().enumerate() {
         let (status, ev) = json_request_with_header(
-            &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
-            "authorization", &bearer("f5-quorum-admin"),
+            &app,
+            "POST",
+            &format!("/api/v1/agents/{agent}/experience"),
+            "authorization",
+            &bearer("f5-quorum-admin"),
             serde_json::json!({"category":"tone","signal":sig,"confidence":0.8}),
-        ).await;
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED);
         event_ids.push(ev["id"].as_str().unwrap().to_string());
     }
 
     // Create high-risk proposal
     let (status, proposal) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
-        "authorization", &bearer("f5-quorum-admin"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
+        "authorization",
+        &bearer("f5-quorum-admin"),
         serde_json::json!({
             "proposal": "major change",
             "candidate_core": {"persona": "bold"},
@@ -11550,44 +12464,61 @@ async fn f5_multi_approver_quorum_with_authed_keys() {
             "risk_level": "high",
             "source_event_ids": event_ids,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let pid = proposal["id"].as_str().unwrap();
 
     // Approve with key 1 → partial (1/3)
     let (status, p1) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
-        "authorization", &bearer(&keys[0]),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        "authorization",
+        &bearer(&keys[0]),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(p1["status"], "pending", "1/3 approvals → pending");
 
     // Approve with key 2 → partial (2/3)
     let (status, p2) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
-        "authorization", &bearer(&keys[1]),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        "authorization",
+        &bearer(&keys[1]),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(p2["status"], "pending", "2/3 approvals → pending");
 
     // Approve with key 3 → approved (3/3)
     let (status, p3) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
-        "authorization", &bearer(&keys[2]),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        "authorization",
+        &bearer(&keys[2]),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "final approve failed: {p3:?}");
     assert_eq!(p3["status"], "approved", "3/3 approvals → approved");
     assert_eq!(p3["approvers"].as_array().unwrap().len(), 3);
 
     // Verify identity was updated
     let (status, identity) = json_request_with_header(
-        &app, "GET", &format!("/api/v1/agents/{agent}/identity"),
-        "authorization", &bearer("f5-quorum-admin"),
+        &app,
+        "GET",
+        &format!("/api/v1/agents/{agent}/identity"),
+        "authorization",
+        &bearer("f5-quorum-admin"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(identity["core"]["persona"], "bold");
 }
@@ -11600,9 +12531,12 @@ async fn f5_conflict_analysis_endpoint() {
 
     // Add supporting experience
     let (_, ev1) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/experience"),
         serde_json::json!({"category":"tone","signal":"formal style works well","confidence":0.9}),
-    ).await;
+    )
+    .await;
     let (_, ev2) = json_request(
         &app, "POST", &format!("/api/v1/agents/{agent}/experience"),
         serde_json::json!({"category":"tone","signal":"formal approach preferred","confidence":0.85}),
@@ -11621,24 +12555,33 @@ async fn f5_conflict_analysis_endpoint() {
 
     // Create proposal about formal style
     let (status, proposal) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
         serde_json::json!({
             "proposal": "adopt formal communication style",
             "candidate_core": {"style": "formal communication"},
             "reason": "evidence",
             "source_event_ids": event_ids,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let pid = proposal["id"].as_str().unwrap();
 
     // Get conflict analysis
     let (status, analysis) = json_request(
-        &app, "GET",
+        &app,
+        "GET",
         &format!("/api/v1/agents/{agent}/promotions/{pid}/conflicts"),
         serde_json::json!({}),
-    ).await;
-    assert_eq!(status, StatusCode::OK, "conflict analysis failed: {analysis:?}");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "conflict analysis failed: {analysis:?}"
+    );
     assert_eq!(analysis["agent_id"], agent);
     assert_eq!(analysis["proposal_id"], pid);
     assert!(analysis["conflict_score"].is_number());
@@ -11655,26 +12598,34 @@ async fn f5_reject_promotion_records_audit() {
     let event_ids = create_three_experience_events(&app, agent).await;
 
     let (status, proposal) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
         serde_json::json!({
             "proposal": "test proposal",
             "candidate_core": {"mission": "new"},
             "reason": "test",
             "source_event_ids": event_ids,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let pid = proposal["id"].as_str().unwrap();
 
     let (status, rejected) = json_request(
-        &app, "POST",
+        &app,
+        "POST",
         &format!("/api/v1/agents/{agent}/promotions/{pid}/reject"),
         serde_json::json!({"reason": "not convinced"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "reject failed: {rejected:?}");
     assert_eq!(rejected["status"], "rejected");
     assert!(rejected["rejected_at"].is_string());
-    assert!(rejected["reason"].as_str().unwrap().contains("not convinced"));
+    assert!(rejected["reason"]
+        .as_str()
+        .unwrap()
+        .contains("not convinced"));
 }
 
 // F5-INT-09: Duplicate approver is deduplicated
@@ -11685,45 +12636,60 @@ async fn f5_duplicate_approver_deduplicated() {
 
     // Set policy: medium needs 2 approvers
     let (status, _) = json_request(
-        &app, "PUT", &format!("/api/v1/agents/{agent}/approval-policy"),
+        &app,
+        "PUT",
+        &format!("/api/v1/agents/{agent}/approval-policy"),
         serde_json::json!({
             "low_risk": {"min_approvers": 1},
             "medium_risk": {"min_approvers": 2},
             "high_risk": {"min_approvers": 3},
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     let event_ids = create_three_experience_events(&app, agent).await;
 
     let (status, proposal) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
         serde_json::json!({
             "proposal": "test",
             "candidate_core": {"mission": "new"},
             "reason": "test",
             "source_event_ids": event_ids,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let pid = proposal["id"].as_str().unwrap();
 
     // Approve twice with the same caller (bootstrap) — should remain at 1 approver
     let (status, p1) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(p1["approvers"].as_array().unwrap().len(), 1);
 
     let (status, p2) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     // Still 1 approver (deduplicated)
     assert_eq!(p2["approvers"].as_array().unwrap().len(), 1);
-    assert_eq!(p2["status"], "pending", "still pending — need 2, have 1 unique");
+    assert_eq!(
+        p2["status"], "pending",
+        "still pending — need 2, have 1 unique"
+    );
 }
 
 // F5-INT-10: Approving an already-approved proposal fails
@@ -11734,30 +12700,43 @@ async fn f5_approve_already_approved_fails() {
     let event_ids = create_three_experience_events(&app, agent).await;
 
     let (status, proposal) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
         serde_json::json!({
             "proposal": "test",
             "candidate_core": {"mission": "new"},
             "reason": "test",
             "source_event_ids": event_ids,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let pid = proposal["id"].as_str().unwrap();
 
     // Approve
     let (status, _) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Second approval attempt should fail
     let (status, body) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions/{pid}/approve"),
         serde_json::json!({}),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "double approve should fail: {body:?}");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "double approve should fail: {body:?}"
+    );
 }
 
 // F5-INT-11: Expired status serde in list promotions
@@ -11768,22 +12747,27 @@ async fn f5_expired_status_visible_in_list() {
     let event_ids = create_three_experience_events(&app, agent).await;
 
     let (status, _proposal) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
         serde_json::json!({
             "proposal": "test",
             "candidate_core": {"mission": "new"},
             "reason": "test",
             "source_event_ids": event_ids,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // List promotions and verify the new one appears as pending with empty approvers
     let (status, list) = json_request(
-        &app, "GET",
+        &app,
+        "GET",
         &format!("/api/v1/agents/{agent}/promotions"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let proposals = list.as_array().unwrap();
     assert!(!proposals.is_empty());
@@ -11821,22 +12805,27 @@ async fn f5_conflict_analysis_no_relevant_events() {
 
     // Create proposal about billing (unrelated to greeting events)
     let (status, proposal) = json_request(
-        &app, "POST", &format!("/api/v1/agents/{agent}/promotions"),
+        &app,
+        "POST",
+        &format!("/api/v1/agents/{agent}/promotions"),
         serde_json::json!({
             "proposal": "add billing expertise",
             "candidate_core": {"capabilities": ["billing", "refunds"]},
             "reason": "expanding capabilities",
             "source_event_ids": event_ids,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let pid = proposal["id"].as_str().unwrap();
 
     let (status, analysis) = json_request(
-        &app, "GET",
+        &app,
+        "GET",
         &format!("/api/v1/agents/{agent}/promotions/{pid}/conflicts"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(analysis["conflict_score"], 0.0);
     assert_eq!(analysis["recommendation"], "proceed");
@@ -11847,11 +12836,23 @@ async fn f5_conflict_analysis_no_relevant_events() {
 async fn f5_webhook_event_types_include_promotion_types() {
     // Verify the new webhook event types serialize correctly
     let types = vec![
-        ("promotion_proposed", serde_json::json!("promotion_proposed")),
-        ("promotion_approved", serde_json::json!("promotion_approved")),
-        ("promotion_rejected", serde_json::json!("promotion_rejected")),
+        (
+            "promotion_proposed",
+            serde_json::json!("promotion_proposed"),
+        ),
+        (
+            "promotion_approved",
+            serde_json::json!("promotion_approved"),
+        ),
+        (
+            "promotion_rejected",
+            serde_json::json!("promotion_rejected"),
+        ),
         ("promotion_expired", serde_json::json!("promotion_expired")),
-        ("promotion_conflict_detected", serde_json::json!("promotion_conflict_detected")),
+        (
+            "promotion_conflict_detected",
+            serde_json::json!("promotion_conflict_detected"),
+        ),
     ];
 
     use mnemo_server::state::MemoryWebhookEventType;
@@ -11865,7 +12866,11 @@ async fn f5_webhook_event_types_include_promotion_types() {
 
     for (expected_str, variant) in types.iter().zip(variants.iter()) {
         let serialized = serde_json::to_value(variant).unwrap();
-        assert_eq!(&serialized, &expected_str.1, "webhook event type mismatch for {}", expected_str.0);
+        assert_eq!(
+            &serialized, &expected_str.1,
+            "webhook event type mismatch for {}",
+            expected_str.0
+        );
     }
 }
 
@@ -11904,7 +12909,11 @@ async fn f6_create_memory_region() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "create region failed: {body:?}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create region failed: {body:?}"
+    );
     assert_eq!(body["name"], "shared_customer_context");
     assert_eq!(body["owner_agent_id"], "support-bot");
     assert_eq!(body["classification_ceiling"], "confidential");
@@ -12087,13 +13096,19 @@ async fn f6_list_region_acls() {
 
     // Grant access to two agents
     json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({"agent_id": "sales-bot", "permission": "read"}),
-    ).await;
+    )
+    .await;
     json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({"agent_id": "billing-bot", "permission": "write"}),
-    ).await;
+    )
+    .await;
 
     let (status, acls) = json_request(
         &app,
@@ -12128,9 +13143,12 @@ async fn f6_revoke_region_access() {
 
     // Grant then revoke
     json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({"agent_id": "sales-bot", "permission": "read"}),
-    ).await;
+    )
+    .await;
 
     let (status, _) = json_request(
         &app,
@@ -12208,8 +13226,18 @@ async fn f6_create_region_with_filters() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "create filtered failed: {body:?}");
-    assert_eq!(body["entity_filter"]["entity_types"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create filtered failed: {body:?}"
+    );
+    assert_eq!(
+        body["entity_filter"]["entity_types"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(body["edge_filter"]["labels"].as_array().unwrap().len(), 2);
     assert_eq!(body["edge_filter"]["min_confidence"], 0.7);
 }
@@ -12222,21 +13250,27 @@ async fn f6_list_regions_by_agent() {
 
     // Create two regions owned by different agents
     json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "bot_a_region",
             "owner_agent_id": "f6-list-bot-a",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "bot_b_region",
             "owner_agent_id": "f6-list-bot-b",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
 
     // List for bot-a should return 1
     let (status, body) = json_request(
@@ -12248,7 +13282,9 @@ async fn f6_list_regions_by_agent() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let regions = body.as_array().unwrap();
-    assert!(regions.iter().all(|r| r["owner_agent_id"] == "f6-list-bot-a"));
+    assert!(regions
+        .iter()
+        .all(|r| r["owner_agent_id"] == "f6-list-bot-a"));
 }
 
 // F6-INT-12: Delete region cleans up ACLs
@@ -12258,39 +13294,54 @@ async fn f6_delete_region_cleans_up_acls() {
     let user_id = create_test_user(&app, "f6-user-12").await;
 
     let (_, created) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "cleanup_test",
             "owner_agent_id": "bot-a",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = created["id"].as_str().unwrap();
 
     // Grant access
     json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({"agent_id": "bot-b", "permission": "read"}),
-    ).await;
+    )
+    .await;
 
     // Delete region
     let (status, _) = json_request(
-        &app, "DELETE", &format!("/api/v1/regions/{region_id}"),
+        &app,
+        "DELETE",
+        &format!("/api/v1/regions/{region_id}"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     // Verify region and ACLs are gone
     let (status, _) = json_request(
-        &app, "GET", &format!("/api/v1/regions/{region_id}"),
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{region_id}"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     let (status, _) = json_request(
-        &app, "GET", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -12301,23 +13352,29 @@ async fn f6_grant_access_with_expiry() {
     let user_id = create_test_user(&app, "f6-user-13").await;
 
     let (_, created) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "expiry_test",
             "owner_agent_id": "bot-a",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = created["id"].as_str().unwrap();
 
     let (status, acl) = json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({
             "agent_id": "bot-b",
             "permission": "read",
             "expires_at": "2099-12-31T23:59:59Z",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     assert!(acl["expires_at"].is_string());
 }
@@ -12329,14 +13386,21 @@ async fn f6_create_region_empty_name_rejected() {
     let user_id = create_test_user(&app, "f6-user-14").await;
 
     let (status, body) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "",
             "owner_agent_id": "bot-a",
             "user_id": user_id,
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "empty name should fail: {body:?}");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "empty name should fail: {body:?}"
+    );
 }
 
 // F6-INT-15: Grant access with empty agent_id rejected
@@ -12346,20 +13410,30 @@ async fn f6_grant_empty_agent_id_rejected() {
     let user_id = create_test_user(&app, "f6-user-15").await;
 
     let (_, created) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "empty_agent_test",
             "owner_agent_id": "bot-a",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = created["id"].as_str().unwrap();
 
     let (status, body) = json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({"agent_id": "", "permission": "read"}),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "empty agent_id should fail: {body:?}");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "empty agent_id should fail: {body:?}"
+    );
 }
 
 // F6-INT-16: RBAC — delete region requires Admin
@@ -12370,46 +13444,70 @@ async fn f6_delete_region_requires_admin() {
 
     // Create a read key
     let (_, key_body) = json_request_with_header(
-        &app, "POST", "/api/v1/keys",
-        "authorization", "Bearer f6-admin-key",
+        &app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        "Bearer f6-admin-key",
         serde_json::json!({"name": "f6-write-key", "role": "write"}),
-    ).await;
+    )
+    .await;
     let write_key = key_body["raw_key"].as_str().unwrap().to_string();
 
     // Create user and region
     let (_, user_body) = json_request_with_header(
-        &app, "POST", "/api/v1/users",
-        "authorization", "Bearer f6-admin-key",
+        &app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        "Bearer f6-admin-key",
         serde_json::json!({"external_id": "f6-rbac-user", "name": "f6-rbac-user"}),
-    ).await;
+    )
+    .await;
     let user_id = user_body["id"].as_str().unwrap();
 
     let (status, created) = json_request_with_header(
-        &app, "POST", "/api/v1/regions",
-        "authorization", "Bearer f6-admin-key",
+        &app,
+        "POST",
+        "/api/v1/regions",
+        "authorization",
+        "Bearer f6-admin-key",
         serde_json::json!({
             "name": "rbac_delete_test",
             "owner_agent_id": "bot-a",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let region_id = created["id"].as_str().unwrap();
 
     // Write key should be forbidden from deleting
     let (status, body) = json_request_with_header(
-        &app, "DELETE", &format!("/api/v1/regions/{region_id}"),
-        "authorization", &format!("Bearer {write_key}"),
+        &app,
+        "DELETE",
+        &format!("/api/v1/regions/{region_id}"),
+        "authorization",
+        &format!("Bearer {write_key}"),
         serde_json::json!({}),
-    ).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "write key should be forbidden: {body:?}");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "write key should be forbidden: {body:?}"
+    );
 
     // Admin key should succeed
     let (status, _) = json_request_with_header(
-        &app, "DELETE", &format!("/api/v1/regions/{region_id}"),
-        "authorization", "Bearer f6-admin-key",
+        &app,
+        "DELETE",
+        &format!("/api/v1/regions/{region_id}"),
+        "authorization",
+        "Bearer f6-admin-key",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
@@ -12420,34 +13518,46 @@ async fn f6_upsert_acl_replaces_permission() {
     let user_id = create_test_user(&app, "f6-user-17").await;
 
     let (_, created) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "upsert_test",
             "owner_agent_id": "bot-a",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = created["id"].as_str().unwrap();
 
     // Grant Read
     json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({"agent_id": "bot-b", "permission": "read"}),
-    ).await;
+    )
+    .await;
 
     // Upgrade to Write
     let (status, acl) = json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({"agent_id": "bot-b", "permission": "write"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(acl["permission"], "write");
 
     // Verify only 1 ACL entry (not duplicated)
     let (_, acls) = json_request(
-        &app, "GET", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(acls.as_array().unwrap().len(), 1);
     assert_eq!(acls[0]["permission"], "write");
 }
@@ -12457,46 +13567,46 @@ async fn f6_upsert_acl_replaces_permission() {
 // ═══════════════════════════════════════════════════════════════════
 
 /// Helper: create a user using an authed app
-async fn create_test_user_authed(
-    app: &axum::Router,
-    admin_key: &str,
-    external_id: &str,
-) -> String {
+async fn create_test_user_authed(app: &axum::Router, admin_key: &str, external_id: &str) -> String {
     let (status, body) = json_request_with_header(
-        app, "POST", "/api/v1/users",
-        "authorization", &format!("Bearer {admin_key}"),
+        app,
+        "POST",
+        "/api/v1/users",
+        "authorization",
+        &format!("Bearer {admin_key}"),
         serde_json::json!({"external_id": external_id, "name": external_id}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "create user failed: {body:?}");
     body["id"].as_str().unwrap().to_string()
 }
 
 /// Helper: create a write key with a specific name (used as owner identity)
-async fn create_named_write_key(
-    app: &axum::Router,
-    admin_key: &str,
-    name: &str,
-) -> String {
+async fn create_named_write_key(app: &axum::Router, admin_key: &str, name: &str) -> String {
     let (status, body) = json_request_with_header(
-        app, "POST", "/api/v1/keys",
-        "authorization", &format!("Bearer {admin_key}"),
+        app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        &format!("Bearer {admin_key}"),
         serde_json::json!({"name": name, "role": "write"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "create key failed: {body:?}");
     body["raw_key"].as_str().unwrap().to_string()
 }
 
 /// Helper: create a read key
-async fn create_read_key(
-    app: &axum::Router,
-    admin_key: &str,
-    name: &str,
-) -> String {
+async fn create_read_key(app: &axum::Router, admin_key: &str, name: &str) -> String {
     let (status, body) = json_request_with_header(
-        app, "POST", "/api/v1/keys",
-        "authorization", &format!("Bearer {admin_key}"),
+        app,
+        "POST",
+        "/api/v1/keys",
+        "authorization",
+        &format!("Bearer {admin_key}"),
         serde_json::json!({"name": name, "role": "read"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "create key failed: {body:?}");
     body["raw_key"].as_str().unwrap().to_string()
 }
@@ -12510,14 +13620,18 @@ async fn f6_rt_read_key_cannot_create_region() {
     let user_id = create_test_user_authed(&app, &admin_key, "rt-user-01").await;
 
     let (status, _) = json_request_with_header(
-        &app, "POST", "/api/v1/regions",
-        "authorization", &format!("Bearer {read_key}"),
+        &app,
+        "POST",
+        "/api/v1/regions",
+        "authorization",
+        &format!("Bearer {read_key}"),
         serde_json::json!({
             "name": "stolen_region",
             "owner_agent_id": "read-agent",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
@@ -12531,21 +13645,29 @@ async fn f6_rt_read_key_cannot_grant_acl() {
 
     // Admin creates a region
     let (_, region) = json_request_with_header(
-        &app, "POST", "/api/v1/regions",
-        "authorization", &format!("Bearer {admin_key}"),
+        &app,
+        "POST",
+        "/api/v1/regions",
+        "authorization",
+        &format!("Bearer {admin_key}"),
         serde_json::json!({
             "name": "protected_region",
             "owner_agent_id": "rt-admin-02",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = region["id"].as_str().unwrap();
 
     let (status, _) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
-        "authorization", &format!("Bearer {read_key}"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization",
+        &format!("Bearer {read_key}"),
         serde_json::json!({"agent_id": "evil-bot", "permission": "manage"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
@@ -12560,24 +13682,36 @@ async fn f6_rt_nonowner_cannot_grant_acl() {
 
     // Owner creates a region
     let (status, region) = json_request_with_header(
-        &app, "POST", "/api/v1/regions",
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "POST",
+        "/api/v1/regions",
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({
             "name": "owners_region",
             "owner_agent_id": "owner-bot",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let region_id = region["id"].as_str().unwrap();
 
     // Attacker tries to grant themselves access
     let (status, _) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
-        "authorization", &format!("Bearer {attacker_key}"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization",
+        &format!("Bearer {attacker_key}"),
         serde_json::json!({"agent_id": "attacker-bot", "permission": "manage"}),
-    ).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "non-owner should not be able to grant ACLs");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-owner should not be able to grant ACLs"
+    );
 }
 
 // RT-04: Non-owner write key cannot revoke ACLs
@@ -12591,30 +13725,46 @@ async fn f6_rt_nonowner_cannot_revoke_acl() {
 
     // Owner creates region and grants access to a legit agent
     let (_, region) = json_request_with_header(
-        &app, "POST", "/api/v1/regions",
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "POST",
+        "/api/v1/regions",
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({
             "name": "owners_region_04",
             "owner_agent_id": "owner-bot-04",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = region["id"].as_str().unwrap();
 
     let (status, _) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({"agent_id": "legit-agent", "permission": "read"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Attacker tries to revoke legit agent's access
     let (status, _) = json_request_with_header(
-        &app, "DELETE", &format!("/api/v1/regions/{region_id}/acl/legit-agent"),
-        "authorization", &format!("Bearer {attacker_key}"),
+        &app,
+        "DELETE",
+        &format!("/api/v1/regions/{region_id}/acl/legit-agent"),
+        "authorization",
+        &format!("Bearer {attacker_key}"),
         serde_json::json!({}),
-    ).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "non-owner should not be able to revoke ACLs");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-owner should not be able to revoke ACLs"
+    );
 }
 
 // RT-05: Non-owner write key cannot update a region
@@ -12627,24 +13777,36 @@ async fn f6_rt_nonowner_cannot_update_region() {
     let user_id = create_test_user_authed(&app, &admin_key, "rt-user-05").await;
 
     let (_, region) = json_request_with_header(
-        &app, "POST", "/api/v1/regions",
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "POST",
+        "/api/v1/regions",
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({
             "name": "immutable_region",
             "owner_agent_id": "owner-bot-05",
             "user_id": user_id,
             "classification_ceiling": "confidential",
         }),
-    ).await;
+    )
+    .await;
     let region_id = region["id"].as_str().unwrap();
 
     // Attacker tries to widen classification ceiling
     let (status, _) = json_request_with_header(
-        &app, "PUT", &format!("/api/v1/regions/{region_id}"),
-        "authorization", &format!("Bearer {attacker_key}"),
+        &app,
+        "PUT",
+        &format!("/api/v1/regions/{region_id}"),
+        "authorization",
+        &format!("Bearer {attacker_key}"),
         serde_json::json!({"classification_ceiling": "restricted"}),
-    ).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "non-owner should not be able to update region");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-owner should not be able to update region"
+    );
 }
 
 // RT-06: Owner CAN grant, update, and revoke on their own region
@@ -12656,39 +13818,55 @@ async fn f6_rt_owner_can_manage_own_region() {
     let user_id = create_test_user_authed(&app, &admin_key, "rt-user-06").await;
 
     let (status, region) = json_request_with_header(
-        &app, "POST", "/api/v1/regions",
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "POST",
+        "/api/v1/regions",
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({
             "name": "managed_region",
             "owner_agent_id": "owner-bot-06",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let region_id = region["id"].as_str().unwrap();
 
     // Owner grants access
     let (status, _) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({"agent_id": "helper-bot", "permission": "write"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Owner updates region
     let (status, _) = json_request_with_header(
-        &app, "PUT", &format!("/api/v1/regions/{region_id}"),
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "PUT",
+        &format!("/api/v1/regions/{region_id}"),
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({"name": "renamed_region"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Owner revokes access
     let (status, _) = json_request_with_header(
-        &app, "DELETE", &format!("/api/v1/regions/{region_id}/acl/helper-bot"),
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "DELETE",
+        &format!("/api/v1/regions/{region_id}/acl/helper-bot"),
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
@@ -12701,30 +13879,42 @@ async fn f6_rt_admin_can_manage_any_region() {
     let user_id = create_test_user_authed(&app, &admin_key, "rt-user-07").await;
 
     let (_, region) = json_request_with_header(
-        &app, "POST", "/api/v1/regions",
-        "authorization", &format!("Bearer {owner_key}"),
+        &app,
+        "POST",
+        "/api/v1/regions",
+        "authorization",
+        &format!("Bearer {owner_key}"),
         serde_json::json!({
             "name": "any_region",
             "owner_agent_id": "owner-bot-07",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = region["id"].as_str().unwrap();
 
     // Admin grants access on someone else's region
     let (status, _) = json_request_with_header(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
-        "authorization", &format!("Bearer {admin_key}"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
+        "authorization",
+        &format!("Bearer {admin_key}"),
         serde_json::json!({"agent_id": "admin-agent", "permission": "manage"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // Admin revokes
     let (status, _) = json_request_with_header(
-        &app, "DELETE", &format!("/api/v1/regions/{region_id}/acl/admin-agent"),
-        "authorization", &format!("Bearer {admin_key}"),
+        &app,
+        "DELETE",
+        &format!("/api/v1/regions/{region_id}/acl/admin-agent"),
+        "authorization",
+        &format!("Bearer {admin_key}"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
@@ -12736,15 +13926,21 @@ async fn f6_rt_agent_id_colon_injection_rejected() {
 
     // owner_agent_id with colon
     let (status, _) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "injection_test",
             "owner_agent_id": "evil:agent_regions:victim",
             "user_id": user_id,
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST,
-        "colon in owner_agent_id should be rejected");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "colon in owner_agent_id should be rejected"
+    );
 }
 
 // RT-09: Agent ID with path traversal is rejected
@@ -12754,15 +13950,21 @@ async fn f6_rt_agent_id_path_traversal_rejected() {
     let user_id = create_test_user(&app, "rt-user-09").await;
 
     let (status, _) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "traversal_test",
             "owner_agent_id": "../../../etc/passwd",
             "user_id": user_id,
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST,
-        "path traversal in owner_agent_id should be rejected");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "path traversal in owner_agent_id should be rejected"
+    );
 }
 
 // RT-10: Agent ID with null byte is rejected
@@ -12772,15 +13974,21 @@ async fn f6_rt_agent_id_null_byte_rejected() {
     let user_id = create_test_user(&app, "rt-user-10").await;
 
     let (status, _) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "null_test",
             "owner_agent_id": "bot\u{0000}hidden",
             "user_id": user_id,
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST,
-        "null byte in owner_agent_id should be rejected");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "null byte in owner_agent_id should be rejected"
+    );
 }
 
 // RT-11: Grant ACL with injected agent_id is rejected
@@ -12790,21 +13998,30 @@ async fn f6_rt_grant_acl_agent_id_injection_rejected() {
     let user_id = create_test_user(&app, "rt-user-11").await;
 
     let (_, region) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "acl_inject_test",
             "owner_agent_id": "safe-bot",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = region["id"].as_str().unwrap();
 
     let (status, _) = json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({"agent_id": "evil:key:injection", "permission": "manage"}),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST,
-        "colon in grant agent_id should be rejected");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "colon in grant agent_id should be rejected"
+    );
 }
 
 // RT-12: Create region with nonexistent user_id is rejected
@@ -12814,15 +14031,21 @@ async fn f6_rt_create_region_nonexistent_user_rejected() {
     let fake_user_id = Uuid::from_u128(999_999);
 
     let (status, _) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "orphan_region",
             "owner_agent_id": "some-bot",
             "user_id": fake_user_id,
         }),
-    ).await;
-    assert_eq!(status, StatusCode::NOT_FOUND,
-        "creating a region for a nonexistent user should fail");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "creating a region for a nonexistent user should fail"
+    );
 }
 
 // RT-13: Expired ACLs are not returned by list_region_acls
@@ -12832,34 +14055,46 @@ async fn f6_rt_expired_acls_filtered_from_list() {
     let user_id = create_test_user(&app, "rt-user-13").await;
 
     let (_, region) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "expiry_test",
             "owner_agent_id": "bot-owner",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let region_id = region["id"].as_str().unwrap();
 
     // Grant with already-expired timestamp
     let (status, _) = json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({
             "agent_id": "temp-bot",
             "permission": "read",
             "expires_at": "2020-01-01T00:00:00Z",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // List should NOT include the expired ACL
     let (status, acls) = json_request(
-        &app, "GET", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "GET",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(acls.as_array().unwrap().len(), 0,
-        "expired ACLs should be filtered from listing");
+    assert_eq!(
+        acls.as_array().unwrap().len(),
+        0,
+        "expired ACLs should be filtered from listing"
+    );
 }
 
 // RT-14: Expired ACLs don't appear in list_regions(agent_id) either
@@ -12869,35 +14104,47 @@ async fn f6_rt_expired_acl_agent_not_in_region_listing() {
     let user_id = create_test_user(&app, "rt-user-14").await;
 
     let (_, region) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "listing_expiry_test",
             "owner_agent_id": "bot-owner-14",
             "user_id": user_id,
         }),
-    ).await;
+    )
+    .await;
     let _region_id = region["id"].as_str().unwrap();
 
     // Grant with already-expired timestamp
     let region_id = region["id"].as_str().unwrap();
     let (status, _) = json_request(
-        &app, "POST", &format!("/api/v1/regions/{region_id}/acl"),
+        &app,
+        "POST",
+        &format!("/api/v1/regions/{region_id}/acl"),
         serde_json::json!({
             "agent_id": "expired-bot",
             "permission": "write",
             "expires_at": "2020-01-01T00:00:00Z",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // expired-bot should NOT see this region in their listing
     let (status, regions) = json_request(
-        &app, "GET", "/api/v1/regions?agent_id=expired-bot",
+        &app,
+        "GET",
+        "/api/v1/regions?agent_id=expired-bot",
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(regions.as_array().unwrap().len(), 0,
-        "expired ACL should not cause region to appear in agent listing");
+    assert_eq!(
+        regions.as_array().unwrap().len(),
+        0,
+        "expired ACL should not cause region to appear in agent listing"
+    );
 }
 
 // RT-15: Empty owner_agent_id is rejected
@@ -12907,15 +14154,21 @@ async fn f6_rt_empty_owner_agent_id_rejected() {
     let user_id = create_test_user(&app, "rt-user-15").await;
 
     let (status, _) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "empty_owner_test",
             "owner_agent_id": "",
             "user_id": user_id,
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST,
-        "empty owner_agent_id should be rejected");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "empty owner_agent_id should be rejected"
+    );
 }
 
 // RT-16: Unicode in agent_id is rejected (prevents key encoding issues)
@@ -12925,15 +14178,21 @@ async fn f6_rt_unicode_agent_id_rejected() {
     let user_id = create_test_user(&app, "rt-user-16").await;
 
     let (status, _) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "unicode_test",
             "owner_agent_id": "böt-ünïcödé",
             "user_id": user_id,
         }),
-    ).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST,
-        "unicode in owner_agent_id should be rejected");
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unicode in owner_agent_id should be rejected"
+    );
 }
 
 // RT-17: list_regions with user_id filter scopes correctly
@@ -12945,30 +14204,39 @@ async fn f6_rt_list_regions_user_scoped() {
 
     // Create a region for each user
     let (status, _) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "region_user_a",
             "owner_agent_id": "bot-a",
             "user_id": user_a,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, _) = json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "region_user_b",
             "owner_agent_id": "bot-b",
             "user_id": user_b,
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // List regions for user_a only
     let (status, regions) = json_request(
-        &app, "GET", &format!("/api/v1/regions?user_id={user_a}"),
+        &app,
+        "GET",
+        &format!("/api/v1/regions?user_id={user_a}"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let arr = regions.as_array().unwrap();
     assert_eq!(arr.len(), 1, "should only see user_a's region");
@@ -12976,9 +14244,12 @@ async fn f6_rt_list_regions_user_scoped() {
 
     // List regions for user_b only
     let (status, regions) = json_request(
-        &app, "GET", &format!("/api/v1/regions?user_id={user_b}"),
+        &app,
+        "GET",
+        &format!("/api/v1/regions?user_id={user_b}"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let arr = regions.as_array().unwrap();
     assert_eq!(arr.len(), 1, "should only see user_b's region");
@@ -12994,28 +14265,37 @@ async fn f6_rt_list_regions_user_and_agent_scoped() {
 
     // Same agent owns regions for different users
     json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "combo_region_a",
             "owner_agent_id": "shared-bot",
             "user_id": user_a,
         }),
-    ).await;
+    )
+    .await;
 
     json_request(
-        &app, "POST", "/api/v1/regions",
+        &app,
+        "POST",
+        "/api/v1/regions",
         serde_json::json!({
             "name": "combo_region_b",
             "owner_agent_id": "shared-bot",
             "user_id": user_b,
         }),
-    ).await;
+    )
+    .await;
 
     // Filter by agent + user_a → should only see user_a's region
     let (status, regions) = json_request(
-        &app, "GET", &format!("/api/v1/regions?agent_id=shared-bot&user_id={user_a}"),
+        &app,
+        "GET",
+        &format!("/api/v1/regions?agent_id=shared-bot&user_id={user_a}"),
         serde_json::json!({}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let arr = regions.as_array().unwrap();
     assert_eq!(arr.len(), 1);
@@ -13029,17 +14309,21 @@ async fn f6_rt_lazy_cleanup_expired_acls() {
         enabled: false,
         scan_limit: 400,
         relax_if_empty: false,
-    }).await;
+    })
+    .await;
 
     // Create user and region directly via store
     let user_id = Uuid::now_v7();
-    store.create_user(mnemo_core::models::user::CreateUserRequest {
-        id: Some(user_id),
-        external_id: Some("cleanup-user".into()),
-        name: "cleanup-user".into(),
-        email: None,
-        metadata: serde_json::json!({}),
-    }).await.unwrap();
+    store
+        .create_user(mnemo_core::models::user::CreateUserRequest {
+            id: Some(user_id),
+            external_id: Some("cleanup-user".into()),
+            name: "cleanup-user".into(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
 
     let region_id = Uuid::now_v7();
     let region = mnemo_core::models::region::MemoryRegion {
@@ -13071,15 +14355,21 @@ async fn f6_rt_lazy_cleanup_expired_acls() {
     assert_eq!(raw_acls.len(), 1, "raw list should have the expired ACL");
 
     // list_agent_accessible_regions triggers lazy cleanup
-    let accessible = store.list_agent_accessible_regions("expired-agent").await.unwrap();
+    let accessible = store
+        .list_agent_accessible_regions("expired-agent")
+        .await
+        .unwrap();
     assert_eq!(accessible.len(), 0, "expired ACL should not grant access");
 
     // After lazy cleanup, the raw ACL list should be empty
     // Give Redis a moment to process the pipeline
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let raw_acls_after = store.list_region_acls(region_id).await.unwrap();
-    assert_eq!(raw_acls_after.len(), 0,
-        "lazy cleanup should have removed the expired ACL entry");
+    assert_eq!(
+        raw_acls_after.len(),
+        0,
+        "lazy cleanup should have removed the expired ACL entry"
+    );
 }
 
 // RT-20: delete_region atomically removes all indices (verify via raw store)
@@ -13089,16 +14379,20 @@ async fn f6_rt_delete_region_cleans_all_indices() {
         enabled: false,
         scan_limit: 400,
         relax_if_empty: false,
-    }).await;
+    })
+    .await;
 
     let user_id = Uuid::now_v7();
-    store.create_user(mnemo_core::models::user::CreateUserRequest {
-        id: Some(user_id),
-        external_id: Some("idx-user".into()),
-        name: "idx-user".into(),
-        email: None,
-        metadata: serde_json::json!({}),
-    }).await.unwrap();
+    store
+        .create_user(mnemo_core::models::user::CreateUserRequest {
+            id: Some(user_id),
+            external_id: Some("idx-user".into()),
+            name: "idx-user".into(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
 
     let region_id = Uuid::now_v7();
     let region = mnemo_core::models::region::MemoryRegion {
@@ -13126,9 +14420,15 @@ async fn f6_rt_delete_region_cleans_all_indices() {
     store.grant_region_access(&acl).await.unwrap();
 
     // Verify region appears in listings
-    let owner_regions = store.list_agent_accessible_regions("idx-owner").await.unwrap();
+    let owner_regions = store
+        .list_agent_accessible_regions("idx-owner")
+        .await
+        .unwrap();
     assert_eq!(owner_regions.len(), 1);
-    let guest_regions = store.list_agent_accessible_regions("guest-agent").await.unwrap();
+    let guest_regions = store
+        .list_agent_accessible_regions("guest-agent")
+        .await
+        .unwrap();
     assert_eq!(guest_regions.len(), 1);
     let user_regions = store.list_regions(Some(user_id), None).await.unwrap();
     assert_eq!(user_regions.len(), 1);
@@ -13137,11 +14437,19 @@ async fn f6_rt_delete_region_cleans_all_indices() {
     store.delete_region(region_id).await.unwrap();
 
     // Verify complete cleanup
-    assert!(store.get_region(region_id).await.unwrap().is_none(),
-        "region document should be gone");
-    let owner_regions = store.list_agent_accessible_regions("idx-owner").await.unwrap();
+    assert!(
+        store.get_region(region_id).await.unwrap().is_none(),
+        "region document should be gone"
+    );
+    let owner_regions = store
+        .list_agent_accessible_regions("idx-owner")
+        .await
+        .unwrap();
     assert_eq!(owner_regions.len(), 0, "owner index should be clean");
-    let guest_regions = store.list_agent_accessible_regions("guest-agent").await.unwrap();
+    let guest_regions = store
+        .list_agent_accessible_regions("guest-agent")
+        .await
+        .unwrap();
     assert_eq!(guest_regions.len(), 0, "guest agent index should be clean");
     let user_regions = store.list_regions(Some(user_id), None).await.unwrap();
     assert_eq!(user_regions.len(), 0, "user index should be clean");

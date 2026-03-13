@@ -18,32 +18,43 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use mnemo_core::models::api_key::{CallerContext, hash_api_key};
+use mnemo_core::models::api_key::{hash_api_key, CallerContext};
 use mnemo_core::models::context::{
     ContextMessage as CoreContextMessage, ContextRequest as CoreContextRequest,
 };
 use mnemo_core::models::episode::{CreateEpisodeRequest as CoreCreateEpisodeRequest, EpisodeType};
-use mnemo_core::traits::storage::{ApiKeyStore, EdgeStore, EntityStore, EpisodeStore, SessionStore};
+use mnemo_core::traits::storage::{
+    ApiKeyStore, EdgeStore, EntityStore, EpisodeStore, SessionStore,
+};
 use mnemo_storage::redis_store::RedisStateStore;
 
 use mnemo_proto::proto::{
-    // Memory service
-    memory_service_server::MemoryService,
-    EntitySummary, FactSummary, GetContextRequest,
-    GetContextResponse,
-    CreateEpisodeRequest, Episode as ProtoEpisode,
-    ListEpisodesRequest, ListEpisodesResponse,
-    DeleteEpisodeRequest, DeleteEpisodeResponse,
-    // Entity service
-    entity_service_server::EntityService,
-    ListEntitiesRequest, ListEntitiesResponse,
-    GetEntityRequest, Entity as ProtoEntity,
     // Edge service
     edge_service_server::EdgeService,
-    QueryEdgesRequest, QueryEdgesResponse,
-    GetEdgeRequest, Edge as ProtoEdge,
+    // Entity service
+    entity_service_server::EntityService,
+    // Memory service
+    memory_service_server::MemoryService,
     // Common
     Classification as ProtoClassification,
+    CreateEpisodeRequest,
+    DeleteEpisodeRequest,
+    DeleteEpisodeResponse,
+    Edge as ProtoEdge,
+    Entity as ProtoEntity,
+    EntitySummary,
+    Episode as ProtoEpisode,
+    FactSummary,
+    GetContextRequest,
+    GetContextResponse,
+    GetEdgeRequest,
+    GetEntityRequest,
+    ListEntitiesRequest,
+    ListEntitiesResponse,
+    ListEpisodesRequest,
+    ListEpisodesResponse,
+    QueryEdgesRequest,
+    QueryEdgesResponse,
 };
 
 use crate::middleware::AuthConfig;
@@ -275,9 +286,7 @@ fn storage_err_to_status(e: mnemo_core::error::MnemoError) -> Status {
     }
 }
 
-fn reranker_for_state(
-    mode: &crate::state::RerankerMode,
-) -> mnemo_retrieval::Reranker {
+fn reranker_for_state(mode: &crate::state::RerankerMode) -> mnemo_retrieval::Reranker {
     match mode {
         crate::state::RerankerMode::Rrf => mnemo_retrieval::Reranker::Rrf,
         crate::state::RerankerMode::Mmr => mnemo_retrieval::Reranker::Mmr,
@@ -358,9 +367,7 @@ impl MemoryService for GrpcState {
             .collect();
 
         if messages.is_empty() {
-            return Err(Status::invalid_argument(
-                "at least one message is required",
-            ));
+            return Err(Status::invalid_argument("at least one message is required"));
         }
 
         let session_id = req
@@ -460,7 +467,9 @@ impl MemoryService for GrpcState {
             facts,
             token_count: block.token_count as i32,
             latency_ms: block.latency_ms,
-            routing_decision: block.routing_decision.map(|rd| serde_json::to_string(&rd).unwrap_or_default()),
+            routing_decision: block
+                .routing_decision
+                .map(|rd| serde_json::to_string(&rd).unwrap_or_default()),
         }))
     }
 
@@ -590,9 +599,10 @@ impl EntityService for GrpcState {
         let limit = req.limit.unwrap_or(20).clamp(1, 500) as u32;
 
         // F10: Apply entity_type filter if provided
-        let type_filter = req.entity_type.as_deref().map(|s| {
-            mnemo_core::models::entity::EntityType::from_str_flexible(s)
-        });
+        let type_filter = req
+            .entity_type
+            .as_deref()
+            .map(|s| mnemo_core::models::entity::EntityType::from_str_flexible(s));
 
         let entities = self
             .state_store

@@ -464,7 +464,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     .unwrap_or_default(),
             })
             .collect();
-        Ok((ExtractionResult { entities, relationships }, usage))
+        Ok((
+            ExtractionResult {
+                entities,
+                relationships,
+            },
+            usage,
+        ))
     }
 
     async fn summarize_with_usage(

@@ -294,12 +294,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_fast_embedder_batch_and_similarity() {
-        let embedder = FastEmbedder::new("AllMiniLML6V2", 384)
-            .expect("FastEmbedder should initialise");
+        let embedder =
+            FastEmbedder::new("AllMiniLML6V2", 384).expect("FastEmbedder should initialise");
 
         let texts = vec![
-            "The cat sat on the mat".to_string(),       // A
-            "A kitten rested on the rug".to_string(),    // B (similar to A)
+            "The cat sat on the mat".to_string(),                // A
+            "A kitten rested on the rug".to_string(),            // B (similar to A)
             "Quantum chromodynamics governs quarks".to_string(), // C (dissimilar)
         ];
 

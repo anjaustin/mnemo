@@ -9,7 +9,7 @@ use axum::Json;
 use tower::{Layer, Service};
 
 use mnemo_core::error::{ApiErrorDetail, ApiErrorResponse};
-use mnemo_core::models::api_key::{CallerContext, hash_api_key};
+use mnemo_core::models::api_key::{hash_api_key, CallerContext};
 use mnemo_core::traits::storage::ApiKeyStore;
 use mnemo_storage::RedisStateStore;
 use tokio::sync::RwLock;

@@ -15,13 +15,25 @@ use sha2::Sha256;
 use tracing::warn;
 
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
+use mnemo_core::models::api_key::{ApiKeyRole, CallerContext, CreateApiKeyRequest};
+use mnemo_core::models::classification::Classification;
+use mnemo_core::models::guardrail::{
+    evaluate_rules, validate_condition_regexes, validate_guardrail_name, CreateGuardrailRequest,
+    EvalContext, EvaluateGuardrailsRequest, EvaluateGuardrailsResponse, GuardrailRule,
+    GuardrailTrigger,
+};
+use mnemo_core::models::region::{
+    validate_agent_id, validate_region_name, CreateRegionRequest, GrantRegionAccessRequest,
+    MemoryRegion, MemoryRegionAcl, UpdateRegionRequest,
+};
+use mnemo_core::models::view::{CreateViewRequest, ViewConstraints};
 use mnemo_core::models::{
     agent::{
         analyze_conflicts, compute_fisher_importance, AgentIdentityAuditEvent,
         AgentIdentityProfile, ApprovalPolicy, AuditChainVerification, ConflictAnalysis,
         CreateExperienceRequest, CreatePromotionProposalRequest, ExperienceEvent,
-        IdentityRollbackRequest, PromotionProposal, PromotionStatus,
-        SetApprovalPolicyRequest, UpdateAgentIdentityRequest,
+        IdentityRollbackRequest, PromotionProposal, PromotionStatus, SetApprovalPolicyRequest,
+        UpdateAgentIdentityRequest,
     },
     context::{
         estimate_tokens, ContextBlock, ContextMessage, ContextRequest, EpisodeSummary, FactSummary,
@@ -36,28 +48,14 @@ use mnemo_core::models::{
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
-use mnemo_core::models::api_key::{
-    ApiKeyRole, CallerContext, CreateApiKeyRequest,
-};
-use mnemo_core::models::classification::Classification;
-use mnemo_core::models::guardrail::{
-    CreateGuardrailRequest, EvalContext, EvaluateGuardrailsRequest,
-    EvaluateGuardrailsResponse, GuardrailRule, GuardrailTrigger,
-    evaluate_rules, validate_condition_regexes, validate_guardrail_name,
-};
-use mnemo_core::models::region::{
-    CreateRegionRequest, GrantRegionAccessRequest, MemoryRegion, MemoryRegionAcl,
-    UpdateRegionRequest, validate_agent_id, validate_region_name,
-};
-use mnemo_core::models::view::{CreateViewRequest, ViewConstraints};
 use mnemo_core::traits::storage::{
-    AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore,
-    GoalStore, GuardrailStore, NarrativeStore, RawVectorStore, RegionStore, SessionStore, SpanStore,
+    AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
+    GuardrailStore, NarrativeStore, RawVectorStore, RegionStore, SessionStore, SpanStore,
     UserStore, VectorStore, ViewStore,
 };
 
-use mnemo_retrieval::Reranker;
 use mnemo_retrieval::router::{classify_query, RetrievalStrategy, RoutingSource};
+use mnemo_retrieval::Reranker;
 
 use crate::middleware::RequestContext;
 use crate::state::{
@@ -1163,7 +1161,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/memory/:user/goals/:id",
-            get(get_goal_profile).put(update_goal_profile).delete(delete_goal_profile),
+            get(get_goal_profile)
+                .put(update_goal_profile)
+                .delete(delete_goal_profile),
         )
         // Narrative summaries
         .route(
@@ -1328,23 +1328,11 @@ pub fn build_router(state: AppState) -> Router {
             get(get_memory_digest).post(refresh_memory_digest),
         )
         // API key management (RBAC)
-        .route(
-            "/api/v1/keys",
-            post(create_api_key).get(list_api_keys),
-        )
-        .route(
-            "/api/v1/keys/:key_id",
-            delete(revoke_api_key),
-        )
-        .route(
-            "/api/v1/keys/:key_id/rotate",
-            post(rotate_api_key),
-        )
+        .route("/api/v1/keys", post(create_api_key).get(list_api_keys))
+        .route("/api/v1/keys/:key_id", delete(revoke_api_key))
+        .route("/api/v1/keys/:key_id/rotate", post(rotate_api_key))
         // Memory views (policy-scoped context lenses)
-        .route(
-            "/api/v1/views",
-            post(create_view).get(list_views),
-        )
+        .route("/api/v1/views", post(create_view).get(list_views))
         .route(
             "/api/v1/views/:name",
             get(get_view).put(update_view).delete(delete_view),
@@ -1354,19 +1342,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/guardrails",
             post(create_guardrail).get(list_guardrails),
         )
-        .route(
-            "/api/v1/guardrails/evaluate",
-            post(evaluate_guardrails),
-        )
+        .route("/api/v1/guardrails/evaluate", post(evaluate_guardrails))
         .route(
             "/api/v1/guardrails/:id",
-            get(get_guardrail).put(update_guardrail).delete(delete_guardrail),
+            get(get_guardrail)
+                .put(update_guardrail)
+                .delete(delete_guardrail),
         )
         // Memory regions (multi-agent shared memory with ACLs)
-        .route(
-            "/api/v1/regions",
-            post(create_region).get(list_regions),
-        )
+        .route("/api/v1/regions", post(create_region).get(list_regions))
         .route(
             "/api/v1/regions/:region_id",
             get(get_region).put(update_region).delete(delete_region),
@@ -1719,10 +1703,7 @@ pub async fn run_compression_sweep(state: &AppState) -> Result<u64, MnemoError> 
             examined_count += 1;
 
             // Determine created_at from payload
-            let created_at_epoch = pt
-                .payload
-                .get("created_at")
-                .and_then(|v| v.as_f64());
+            let created_at_epoch = pt.payload.get("created_at").and_then(|v| v.as_f64());
 
             let current_tier_str = pt
                 .payload
@@ -1777,10 +1758,9 @@ pub async fn run_compression_sweep(state: &AppState) -> Result<u64, MnemoError> 
     stats
         .last_sweep_examined
         .store(examined_count, Ordering::Relaxed);
-    stats.last_sweep_epoch.store(
-        chrono::Utc::now().timestamp() as u64,
-        Ordering::Relaxed,
-    );
+    stats
+        .last_sweep_epoch
+        .store(chrono::Utc::now().timestamp() as u64, Ordering::Relaxed);
     stats.total_sweeps.fetch_add(1, Ordering::Relaxed);
 
     Ok(compressed_count)
@@ -2689,7 +2669,9 @@ async fn add_episode(
         if verdict.blocked {
             return Err(AppError(MnemoError::Validation(format!(
                 "Guardrail blocked: {}",
-                verdict.block_reason.unwrap_or_else(|| "policy violation".into())
+                verdict
+                    .block_reason
+                    .unwrap_or_else(|| "policy violation".into())
             ))));
         }
     }
@@ -4465,7 +4447,10 @@ async fn get_memory_context(
             source: RoutingSource::ExplicitRequest,
             alternatives: vec![],
         };
-        (explicit_mode, Some(serde_json::to_value(&decision).ok()).flatten())
+        (
+            explicit_mode,
+            Some(serde_json::to_value(&decision).ok()).flatten(),
+        )
     } else {
         // Auto-classify the query
         let decision = classify_query(&req.query);
@@ -4673,7 +4658,10 @@ async fn get_memory_context(
                     id: view_name.clone(),
                 })
             })?;
-        Some(ViewConstraints::from_view(&view, caller.max_classification()))
+        Some(ViewConstraints::from_view(
+            &view,
+            caller.max_classification(),
+        ))
     } else {
         // No explicit view — apply caller's classification ceiling as default
         let caller_max = caller.max_classification();
@@ -4692,9 +4680,9 @@ async fn get_memory_context(
             .retain(|e| vc.allows_entity(e.classification, &e.entity_type));
 
         // Filter facts by classification + blocked labels + temporal scope
-        context.facts.retain(|f| {
-            vc.allows_edge(f.classification, &f.label) && vc.allows_time(f.valid_at)
-        });
+        context
+            .facts
+            .retain(|f| vc.allows_edge(f.classification, &f.label) && vc.allows_time(f.valid_at));
 
         // Cap facts if max_facts is set
         if let Some(max_facts) = vc.max_facts {
@@ -4826,7 +4814,12 @@ async fn get_memory_context(
         .map(|vc| vc.include_narrative)
         .unwrap_or(true);
     let narrative = if include_narrative && narrative_allowed {
-        state.state_store.get_narrative(user.id).await.ok().flatten()
+        state
+            .state_store
+            .get_narrative(user.id)
+            .await
+            .ok()
+            .flatten()
     } else {
         None
     };
@@ -4842,16 +4835,18 @@ async fn get_memory_context(
             // Re-score facts by applying goal profile adjustments
             for fact in &mut context.facts {
                 let adjustment = profile.compute_relevance_adjustment(
-                    None,                   // category not on FactSummary
+                    None, // category not on FactSummary
                     Some(fact.label.as_str()),
                     &fact.fact,
                 );
                 fact.relevance *= adjustment;
             }
             // Re-sort facts by adjusted relevance (descending)
-            context
-                .facts
-                .sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+            context.facts.sort_by(|a, b| {
+                b.relevance
+                    .partial_cmp(&a.relevance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             Some(profile.name.clone())
         } else {
             Some(gn.clone()) // goal specified but no profile found — pass through
@@ -5938,7 +5933,10 @@ async fn causal_recall_chains(
             source: RoutingSource::ExplicitRequest,
             alternatives: vec![],
         };
-        (explicit_mode, Some(serde_json::to_value(&decision).ok()).flatten())
+        (
+            explicit_mode,
+            Some(serde_json::to_value(&decision).ok()).flatten(),
+        )
     } else {
         let decision = classify_query(&req.query);
         let mode = match decision.selected_strategy {
@@ -6274,12 +6272,9 @@ async fn update_memory_webhook(
             )));
         }
         // Domain allowlist policy check
-        let policy = get_or_create_user_policy(
-            &state,
-            webhook.user_id,
-            webhook.user_identifier.clone(),
-        )
-        .await;
+        let policy =
+            get_or_create_user_policy(&state, webhook.user_id, webhook.user_identifier.clone())
+                .await;
         if !is_target_url_allowed(&policy, trimmed) {
             state
                 .metrics
@@ -6345,10 +6340,7 @@ async fn update_memory_webhook(
     )
     .await;
 
-    Ok(Json(UpdateMemoryWebhookResponse {
-        ok: true,
-        webhook,
-    }))
+    Ok(Json(UpdateMemoryWebhookResponse { ok: true, webhook }))
 }
 
 async fn delete_memory_webhook(
@@ -6926,19 +6918,19 @@ async fn verified_identity_update(
     let agent_id = normalize_agent_id(&agent_id)?;
 
     // 1. Verify the proof
-    let verification = mnemo_core::models::agent::verify_identity_update_proof(&req.core, &req.proof);
+    let verification =
+        mnemo_core::models::agent::verify_identity_update_proof(&req.core, &req.proof);
     if !verification.verified {
-        let failed_keys: Vec<&mnemo_core::models::agent::KeyVerificationResult> =
-            verification.key_results.iter().filter(|r| !r.valid).collect();
+        let failed_keys: Vec<&mnemo_core::models::agent::KeyVerificationResult> = verification
+            .key_results
+            .iter()
+            .filter(|r| !r.valid)
+            .collect();
         return Err(AppError(MnemoError::Validation(format!(
             "proof verification failed: {}",
             failed_keys
                 .iter()
-                .map(|r| format!(
-                    "{}: {}",
-                    r.key,
-                    r.error.as_deref().unwrap_or("unknown")
-                ))
+                .map(|r| format!("{}: {}", r.key, r.error.as_deref().unwrap_or("unknown")))
                 .collect::<Vec<_>>()
                 .join("; ")
         ))));
@@ -7385,7 +7377,10 @@ async fn create_agent_branch(
     Json(req): Json<mnemo_core::models::agent::CreateBranchRequest>,
 ) -> Result<Json<mnemo_core::models::agent::BranchInfo>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
-    let info = state.state_store.create_agent_branch(&agent_id, req).await?;
+    let info = state
+        .state_store
+        .create_agent_branch(&agent_id, req)
+        .await?;
     Ok(Json(info))
 }
 
@@ -7413,7 +7408,10 @@ async fn get_agent_branch(
     Path((agent_id, branch_name)): Path<(String, String)>,
 ) -> Result<Json<mnemo_core::models::agent::BranchInfo>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
-    let info = state.state_store.get_agent_branch(&agent_id, &branch_name).await?;
+    let info = state
+        .state_store
+        .get_agent_branch(&agent_id, &branch_name)
+        .await?;
     Ok(Json(info))
 }
 
@@ -7423,7 +7421,10 @@ async fn update_agent_branch(
     Json(req): Json<mnemo_core::models::agent::UpdateAgentIdentityRequest>,
 ) -> Result<Json<mnemo_core::models::agent::AgentIdentityProfile>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
-    let identity = state.state_store.update_agent_branch(&agent_id, &branch_name, req).await?;
+    let identity = state
+        .state_store
+        .update_agent_branch(&agent_id, &branch_name, req)
+        .await?;
     Ok(Json(identity))
 }
 
@@ -7432,7 +7433,10 @@ async fn merge_agent_branch(
     Path((agent_id, branch_name)): Path<(String, String)>,
 ) -> Result<Json<mnemo_core::models::agent::MergeResult>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
-    let result = state.state_store.merge_agent_branch(&agent_id, &branch_name).await?;
+    let result = state
+        .state_store
+        .merge_agent_branch(&agent_id, &branch_name)
+        .await?;
     Ok(Json(result))
 }
 
@@ -7441,7 +7445,10 @@ async fn delete_agent_branch(
     Path((agent_id, branch_name)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
-    state.state_store.delete_agent_branch(&agent_id, &branch_name).await?;
+    state
+        .state_store
+        .delete_agent_branch(&agent_id, &branch_name)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -7480,7 +7487,10 @@ async fn get_agent_context(
             source: RoutingSource::ExplicitRequest,
             alternatives: vec![],
         };
-        (explicit_mode, Some(serde_json::to_value(&decision).ok()).flatten())
+        (
+            explicit_mode,
+            Some(serde_json::to_value(&decision).ok()).flatten(),
+        )
     } else {
         let decision = classify_query(&req.query);
         let mode = match decision.selected_strategy {
@@ -7609,7 +7619,13 @@ async fn memory_retrieval_feedback(
     let features_map = std::collections::HashMap::new();
     state
         .retrieval
-        .apply_gnn_feedback(&candidates, &[], &features_map, &req.positive_entity_ids, 16)
+        .apply_gnn_feedback(
+            &candidates,
+            &[],
+            &features_map,
+            &req.positive_entity_ids,
+            16,
+        )
         .await;
 
     Ok(Json(serde_json::json!({
@@ -9870,21 +9886,24 @@ async fn list_spans_by_user(
 ) -> Json<serde_json::Value> {
     let clamped_limit = params.limit.clamp(1, 1000);
     // Try Redis first
-    let matched: Vec<LlmSpan> =
-        match state.state_store.get_spans_by_user(user_id, clamped_limit).await {
-            Ok(spans) if !spans.is_empty() => spans,
-            _ => {
-                // Fallback to in-memory ring buffer
-                let spans = state.llm_spans.read().await;
-                spans
-                    .iter()
-                    .rev()
-                    .filter(|s| s.user_id == Some(user_id))
-                    .take(clamped_limit)
-                    .cloned()
-                    .collect()
-            }
-        };
+    let matched: Vec<LlmSpan> = match state
+        .state_store
+        .get_spans_by_user(user_id, clamped_limit)
+        .await
+    {
+        Ok(spans) if !spans.is_empty() => spans,
+        _ => {
+            // Fallback to in-memory ring buffer
+            let spans = state.llm_spans.read().await;
+            spans
+                .iter()
+                .rev()
+                .filter(|s| s.user_id == Some(user_id))
+                .take(clamped_limit)
+                .cloned()
+                .collect()
+        }
+    };
     Json(serde_json::json!({
         "user_id": user_id,
         "spans": matched,
@@ -10007,15 +10026,14 @@ async fn refresh_memory_digest(
     let model_name = llm.model_name().to_string();
 
     let started = std::time::Instant::now();
-    let (raw, usage) = llm
-        .summarize_with_usage(&prompt, 512)
-        .await
-        .map_err(|e: mnemo_core::error::MnemoError| {
+    let (raw, usage) = llm.summarize_with_usage(&prompt, 512).await.map_err(
+        |e: mnemo_core::error::MnemoError| {
             AppError(MnemoError::LlmProvider {
                 provider: "digest".into(),
                 message: e.to_string(),
             })
-        })?;
+        },
+    )?;
     let latency_ms = started.elapsed().as_millis() as u64;
 
     // Record the LLM span for observability
@@ -10165,11 +10183,8 @@ async fn get_stale_facts(
             incoming.len() as u32,
         );
 
-        let effective_conf = mnemo_core::models::edge::effective_edge_confidence(
-            edge,
-            fisher,
-            query.half_life_days,
-        );
+        let effective_conf =
+            mnemo_core::models::edge::effective_edge_confidence(edge, fisher, query.half_life_days);
 
         if effective_conf < query.threshold {
             let age_days = (chrono::Utc::now() - edge.valid_at).num_days().max(0) as u64;
@@ -10178,10 +10193,7 @@ async fn get_stale_facts(
                 effective_confidence: effective_conf,
                 fisher_importance: fisher,
                 age_days,
-                suggested_question: Some(format!(
-                    "Is it still true that {}?",
-                    edge.fact
-                )),
+                suggested_question: Some(format!("Is it still true that {}?", edge.fact)),
             });
         }
     }
@@ -10585,10 +10597,7 @@ async fn list_goal_profiles(
     let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
     let limit = params.limit.unwrap_or(50).min(200) as usize;
 
-    let profiles = state
-        .state_store
-        .list_goal_profiles(user.id, limit)
-        .await?;
+    let profiles = state.state_store.list_goal_profiles(user.id, limit).await?;
 
     Ok(Json(serde_json::json!({
         "user_id": user.id,
@@ -10747,7 +10756,13 @@ async fn refresh_narrative(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
     Json(req): Json<mnemo_core::models::narrative::RefreshNarrativeRequest>,
-) -> Result<(StatusCode, Json<mnemo_core::models::narrative::UserNarrative>), AppError> {
+) -> Result<
+    (
+        StatusCode,
+        Json<mnemo_core::models::narrative::UserNarrative>,
+    ),
+    AppError,
+> {
     use mnemo_core::models::narrative::{
         build_narrative_prompt, parse_narrative_output, SessionSummaryInput, UserNarrative,
     };
@@ -11132,8 +11147,7 @@ async fn create_guardrail(
     validate_guardrail_name(&body.name).map_err(|e| AppError(MnemoError::Validation(e)))?;
 
     // Validate regex patterns in the condition tree
-    validate_condition_regexes(&body.condition)
-        .map_err(|e| AppError(MnemoError::Validation(e)))?;
+    validate_condition_regexes(&body.condition).map_err(|e| AppError(MnemoError::Validation(e)))?;
 
     // Check for duplicate name
     let existing = state.state_store.list_guardrails().await?;
@@ -11182,16 +11196,12 @@ async fn get_guardrail(
     let caller = caller_from_extension(caller);
     caller.require_role(ApiKeyRole::Read)?;
 
-    let rule = state
-        .state_store
-        .get_guardrail(id)
-        .await?
-        .ok_or_else(|| {
-            AppError(MnemoError::NotFound {
-                resource_type: "guardrail".into(),
-                id: id.to_string(),
-            })
-        })?;
+    let rule = state.state_store.get_guardrail(id).await?.ok_or_else(|| {
+        AppError(MnemoError::NotFound {
+            resource_type: "guardrail".into(),
+            id: id.to_string(),
+        })
+    })?;
     Ok(Json(rule))
 }
 
@@ -11208,19 +11218,14 @@ async fn update_guardrail(
     validate_guardrail_name(&body.name).map_err(|e| AppError(MnemoError::Validation(e)))?;
 
     // Validate regex patterns
-    validate_condition_regexes(&body.condition)
-        .map_err(|e| AppError(MnemoError::Validation(e)))?;
+    validate_condition_regexes(&body.condition).map_err(|e| AppError(MnemoError::Validation(e)))?;
 
-    let mut rule = state
-        .state_store
-        .get_guardrail(id)
-        .await?
-        .ok_or_else(|| {
-            AppError(MnemoError::NotFound {
-                resource_type: "guardrail".into(),
-                id: id.to_string(),
-            })
-        })?;
+    let mut rule = state.state_store.get_guardrail(id).await?.ok_or_else(|| {
+        AppError(MnemoError::NotFound {
+            resource_type: "guardrail".into(),
+            id: id.to_string(),
+        })
+    })?;
 
     rule.name = body.name;
     rule.description = body.description;
@@ -11245,16 +11250,12 @@ async fn delete_guardrail(
     caller.require_role(ApiKeyRole::Admin)?;
 
     // Verify it exists
-    state
-        .state_store
-        .get_guardrail(id)
-        .await?
-        .ok_or_else(|| {
-            AppError(MnemoError::NotFound {
-                resource_type: "guardrail".into(),
-                id: id.to_string(),
-            })
-        })?;
+    state.state_store.get_guardrail(id).await?.ok_or_else(|| {
+        AppError(MnemoError::NotFound {
+            resource_type: "guardrail".into(),
+            id: id.to_string(),
+        })
+    })?;
 
     state.state_store.delete_guardrail(id).await?;
     Ok(StatusCode::NO_CONTENT)

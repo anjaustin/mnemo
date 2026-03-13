@@ -24,8 +24,8 @@
 //! 4. Client calls `tools/call`, `resources/read`, etc.
 
 pub mod protocol;
-pub mod tools;
 pub mod resources;
+pub mod tools;
 pub mod transport;
 
 /// Configuration for the MCP server.

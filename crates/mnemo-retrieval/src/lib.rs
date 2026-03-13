@@ -21,9 +21,7 @@ use mnemo_core::traits::llm::EmbeddingProvider;
 use mnemo_core::traits::storage::*;
 
 // Re-export GNN types for consumers
-pub use mnemo_gnn::{
-    build_local_subgraph, GatWeights, LocalSubgraph, RerankedCandidate,
-};
+pub use mnemo_gnn::{build_local_subgraph, GatWeights, LocalSubgraph, RerankedCandidate};
 
 /// Reciprocal Rank Fusion constant. Standard value from the RRF paper.
 const RRF_K: f64 = 60.0;
@@ -389,11 +387,7 @@ where
     /// Fetches outgoing edges between candidate entities to build a local subgraph,
     /// then runs the GAT forward pass to re-score them. Falls back to original
     /// scores if the GNN is not available or the subgraph is trivial.
-    async fn gnn_rerank_entities(
-        &self,
-        _user_id: Uuid,
-        fused: &[(Uuid, f64)],
-    ) -> Vec<(Uuid, f64)> {
+    async fn gnn_rerank_entities(&self, _user_id: Uuid, fused: &[(Uuid, f64)]) -> Vec<(Uuid, f64)> {
         let gnn_lock = match &self.gnn_weights {
             Some(lock) => lock,
             None => return fused.to_vec(),
@@ -436,16 +430,12 @@ where
             })
             .collect();
 
-        let subgraph =
-            build_local_subgraph(fused, &graph_edges, &features_map, embedding_dim);
+        let subgraph = build_local_subgraph(fused, &graph_edges, &features_map, embedding_dim);
 
         let weights = gnn_lock.read().await;
         let reranked = weights.forward(&subgraph, GNN_ALPHA);
 
-        let result: Vec<(Uuid, f64)> = reranked
-            .iter()
-            .map(|r| (r.id, r.final_score))
-            .collect();
+        let result: Vec<(Uuid, f64)> = reranked.iter().map(|r| (r.id, r.final_score)).collect();
 
         if result.is_empty() {
             fused.to_vec()

@@ -184,7 +184,15 @@ where
 
 impl<S, V, L, E> IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore + SpanStore + Send + Sync + 'static,
+    S: EpisodeStore
+        + EntityStore
+        + EdgeStore
+        + SessionStore
+        + DigestStore
+        + SpanStore
+        + Send
+        + Sync
+        + 'static,
     V: VectorStore + Send + Sync + 'static,
     L: LlmProvider + Send + Sync + 'static,
     E: EmbeddingProvider + Send + Sync + 'static,
@@ -227,7 +235,10 @@ where
 
     /// Attach a webhook event channel so the worker can proactively emit
     /// `fact_added` and `fact_superseded` events during ingestion.
-    pub fn with_webhook_sender(mut self, tx: tokio::sync::mpsc::Sender<IngestWebhookEvent>) -> Self {
+    pub fn with_webhook_sender(
+        mut self,
+        tx: tokio::sync::mpsc::Sender<IngestWebhookEvent>,
+    ) -> Self {
         self.webhook_tx = Some(tx);
         self
     }
@@ -319,8 +330,16 @@ where
                 .filter(|(_, d, r)| *d || *r)
                 .collect();
 
-            idle_users_for_digest = idle.iter().filter(|(_, d, _)| *d).map(|(u, _, _)| *u).collect();
-            idle_users_for_rerank = idle.iter().filter(|(_, _, r)| *r).map(|(u, _, _)| *u).collect();
+            idle_users_for_digest = idle
+                .iter()
+                .filter(|(_, d, _)| *d)
+                .map(|(u, _, _)| *u)
+                .collect();
+            idle_users_for_rerank = idle
+                .iter()
+                .filter(|(_, _, r)| *r)
+                .map(|(u, _, _)| *u)
+                .collect();
         }
 
         // Evict stale entries (users inactive for >24h)
@@ -453,10 +472,7 @@ where
         let digest_result = self.llm.summarize_with_usage(&prompt, 512).await;
         let digest_elapsed = digest_t0.elapsed();
         let digest_ok = digest_result.is_ok();
-        let digest_usage = digest_result
-            .as_ref()
-            .map(|(_, u)| *u)
-            .unwrap_or_default();
+        let digest_usage = digest_result.as_ref().map(|(_, u)| *u).unwrap_or_default();
         self.record_span(LlmSpan {
             id: Uuid::now_v7(),
             request_id: None,
@@ -543,8 +559,7 @@ where
             let density_score = (1.0 + density as f64).ln() / 4.0_f64; // ln(1+d)/4, caps ~1.0 at ~55 edges
 
             // Weighted combination (weights sum to 1.0)
-            let score = (0.3 * mention_score + 0.4 * recency + 0.3 * density_score)
-                .clamp(0.0, 1.0);
+            let score = (0.3 * mention_score + 0.4 * recency + 0.3 * density_score).clamp(0.0, 1.0);
 
             let payload = serde_json::json!({
                 "relevance_score": score,
@@ -553,7 +568,11 @@ where
                 "reranked_at": now.to_rfc3339(),
             });
 
-            match self.vector_store.set_entity_payload(entity.id, payload).await {
+            match self
+                .vector_store
+                .set_entity_payload(entity.id, payload)
+                .await
+            {
                 Ok(()) => entity_updates += 1,
                 Err(e) => {
                     tracing::warn!(
@@ -685,10 +704,7 @@ where
         // 2. Extract via LLM
         let extract_start = chrono::Utc::now();
         let extract_t0 = Instant::now();
-        let extraction_result = self
-            .llm
-            .extract_with_usage(&episode.content, &hints)
-            .await;
+        let extraction_result = self.llm.extract_with_usage(&episode.content, &hints).await;
         let extract_elapsed = extract_t0.elapsed();
         let extract_ok = extraction_result.is_ok();
         let extract_usage = extraction_result
@@ -891,16 +907,10 @@ where
                     );
                     let sum_start = chrono::Utc::now();
                     let sum_t0 = Instant::now();
-                    let sum_result = self
-                        .llm
-                        .summarize_with_usage(&episode.content, 256)
-                        .await;
+                    let sum_result = self.llm.summarize_with_usage(&episode.content, 256).await;
                     let sum_elapsed = sum_t0.elapsed();
                     let sum_ok = sum_result.is_ok();
-                    let sum_usage = sum_result
-                        .as_ref()
-                        .map(|(_, u)| *u)
-                        .unwrap_or_default();
+                    let sum_usage = sum_result.as_ref().map(|(_, u)| *u).unwrap_or_default();
                     self.record_span(LlmSpan {
                         id: Uuid::now_v7(),
                         request_id: episode_request_id(episode).map(String::from),
@@ -1014,7 +1024,8 @@ mod tests {
 
     #[test]
     fn test_parse_digest_response_json_with_markdown_fences() {
-        let raw = "```json\n{\"summary\": \"User is into tech.\", \"topics\": [\"tech\", \"AI\"]}\n```";
+        let raw =
+            "```json\n{\"summary\": \"User is into tech.\", \"topics\": [\"tech\", \"AI\"]}\n```";
         let (summary, topics) = parse_digest_response(raw);
         assert_eq!(summary, "User is into tech.");
         assert_eq!(topics, vec!["tech", "AI"]);
@@ -1022,7 +1033,8 @@ mod tests {
 
     #[test]
     fn test_parse_digest_response_json_with_plain_fences() {
-        let raw = "```\n{\"summary\": \"Knows cooking.\", \"topics\": [\"cooking\", \"recipes\"]}\n```";
+        let raw =
+            "```\n{\"summary\": \"Knows cooking.\", \"topics\": [\"cooking\", \"recipes\"]}\n```";
         let (summary, topics) = parse_digest_response(raw);
         assert_eq!(summary, "Knows cooking.");
         assert_eq!(topics, vec!["cooking", "recipes"]);
@@ -1030,12 +1042,10 @@ mod tests {
 
     #[test]
     fn test_parse_digest_response_legacy_topics_format() {
-        let raw = "This person is interested in running and fitness.\n\nTOPICS: running, fitness, shoes";
+        let raw =
+            "This person is interested in running and fitness.\n\nTOPICS: running, fitness, shoes";
         let (summary, topics) = parse_digest_response(raw);
-        assert_eq!(
-            summary,
-            "This person is interested in running and fitness."
-        );
+        assert_eq!(summary, "This person is interested in running and fitness.");
         assert_eq!(topics, vec!["running", "fitness", "shoes"]);
     }
 

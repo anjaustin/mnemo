@@ -541,18 +541,8 @@ async fn test_span_list_recent() {
     let now = chrono::Utc::now();
 
     let span1 = make_test_span(None, None, "extract", now);
-    let span2 = make_test_span(
-        None,
-        None,
-        "summarize",
-        now + chrono::Duration::seconds(1),
-    );
-    let span3 = make_test_span(
-        None,
-        None,
-        "digest",
-        now + chrono::Duration::seconds(2),
-    );
+    let span2 = make_test_span(None, None, "summarize", now + chrono::Duration::seconds(1));
+    let span3 = make_test_span(None, None, "digest", now + chrono::Duration::seconds(2));
     store.save_span(&span1).await.unwrap();
     store.save_span(&span2).await.unwrap();
     store.save_span(&span3).await.unwrap();

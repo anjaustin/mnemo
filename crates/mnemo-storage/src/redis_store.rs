@@ -8,12 +8,11 @@ use uuid::Uuid;
 use mnemo_core::error::MnemoError;
 use mnemo_core::models::{
     agent::{
-        AgentIdentityAuditAction, AgentIdentityAuditEvent, AgentIdentityProfile,
-        ApprovalPolicy, AuditChainVerification, BranchInfo, BranchMetadata,
-        CreateBranchRequest, CreateExperienceRequest, CreatePromotionProposalRequest,
-        ExperienceEvent, ForkAgentRequest, ForkLineage, ForkResult, MergeResult,
-        PromotionProposal, UpdateAgentIdentityRequest, validate_branch_name,
-        validate_fork_agent_id,
+        validate_branch_name, validate_fork_agent_id, AgentIdentityAuditAction,
+        AgentIdentityAuditEvent, AgentIdentityProfile, ApprovalPolicy, AuditChainVerification,
+        BranchInfo, BranchMetadata, CreateBranchRequest, CreateExperienceRequest,
+        CreatePromotionProposalRequest, ExperienceEvent, ForkAgentRequest, ForkLineage, ForkResult,
+        MergeResult, PromotionProposal, UpdateAgentIdentityRequest,
     },
     edge::{Edge, EdgeFilter},
     entity::Entity,
@@ -1115,8 +1114,7 @@ impl AgentStore for RedisStateStore {
         agent_id: &str,
         req: CreateBranchRequest,
     ) -> StorageResult<BranchInfo> {
-        validate_branch_name(&req.branch_name)
-            .map_err(|e| MnemoError::Validation(e))?;
+        validate_branch_name(&req.branch_name).map_err(|e| MnemoError::Validation(e))?;
 
         // Check if branch already exists
         let meta_key = self.key(&["agent_branch", agent_id, &req.branch_name]);
@@ -1142,7 +1140,8 @@ impl AgentStore for RedisStateStore {
 
         // Store the branch identity
         let branch_identity_key = self.key(&["agent_identity", &branch_agent_id]);
-        self.set_json(&branch_identity_key, &branch_identity).await?;
+        self.set_json(&branch_identity_key, &branch_identity)
+            .await?;
 
         // Store branch metadata
         let metadata = BranchMetadata {
@@ -1172,10 +1171,7 @@ impl AgentStore for RedisStateStore {
         })
     }
 
-    async fn list_agent_branches(
-        &self,
-        agent_id: &str,
-    ) -> StorageResult<Vec<BranchMetadata>> {
+    async fn list_agent_branches(&self, agent_id: &str) -> StorageResult<Vec<BranchMetadata>> {
         let index_key = self.key(&["agent_branches", agent_id]);
         let mut conn = self.conn.clone();
 
@@ -1203,12 +1199,13 @@ impl AgentStore for RedisStateStore {
         branch_name: &str,
     ) -> StorageResult<BranchInfo> {
         let meta_key = self.key(&["agent_branch", agent_id, branch_name]);
-        let metadata = self.get_json::<BranchMetadata>(&meta_key).await?.ok_or_else(|| {
-            MnemoError::NotFound {
+        let metadata = self
+            .get_json::<BranchMetadata>(&meta_key)
+            .await?
+            .ok_or_else(|| MnemoError::NotFound {
                 resource_type: "AgentBranch".into(),
                 id: format!("{}:{}", agent_id, branch_name),
-            }
-        })?;
+            })?;
 
         let branch_agent_id = format!("{}:branch:{}", agent_id, branch_name);
         let identity = self.get_agent_identity(&branch_agent_id).await?;
@@ -1224,12 +1221,13 @@ impl AgentStore for RedisStateStore {
     ) -> StorageResult<AgentIdentityProfile> {
         // Verify branch exists
         let meta_key = self.key(&["agent_branch", agent_id, branch_name]);
-        let metadata = self.get_json::<BranchMetadata>(&meta_key).await?.ok_or_else(|| {
-            MnemoError::NotFound {
+        let metadata = self
+            .get_json::<BranchMetadata>(&meta_key)
+            .await?
+            .ok_or_else(|| MnemoError::NotFound {
                 resource_type: "AgentBranch".into(),
                 id: format!("{}:{}", agent_id, branch_name),
-            }
-        })?;
+            })?;
         if metadata.merged {
             return Err(MnemoError::Validation(format!(
                 "branch '{}' has already been merged",
@@ -1248,12 +1246,13 @@ impl AgentStore for RedisStateStore {
     ) -> StorageResult<MergeResult> {
         // Get branch
         let meta_key = self.key(&["agent_branch", agent_id, branch_name]);
-        let mut metadata = self.get_json::<BranchMetadata>(&meta_key).await?.ok_or_else(|| {
-            MnemoError::NotFound {
+        let mut metadata = self
+            .get_json::<BranchMetadata>(&meta_key)
+            .await?
+            .ok_or_else(|| MnemoError::NotFound {
                 resource_type: "AgentBranch".into(),
                 id: format!("{}:{}", agent_id, branch_name),
-            }
-        })?;
+            })?;
         if metadata.merged {
             return Err(MnemoError::Validation(format!(
                 "branch '{}' has already been merged",
@@ -1290,11 +1289,7 @@ impl AgentStore for RedisStateStore {
         })
     }
 
-    async fn delete_agent_branch(
-        &self,
-        agent_id: &str,
-        branch_name: &str,
-    ) -> StorageResult<()> {
+    async fn delete_agent_branch(&self, agent_id: &str, branch_name: &str) -> StorageResult<()> {
         // Verify branch exists
         let meta_key = self.key(&["agent_branch", agent_id, branch_name]);
         if self.get_json::<BranchMetadata>(&meta_key).await?.is_none() {
@@ -1341,12 +1336,15 @@ impl AgentStore for RedisStateStore {
         req: ForkAgentRequest,
     ) -> StorageResult<ForkResult> {
         // 1. Validate new agent ID
-        validate_fork_agent_id(&req.new_agent_id)
-            .map_err(|e| MnemoError::Validation(e))?;
+        validate_fork_agent_id(&req.new_agent_id).map_err(|e| MnemoError::Validation(e))?;
 
         // 2. Check new agent doesn't already exist
         let new_identity_key = self.key(&["agent_identity", &req.new_agent_id]);
-        if self.get_json::<AgentIdentityProfile>(&new_identity_key).await?.is_some() {
+        if self
+            .get_json::<AgentIdentityProfile>(&new_identity_key)
+            .await?
+            .is_some()
+        {
             return Err(MnemoError::Validation(format!(
                 "agent '{}' already exists; cannot fork to an existing agent_id",
                 req.new_agent_id
@@ -1369,7 +1367,8 @@ impl AgentStore for RedisStateStore {
         self.set_json(&new_identity_key, &new_identity).await?;
 
         // 6. Persist initial version snapshot for the new agent
-        self.persist_identity_snapshot(&req.new_agent_id, &new_identity).await?;
+        self.persist_identity_snapshot(&req.new_agent_id, &new_identity)
+            .await?;
 
         // 7. Transfer experience events (filtered)
         let source_events = self.list_experience_events(source_agent_id, 10000).await?;
@@ -1397,7 +1396,11 @@ impl AgentStore for RedisStateStore {
                 created_at: event.created_at,
             };
 
-            let event_key = self.key(&["agent_experience", &req.new_agent_id, &new_event.id.to_string()]);
+            let event_key = self.key(&[
+                "agent_experience",
+                &req.new_agent_id,
+                &new_event.id.to_string(),
+            ]);
             self.set_json(&event_key, &new_event).await?;
 
             // Add to sorted-set index
@@ -1442,7 +1445,11 @@ impl AgentStore for RedisStateStore {
             event_hash: String::new(),
         };
         audit_event.event_hash = audit_event.compute_hash();
-        let audit_key = self.key(&["agent_audit", &req.new_agent_id, &audit_event.id.to_string()]);
+        let audit_key = self.key(&[
+            "agent_audit",
+            &req.new_agent_id,
+            &audit_event.id.to_string(),
+        ]);
         self.set_json(&audit_key, &audit_event).await?;
 
         let audit_index_key = self.key(&["agent_audit_events", &req.new_agent_id]);
@@ -1469,10 +1476,7 @@ impl AgentStore for RedisStateStore {
         self.set_json(&key, policy).await
     }
 
-    async fn get_approval_policy(
-        &self,
-        agent_id: &str,
-    ) -> StorageResult<Option<ApprovalPolicy>> {
+    async fn get_approval_policy(&self, agent_id: &str) -> StorageResult<Option<ApprovalPolicy>> {
         let key = self.key(&["approval_policy", agent_id]);
         self.get_json::<ApprovalPolicy>(&key).await
     }
@@ -1660,8 +1664,8 @@ impl SpanStore for RedisStateStore {
         let span_id = span.id.to_string();
         let key = self.key(&["span", &span_id]);
         let global_zset = self.key(&["spans"]);
-        let json = serde_json::to_string(span)
-            .map_err(|e| MnemoError::Serialization(e.to_string()))?;
+        let json =
+            serde_json::to_string(span).map_err(|e| MnemoError::Serialization(e.to_string()))?;
         let score = span.started_at.timestamp_millis() as f64;
 
         let mut conn = self.conn.clone();
@@ -1803,7 +1807,10 @@ impl ClarificationStore for RedisStateStore {
         Ok(())
     }
 
-    async fn get_clarification(&self, id: Uuid) -> Result<Option<ClarificationRequest>, MnemoError> {
+    async fn get_clarification(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<ClarificationRequest>, MnemoError> {
         let key = self.key(&["clarification", &id.to_string()]);
         self.get_json::<ClarificationRequest>(&key).await
     }
@@ -1839,7 +1846,9 @@ impl ClarificationStore for RedisStateStore {
                     self.set_json(&key, &clar).await?;
                 }
                 if pending_only {
-                    if clar.status == mnemo_core::models::clarification::ClarificationStatus::Pending {
+                    if clar.status
+                        == mnemo_core::models::clarification::ClarificationStatus::Pending
+                    {
                         results.push(clar);
                     }
                 } else {
@@ -2508,8 +2517,7 @@ impl RegionStore for RedisStateStore {
 
         // Delete each ACL entry + remove from each agent's reverse index
         for agent_id in &acl_agent_ids {
-            let acl_entry_key =
-                self.key(&["region_acl_entry", &id_str, agent_id]);
+            let acl_entry_key = self.key(&["region_acl_entry", &id_str, agent_id]);
             let agent_idx = self.key(&["agent_regions", agent_id]);
             pipe.del(&acl_entry_key)
                 .ignore()

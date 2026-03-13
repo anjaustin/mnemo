@@ -219,11 +219,12 @@ impl QdrantVectorStore {
         payload: serde_json::Value,
     ) -> StorageResult<()> {
         let coll_name = self.collection_name(collection);
-        let qdrant_payload: Payload = payload
-            .try_into()
-            .map_err(|e: <serde_json::Value as TryInto<Payload>>::Error| {
-                MnemoError::Qdrant(format!("Payload conversion failed: {}", e))
-            })?;
+        let qdrant_payload: Payload =
+            payload
+                .try_into()
+                .map_err(|e: <serde_json::Value as TryInto<Payload>>::Error| {
+                    MnemoError::Qdrant(format!("Payload conversion failed: {}", e))
+                })?;
 
         self.client
             .set_payload(
@@ -340,9 +341,9 @@ impl QdrantVectorStore {
                 .vectors
                 .as_ref()
                 .and_then(|v| match &v.vectors_options {
-                    Some(
-                        qdrant_client::qdrant::vectors_output::VectorsOptions::Vector(vec),
-                    ) => Some(vec.data.clone()),
+                    Some(qdrant_client::qdrant::vectors_output::VectorsOptions::Vector(vec)) => {
+                        Some(vec.data.clone())
+                    }
                     _ => None,
                 })
                 .unwrap_or_default();
@@ -356,15 +357,15 @@ impl QdrantVectorStore {
         }
 
         // Convert next_page_offset PointId back to String for opaque pagination
-        let next_offset_str = result.next_page_offset.and_then(|pid| {
-            match pid.point_id_options {
+        let next_offset_str = result
+            .next_page_offset
+            .and_then(|pid| match pid.point_id_options {
                 Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) => Some(s),
                 Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => {
                     Some(n.to_string())
                 }
                 None => None,
-            }
-        });
+            });
 
         Ok((points, next_offset_str))
     }
@@ -399,11 +400,12 @@ impl QdrantVectorStore {
         payload: serde_json::Value,
     ) -> StorageResult<()> {
         let coll_name = self.collection_name(collection);
-        let qdrant_payload: Payload = payload
-            .try_into()
-            .map_err(|e: <serde_json::Value as TryInto<Payload>>::Error| {
-                MnemoError::Qdrant(format!("Payload conversion failed: {}", e))
-            })?;
+        let qdrant_payload: Payload =
+            payload
+                .try_into()
+                .map_err(|e: <serde_json::Value as TryInto<Payload>>::Error| {
+                    MnemoError::Qdrant(format!("Payload conversion failed: {}", e))
+                })?;
 
         let point = PointStruct::new(Self::uuid_to_point_id(id), vector, qdrant_payload);
         self.client
@@ -512,19 +514,11 @@ impl VectorStore for QdrantVectorStore {
             .await
     }
 
-    async fn set_entity_payload(
-        &self,
-        entity_id: Uuid,
-        payload: Value,
-    ) -> StorageResult<()> {
+    async fn set_entity_payload(&self, entity_id: Uuid, payload: Value) -> StorageResult<()> {
         self.set_point_payload("entities", entity_id, payload).await
     }
 
-    async fn set_edge_payload(
-        &self,
-        edge_id: Uuid,
-        payload: Value,
-    ) -> StorageResult<()> {
+    async fn set_edge_payload(&self, edge_id: Uuid, payload: Value) -> StorageResult<()> {
         self.set_point_payload("edges", edge_id, payload).await
     }
 
