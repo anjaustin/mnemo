@@ -236,14 +236,14 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Auth
-    let auth_config = if config.auth.enabled {
+    // Auth — shared between REST and gRPC via Arc
+    let auth_config = Arc::new(if config.auth.enabled {
         tracing::info!(keys = config.auth.api_keys.len(), "API key auth enabled (scoped keys via Redis)");
         AuthConfig::with_keys_and_store(config.auth.api_keys.clone(), state_store.clone())
     } else {
         tracing::warn!("API key auth DISABLED");
         AuthConfig::disabled()
-    };
+    });
 
     // HTTP server
     let webhook_redis = if config.webhooks.persistence_enabled {
@@ -502,12 +502,14 @@ async fn main() -> anyhow::Result<()> {
             app_state.clone(),
             request_context_middleware,
         ))
-        .layer(AuthLayer::new(auth_config))
+        .layer(AuthLayer::new((*auth_config).clone()))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());
 
     // ─── gRPC (tonic) router ────────────────────────────────────
-    let grpc_state = GrpcState::from_app_state(&app_state);
+    // gRPC handlers enforce auth internally via validate_grpc_auth(),
+    // using the same AuthConfig shared with the REST middleware.
+    let grpc_state = GrpcState::from_app_state(&app_state, auth_config.clone());
 
     // Health check service
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -527,20 +529,31 @@ async fn main() -> anyhow::Result<()> {
         .build_v1()
         .expect("failed to build gRPC reflection service");
 
+    // F2: Apply message size limits to gRPC services to prevent resource exhaustion.
+    // 4 MiB max decoding size (incoming requests) — generous but bounded.
+    const GRPC_MAX_DECODE_SIZE: usize = 4 * 1024 * 1024;
+    const GRPC_MAX_ENCODE_SIZE: usize = 16 * 1024 * 1024;
+
     let grpc_routes = tonic::service::Routes::new(health_service)
         .add_service(reflection)
         .add_service(
             mnemo_proto::proto::memory_service_server::MemoryServiceServer::new(
                 grpc_state.clone(),
-            ),
+            )
+            .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+            .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
         )
         .add_service(
             mnemo_proto::proto::entity_service_server::EntityServiceServer::new(
                 grpc_state.clone(),
-            ),
+            )
+            .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+            .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
         )
         .add_service(
-            mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state),
+            mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state)
+                .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
         );
     let grpc = grpc_routes.into_axum_router();
 

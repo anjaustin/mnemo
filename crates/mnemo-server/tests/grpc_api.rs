@@ -20,6 +20,7 @@ use mnemo_graph::GraphEngine;
 use mnemo_llm::{EmbedderKind, OpenAiCompatibleEmbedder};
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_server::grpc::GrpcState;
+use mnemo_server::middleware::AuthConfig;
 use mnemo_server::state::{
     AppState, MetadataPrefilterConfig, RerankerMode, ServerMetrics, WebhookDeliveryConfig,
 };
@@ -134,9 +135,19 @@ async fn build_test_state() -> (AppState, Arc<RedisStateStore>) {
     (state, state_store)
 }
 
-/// Start a gRPC server on a random port and return (address, join handle).
+/// Start a gRPC server on a random port with auth DISABLED.
+/// Returns (address, join handle).
 async fn start_grpc_server(state: &AppState) -> (String, tokio::task::JoinHandle<()>) {
-    let grpc_state = GrpcState::from_app_state(state);
+    start_grpc_server_with_auth(state, Arc::new(AuthConfig::disabled())).await
+}
+
+/// Start a gRPC server on a random port with the given auth config.
+/// Returns (address, join handle).
+async fn start_grpc_server_with_auth(
+    state: &AppState,
+    auth_config: Arc<AuthConfig>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let grpc_state = GrpcState::from_app_state(state, auth_config);
 
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -154,6 +165,10 @@ async fn start_grpc_server(state: &AppState) -> (String, tokio::task::JoinHandle
 
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
+    // F2: Apply same message size limits as production
+    const GRPC_MAX_DECODE_SIZE: usize = 4 * 1024 * 1024;
+    const GRPC_MAX_ENCODE_SIZE: usize = 16 * 1024 * 1024;
+
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(health_service)
@@ -161,15 +176,21 @@ async fn start_grpc_server(state: &AppState) -> (String, tokio::task::JoinHandle
             .add_service(
                 mnemo_proto::proto::memory_service_server::MemoryServiceServer::new(
                     grpc_state.clone(),
-                ),
+                )
+                .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
             )
             .add_service(
                 mnemo_proto::proto::entity_service_server::EntityServiceServer::new(
                     grpc_state.clone(),
-                ),
+                )
+                .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
             )
             .add_service(
-                mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state),
+                mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state)
+                    .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                    .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
             )
             .serve_with_incoming(incoming)
             .await
@@ -636,4 +657,479 @@ async fn test_grpc_health_check() {
         resp.into_inner().status,
         tonic_health::pb::health_check_response::ServingStatus::Serving as i32,
     );
+}
+
+// ─── Red-team adversarial tests ─────────────────────────────────────
+
+// F1: gRPC auth — unauthenticated requests MUST be rejected when auth is enabled
+
+#[tokio::test]
+async fn test_grpc_auth_rejects_without_key() {
+    let (state, store) = build_test_state().await;
+    let auth = Arc::new(AuthConfig::with_keys(vec!["secret-key-123".to_string()]));
+    let (addr, _handle) = start_grpc_server_with_auth(&state, auth).await;
+
+    let (user_id, session_id) = seed_user_session(&store).await;
+
+    // Connect WITHOUT any auth metadata
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .create_episode(CreateEpisodeRequest {
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            content: "Should be rejected".to_string(),
+            episode_type: "message".to_string(),
+            role: Some("user".to_string()),
+        })
+        .await;
+
+    assert!(resp.is_err());
+    assert_eq!(resp.unwrap_err().code(), tonic::Code::Unauthenticated);
+}
+
+#[tokio::test]
+async fn test_grpc_auth_rejects_wrong_key() {
+    let (state, store) = build_test_state().await;
+    let auth = Arc::new(AuthConfig::with_keys(vec!["correct-key".to_string()]));
+    let (addr, _handle) = start_grpc_server_with_auth(&state, auth).await;
+
+    let (user_id, session_id) = seed_user_session(&store).await;
+
+    let channel = tonic::transport::Channel::from_shared(addr)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+
+    // Attach a WRONG key via interceptor
+    let mut client = MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
+        req.metadata_mut().insert(
+            "authorization",
+            "Bearer wrong-key".parse().unwrap(),
+        );
+        Ok(req)
+    });
+
+    let resp = client
+        .create_episode(CreateEpisodeRequest {
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            content: "Should be rejected".to_string(),
+            episode_type: "message".to_string(),
+            role: Some("user".to_string()),
+        })
+        .await;
+
+    assert!(resp.is_err());
+    assert_eq!(resp.unwrap_err().code(), tonic::Code::Unauthenticated);
+}
+
+#[tokio::test]
+async fn test_grpc_auth_accepts_valid_bearer() {
+    let (state, store) = build_test_state().await;
+    let auth = Arc::new(AuthConfig::with_keys(vec!["valid-key-abc".to_string()]));
+    let (addr, _handle) = start_grpc_server_with_auth(&state, auth).await;
+
+    let (user_id, session_id) = seed_user_session(&store).await;
+
+    let channel = tonic::transport::Channel::from_shared(addr)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+
+    // Attach the CORRECT key
+    let mut client = MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
+        req.metadata_mut().insert(
+            "authorization",
+            "Bearer valid-key-abc".parse().unwrap(),
+        );
+        Ok(req)
+    });
+
+    let resp = client
+        .create_episode(CreateEpisodeRequest {
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            content: "Should succeed".to_string(),
+            episode_type: "message".to_string(),
+            role: Some("user".to_string()),
+        })
+        .await;
+
+    assert!(resp.is_ok());
+    let episode = resp.unwrap().into_inner();
+    assert_eq!(episode.content, "Should succeed");
+}
+
+#[tokio::test]
+async fn test_grpc_auth_accepts_x_api_key() {
+    let (state, store) = build_test_state().await;
+    let auth = Arc::new(AuthConfig::with_keys(vec!["x-key-456".to_string()]));
+    let (addr, _handle) = start_grpc_server_with_auth(&state, auth).await;
+
+    let (user_id, session_id) = seed_user_session(&store).await;
+
+    let channel = tonic::transport::Channel::from_shared(addr)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+
+    // Use x-api-key metadata instead of authorization
+    let mut client = MemoryServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
+        req.metadata_mut().insert(
+            "x-api-key",
+            "x-key-456".parse().unwrap(),
+        );
+        Ok(req)
+    });
+
+    let resp = client
+        .create_episode(CreateEpisodeRequest {
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            content: "Via x-api-key".to_string(),
+            episode_type: "message".to_string(),
+            role: Some("user".to_string()),
+        })
+        .await;
+
+    assert!(resp.is_ok());
+}
+
+#[tokio::test]
+async fn test_grpc_auth_all_services_enforced() {
+    // Verify auth is enforced on ALL services, not just MemoryService
+    let (state, store) = build_test_state().await;
+    let auth = Arc::new(AuthConfig::with_keys(vec!["secret".to_string()]));
+    let (addr, _handle) = start_grpc_server_with_auth(&state, auth).await;
+
+    let user_id = Uuid::from_u128(7001);
+    store
+        .create_user(CreateUserRequest {
+            id: Some(user_id),
+            external_id: None,
+            name: "auth-test-user".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    // EntityService — no key
+    let mut entity_client = EntityServiceClient::connect(addr.clone()).await.unwrap();
+    let resp = entity_client
+        .list_entities(ListEntitiesRequest {
+            user_id: user_id.to_string(),
+            limit: Some(10),
+            entity_type: None,
+        })
+        .await;
+    assert!(resp.is_err());
+    assert_eq!(resp.unwrap_err().code(), tonic::Code::Unauthenticated);
+
+    // EdgeService — no key
+    let mut edge_client = EdgeServiceClient::connect(addr).await.unwrap();
+    let resp = edge_client
+        .query_edges(QueryEdgesRequest {
+            user_id: user_id.to_string(),
+            entity_id: None,
+            label: None,
+            current_only: None,
+            limit: Some(10),
+        })
+        .await;
+    assert!(resp.is_err());
+    assert_eq!(resp.unwrap_err().code(), tonic::Code::Unauthenticated);
+}
+
+// F5: Negative max_tokens must be rejected
+
+#[tokio::test]
+async fn test_grpc_negative_max_tokens_rejected() {
+    let (state, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&state).await;
+
+    let (user_id, _session_id) = seed_user_session(&store).await;
+
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .get_context(GetContextRequest {
+            user_id: user_id.to_string(),
+            messages: vec![ContextMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
+            max_tokens: Some(-1),
+            session_id: None,
+            as_of: None,
+            min_relevance: None,
+        })
+        .await;
+
+    assert!(resp.is_err());
+    let status = resp.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("max_tokens"));
+}
+
+#[tokio::test]
+async fn test_grpc_zero_max_tokens_rejected() {
+    let (state, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&state).await;
+
+    let (user_id, _session_id) = seed_user_session(&store).await;
+
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .get_context(GetContextRequest {
+            user_id: user_id.to_string(),
+            messages: vec![ContextMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
+            max_tokens: Some(0),
+            session_id: None,
+            as_of: None,
+            min_relevance: None,
+        })
+        .await;
+
+    assert!(resp.is_err());
+    assert_eq!(resp.unwrap_err().code(), tonic::Code::InvalidArgument);
+}
+
+// F6: Malformed as_of timestamp must return an error
+
+#[tokio::test]
+async fn test_grpc_malformed_as_of_rejected() {
+    let (state, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&state).await;
+
+    let (user_id, _session_id) = seed_user_session(&store).await;
+
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .get_context(GetContextRequest {
+            user_id: user_id.to_string(),
+            messages: vec![ContextMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
+            max_tokens: None,
+            session_id: None,
+            as_of: Some("not-a-timestamp".to_string()),
+            min_relevance: None,
+        })
+        .await;
+
+    assert!(resp.is_err());
+    let status = resp.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("as_of"));
+}
+
+// F7: min_relevance out of [0.0, 1.0] range must be rejected
+
+#[tokio::test]
+async fn test_grpc_min_relevance_negative_rejected() {
+    let (state, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&state).await;
+
+    let (user_id, _session_id) = seed_user_session(&store).await;
+
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .get_context(GetContextRequest {
+            user_id: user_id.to_string(),
+            messages: vec![ContextMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
+            max_tokens: None,
+            session_id: None,
+            as_of: None,
+            min_relevance: Some(-0.5),
+        })
+        .await;
+
+    assert!(resp.is_err());
+    let status = resp.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("min_relevance"));
+}
+
+#[tokio::test]
+async fn test_grpc_min_relevance_above_one_rejected() {
+    let (state, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&state).await;
+
+    let (user_id, _session_id) = seed_user_session(&store).await;
+
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .get_context(GetContextRequest {
+            user_id: user_id.to_string(),
+            messages: vec![ContextMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
+            max_tokens: None,
+            session_id: None,
+            as_of: None,
+            min_relevance: Some(1.5),
+        })
+        .await;
+
+    assert!(resp.is_err());
+    assert_eq!(resp.unwrap_err().code(), tonic::Code::InvalidArgument);
+}
+
+// F8: Invalid episode_type must be rejected
+
+#[tokio::test]
+async fn test_grpc_invalid_episode_type_rejected() {
+    let (state, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&state).await;
+
+    let (user_id, session_id) = seed_user_session(&store).await;
+
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .create_episode(CreateEpisodeRequest {
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            content: "Hello".to_string(),
+            episode_type: "event".to_string(), // Not "message"
+            role: Some("user".to_string()),
+        })
+        .await;
+
+    assert!(resp.is_err());
+    let status = resp.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("episode_type"));
+}
+
+// F9: Unknown role must be rejected
+
+#[tokio::test]
+async fn test_grpc_unknown_role_rejected() {
+    let (state, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&state).await;
+
+    let (user_id, session_id) = seed_user_session(&store).await;
+
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .create_episode(CreateEpisodeRequest {
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            content: "Hello".to_string(),
+            episode_type: "message".to_string(),
+            role: Some("moderator".to_string()), // Invalid role
+        })
+        .await;
+
+    assert!(resp.is_err());
+    let status = resp.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("role"));
+}
+
+// F10: entity_type filter works
+
+#[tokio::test]
+async fn test_grpc_entity_type_filter() {
+    let (state, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&state).await;
+
+    let user_id = Uuid::from_u128(8001);
+    store
+        .create_user(CreateUserRequest {
+            id: Some(user_id),
+            external_id: None,
+            name: "filter-test-user".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    // Seed a Person and a Product entity
+    let person = Entity::from_extraction(
+        &ExtractedEntity {
+            name: "Alice".to_string(),
+            entity_type: EntityType::Person,
+            summary: Some("A person".to_string()),
+            classification: Classification::default(),
+        },
+        user_id,
+        Uuid::from_u128(200),
+    );
+    let product = Entity::from_extraction(
+        &ExtractedEntity {
+            name: "Widget".to_string(),
+            entity_type: EntityType::Product,
+            summary: Some("A product".to_string()),
+            classification: Classification::default(),
+        },
+        user_id,
+        Uuid::from_u128(201),
+    );
+    store.create_entity(person).await.unwrap();
+    store.create_entity(product).await.unwrap();
+
+    let mut client = EntityServiceClient::connect(addr).await.unwrap();
+
+    // Filter by "person" — should return only Alice
+    let resp = client
+        .list_entities(ListEntitiesRequest {
+            user_id: user_id.to_string(),
+            limit: Some(50),
+            entity_type: Some("person".to_string()),
+        })
+        .await
+        .unwrap();
+
+    let entities = resp.into_inner().entities;
+    assert_eq!(entities.len(), 1);
+    assert_eq!(entities[0].name, "Alice");
+    assert_eq!(entities[0].entity_type, "person");
+
+    // Filter by "product" — should return only Widget
+    let resp = client
+        .list_entities(ListEntitiesRequest {
+            user_id: user_id.to_string(),
+            limit: Some(50),
+            entity_type: Some("product".to_string()),
+        })
+        .await
+        .unwrap();
+
+    let entities = resp.into_inner().entities;
+    assert_eq!(entities.len(), 1);
+    assert_eq!(entities[0].name, "Widget");
+
+    // No filter — should return both
+    let resp = client
+        .list_entities(ListEntitiesRequest {
+            user_id: user_id.to_string(),
+            limit: Some(50),
+            entity_type: None,
+        })
+        .await
+        .unwrap();
+
+    let entities = resp.into_inner().entities;
+    assert_eq!(entities.len(), 2);
 }

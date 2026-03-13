@@ -6,6 +6,7 @@
 |----------|-------|------|
 | `crates/mnemo-core/src/` | 478 | Unit (inline `#[cfg(test)]` across 19 model modules + error + sync) |
 | `crates/mnemo-server/tests/memory_api.rs` | ~244 | Integration (requires Redis + Qdrant) |
+| `crates/mnemo-server/tests/grpc_api.rs` | 24 | Integration — gRPC (11 functional + 13 adversarial; requires Redis + Qdrant) |
 | `crates/mnemo-server/src/` | ~35 | Unit (config: 24, auth middleware: 7, state: 4) |
 | `crates/mnemo-retrieval/src/` | 130 | Unit (router, coherence, compression, hyperbolic, RRF/MMR) |
 | `crates/mnemo-mcp/src/` | 68 | Unit (protocol, tools, resources, transport) |
@@ -26,8 +27,8 @@
 | `tests/phase_b_screenshots.py` | 8 screenshots | Playwright (requires running server) |
 | Phase B falsification | 35 gates | Playwright (manual, requires running server) |
 | `tests/eval_recall_quality.py` | 3 quality gates (40-fact dataset) | Python (requires running server + embedding model) |
-| **Total Rust tests** | **~1,102** | |
-| **Total (all languages)** | **~1,200+** | |
+| **Total Rust tests** | **~1,115** | |
+| **Total (all languages)** | **~1,213+** | |
 
 This project has several practical testing layers.
 

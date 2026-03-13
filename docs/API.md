@@ -26,6 +26,32 @@ gRPC services are served on the same port as REST. Use any gRPC client (e.g. `gr
 | `grpc.health.v1.Health` | `Check` (standard health check) |
 | `grpc.reflection.v1.ServerReflection` | Server reflection for schema discovery |
 
+### Authentication
+
+When `MNEMO_AUTH_ENABLED=true`, gRPC RPCs require the same API key as REST endpoints. Pass the key via gRPC metadata:
+
+- `authorization: Bearer <key>` (preferred)
+- `x-api-key: <key>` (alternative)
+
+Health check and reflection services do **not** require authentication.
+
+Unauthenticated or invalid requests return `UNAUTHENTICATED` (gRPC code 16).
+
+### Input validation
+
+| Field | Constraint |
+|---|---|
+| `episode_type` | Must be `"message"` |
+| `role` | Must be `"user"`, `"assistant"`, or `"system"` (or omitted) |
+| `max_tokens` | Must be a positive integer (> 0) |
+| `as_of` | Must be a valid RFC 3339 timestamp |
+| `min_relevance` | Must be between 0.0 and 1.0 |
+| `entity_type` (ListEntities) | Filters results by entity type (e.g. `"person"`, `"product"`) |
+
+### Message size limits
+
+Incoming gRPC messages are limited to **4 MiB**; outgoing responses to **16 MiB**.
+
 ### Quick start with grpcurl
 
 ```bash
@@ -35,8 +61,8 @@ grpcurl -plaintext localhost:8080 grpc.health.v1.Health/Check
 # List services (via reflection)
 grpcurl -plaintext localhost:8080 list
 
-# Create an episode
-grpcurl -plaintext -d '{
+# Create an episode (with auth)
+grpcurl -plaintext -H 'authorization: Bearer YOUR_API_KEY' -d '{
   "user_id": "01234567-89ab-cdef-0123-456789abcdef",
   "session_id": "01234567-89ab-cdef-0123-456789abcde0",
   "content": "I just bought Nike running shoes",
@@ -45,20 +71,21 @@ grpcurl -plaintext -d '{
 }' localhost:8080 mnemo.v1.MemoryService/CreateEpisode
 
 # Get context
-grpcurl -plaintext -d '{
+grpcurl -plaintext -H 'authorization: Bearer YOUR_API_KEY' -d '{
   "user_id": "01234567-89ab-cdef-0123-456789abcdef",
   "messages": [{"role": "user", "content": "What shoes does Kendra like?"}],
   "max_tokens": 500
 }' localhost:8080 mnemo.v1.MemoryService/GetContext
 
-# List entities
-grpcurl -plaintext -d '{
+# List entities (with type filter)
+grpcurl -plaintext -H 'authorization: Bearer YOUR_API_KEY' -d '{
   "user_id": "01234567-89ab-cdef-0123-456789abcdef",
-  "limit": 10
+  "limit": 10,
+  "entity_type": "person"
 }' localhost:8080 mnemo.v1.EntityService/ListEntities
 
 # Query edges
-grpcurl -plaintext -d '{
+grpcurl -plaintext -H 'authorization: Bearer YOUR_API_KEY' -d '{
   "user_id": "01234567-89ab-cdef-0123-456789abcdef",
   "current_only": true,
   "limit": 20

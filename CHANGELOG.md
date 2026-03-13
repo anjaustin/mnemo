@@ -8,14 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **gRPC API** (`mnemo-proto`, `mnemo-server`): Client-facing gRPC endpoint served on the same port as REST via content-type routing. `MemoryService` (GetContext, CreateEpisode, ListEpisodes, DeleteEpisode), `EntityService` (ListEntities, GetEntity), `EdgeService` (QueryEdges, GetEdge). Proto schema at `proto/mnemo/v1/memory.proto`. New `mnemo-proto` crate (10th workspace crate) with `tonic-build` compilation and `FILE_DESCRIPTOR_SET` for server reflection. gRPC health check (`grpc.health.v1.Health/Check`) and reflection (`grpc.reflection.v1.ServerReflection`) services. Same-port multiplexing via `axum::Router::merge`. 11 integration tests. First-in-category: none of Zep, Mem0, or Letta offer gRPC.
+- **gRPC API** (`mnemo-proto`, `mnemo-server`): Client-facing gRPC endpoint served on the same port as REST via content-type routing. `MemoryService` (GetContext, CreateEpisode, ListEpisodes, DeleteEpisode), `EntityService` (ListEntities, GetEntity), `EdgeService` (QueryEdges, GetEdge). Proto schema at `proto/mnemo/v1/memory.proto`. New `mnemo-proto` crate (10th workspace crate) with `tonic-build` compilation and `FILE_DESCRIPTOR_SET` for server reflection. gRPC health check (`grpc.health.v1.Health/Check`) and reflection (`grpc.reflection.v1.ServerReflection`) services. Same-port multiplexing via `axum::Router::merge`. 24 integration tests (11 functional + 13 adversarial). First-in-category: none of Zep, Mem0, or Letta offer gRPC.
 
 ### Changed
 
 - Workspace crate count: 9 -> 10 (added `mnemo-proto`).
 - `mnemo-server` description updated: "HTTP/REST and gRPC server for Mnemo".
-- Total workspace test count: ~1,091 -> ~1,102 (+11 gRPC integration tests).
+- Total workspace test count: ~1,091 -> ~1,115 (+24 gRPC integration tests).
 - `MnemoError` gRPC mapping uses `status_code()` method for correct classification of all error variants.
+
+### Security
+
+- **gRPC red-team hardening** — resolved 10 findings from adversarial audit:
+  - **F1 (CRITICAL): Auth bypass fixed.** All 8 gRPC RPCs now enforce API key authentication via `validate_grpc_auth()`, supporting `Bearer` and `x-api-key` metadata, bootstrap keys, and scoped Redis-backed keys. Shares `AuthConfig` (via `Arc`) with the REST `AuthLayer`.
+  - **F2 (HIGH): Message size limits.** `max_decoding_message_size(4 MiB)` and `max_encoding_message_size(16 MiB)` applied to all three gRPC service servers.
+  - **F3 (HIGH): Request-id propagation.** `x-mnemo-request-id` metadata extracted (or generated via `Uuid::now_v7()`) at the start of every gRPC handler for tracing.
+  - **F5 (MEDIUM): Negative max_tokens rejected.** `max_tokens <= 0` now returns `INVALID_ARGUMENT`.
+  - **F6 (MEDIUM): Malformed as_of rejected.** Invalid RFC 3339 timestamps now return `INVALID_ARGUMENT` instead of being silently ignored.
+  - **F7 (MEDIUM): min_relevance clamped.** Values outside `[0.0, 1.0]` now return `INVALID_ARGUMENT`.
+  - **F8 (LOW): episode_type validated.** Only `"message"` is accepted; other values return `INVALID_ARGUMENT`.
+  - **F9 (LOW): Unknown role rejected.** Invalid role values return `INVALID_ARGUMENT` instead of being silently dropped.
+  - **F10 (LOW): entity_type filter implemented.** `ListEntities` now respects the `entity_type` filter field.
+  - 13 adversarial integration tests cover all findings.
 
 ## [0.6.0] — 2026-03-13
 

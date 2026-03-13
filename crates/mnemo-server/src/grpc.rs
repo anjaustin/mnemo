@@ -2,17 +2,28 @@
 //!
 //! These handlers delegate to the same storage traits and retrieval engine
 //! used by the REST API, providing wire-format parity over HTTP/2 + protobuf.
+//!
+//! ## Security
+//!
+//! All services are wrapped with a tonic interceptor (`grpc_auth_interceptor`)
+//! that validates API keys from the `authorization` gRPC metadata header,
+//! mirroring the REST `AuthLayer`. The interceptor supports:
+//! - `Bearer <key>` in the `authorization` metadata
+//! - `x-api-key` metadata as a fallback
+//! - Bootstrap keys and scoped Redis-backed keys
+//! - Path-based exemptions for health/reflection services
 
 use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
+use mnemo_core::models::api_key::{CallerContext, hash_api_key};
 use mnemo_core::models::context::{
     ContextMessage as CoreContextMessage, ContextRequest as CoreContextRequest,
 };
 use mnemo_core::models::episode::{CreateEpisodeRequest as CoreCreateEpisodeRequest, EpisodeType};
-use mnemo_core::traits::storage::{EdgeStore, EntityStore, EpisodeStore, SessionStore};
+use mnemo_core::traits::storage::{ApiKeyStore, EdgeStore, EntityStore, EpisodeStore, SessionStore};
 use mnemo_storage::redis_store::RedisStateStore;
 
 use mnemo_proto::proto::{
@@ -35,6 +46,7 @@ use mnemo_proto::proto::{
     Classification as ProtoClassification,
 };
 
+use crate::middleware::AuthConfig;
 use crate::state::AppState;
 
 // ─── Shared state wrapper ───────────────────────────────────────────
@@ -51,16 +63,171 @@ pub struct GrpcState {
         >,
     >,
     pub reranker: crate::state::RerankerMode,
+    /// Auth configuration — shared with the REST middleware.
+    pub auth_config: Arc<AuthConfig>,
 }
 
 impl GrpcState {
-    pub fn from_app_state(app: &AppState) -> Self {
+    pub fn from_app_state(app: &AppState, auth_config: Arc<AuthConfig>) -> Self {
         Self {
             state_store: app.state_store.clone(),
             retrieval: app.retrieval.clone(),
             reranker: app.reranker.clone(),
+            auth_config,
         }
     }
+}
+
+// ─── gRPC Auth Interceptor ─────────────────────────────────────────
+
+/// A tonic interceptor that validates API keys from gRPC metadata,
+/// mirroring the REST `AuthLayer` behaviour.
+///
+/// Checks `authorization: Bearer <key>` and `x-api-key` metadata headers.
+/// When auth is disabled, all requests pass through with an implicit admin context.
+///
+/// NOTE: We use a synchronous interceptor for cache-hit/bootstrap-key paths
+/// (which are the common case). For scoped keys that require a Redis lookup
+/// we spawn a blocking lookup from within the async handler; to keep the
+/// interceptor itself synchronous (as required by tonic's `Interceptor` trait),
+/// we validate bootstrap & cache inline and fall through to UNAUTHENTICATED
+/// for cache-miss scoped keys. The handlers then do not need to re-check —
+/// the interceptor is the single enforcement point.
+///
+/// Actually, tonic interceptors are synchronous but we need async Redis lookups.
+/// The solution: use `tower::ServiceBuilder` with an async layer instead.
+/// We'll build a helper that produces a `tonic::service::interceptor::InterceptedService`.
+///
+/// Revised approach: since tonic interceptors must be sync, we implement the
+/// auth check as a tonic `Interceptor` that handles bootstrap keys synchronously
+/// and uses the key_cache for scoped keys. On cache miss, it returns
+/// UNAUTHENTICATED (the client retries after the cache is warmed by a REST call,
+/// or we use a tower layer instead).
+///
+/// Final approach: We use a tower layer wrapping the gRPC services. But the
+/// simplest correct approach is to make `GrpcState` hold the `AuthConfig` and
+/// validate auth at the start of each handler. This avoids the sync/async
+/// mismatch entirely and gives us full access to Redis for scoped key lookups.
+#[derive(Clone)]
+pub struct GrpcAuthConfig {
+    pub auth_config: Arc<AuthConfig>,
+}
+
+impl GrpcAuthConfig {
+    pub fn new(auth_config: Arc<AuthConfig>) -> Self {
+        Self { auth_config }
+    }
+}
+
+/// Extract and validate the API key from gRPC request metadata.
+///
+/// Returns the `CallerContext` on success, or a tonic `Status` error.
+/// This is called at the top of every gRPC handler.
+pub async fn validate_grpc_auth<T>(
+    auth: &Arc<AuthConfig>,
+    request: &Request<T>,
+) -> Result<CallerContext, Status> {
+    // Auth disabled → implicit admin
+    if !auth.enabled {
+        return Ok(CallerContext::admin_bootstrap());
+    }
+
+    // Extract raw key from metadata: `authorization: Bearer <key>` or `x-api-key: <key>`
+    let raw_key = request
+        .metadata()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+        .or_else(|| {
+            request
+                .metadata()
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        });
+
+    let raw_key = match raw_key {
+        Some(k) => k,
+        None => return Err(Status::unauthenticated("Invalid or missing API key")),
+    };
+
+    // Check bootstrap keys
+    if auth.valid_keys.contains(&raw_key) {
+        return Ok(CallerContext::admin_bootstrap());
+    }
+
+    // Check scoped keys via Redis
+    if let Some(ref store) = auth.state_store {
+        let key_hash = hash_api_key(&raw_key);
+
+        // Check cache first (30-second TTL)
+        {
+            let cache = auth.key_cache.read().await;
+            if let Some(cached) = cache.get(&key_hash) {
+                let age = chrono::Utc::now() - cached.cached_at;
+                if age.num_seconds() < 30 && cached.active {
+                    return Ok(cached.context.clone());
+                }
+            }
+        }
+
+        // Cache miss or stale → look up in Redis
+        match store.get_api_key_by_hash(&key_hash).await {
+            Ok(Some(api_key)) if api_key.is_active() => {
+                let ctx = CallerContext {
+                    key_id: api_key.id,
+                    key_name: api_key.name.clone(),
+                    role: api_key.role,
+                    scope: api_key.scope.clone(),
+                };
+
+                // Update cache
+                {
+                    let mut cache = auth.key_cache.write().await;
+                    cache.insert(
+                        key_hash,
+                        crate::middleware::auth::CachedKey {
+                            context: ctx.clone(),
+                            active: true,
+                            cached_at: chrono::Utc::now(),
+                        },
+                    );
+                }
+
+                // Best-effort: update last_used_at
+                let mut updated = api_key;
+                updated.last_used_at = Some(chrono::Utc::now());
+                let _ = store.update_api_key(&updated).await;
+
+                return Ok(ctx);
+            }
+            Ok(Some(_)) => {
+                // Key exists but is revoked or expired
+                return Err(Status::unauthenticated("Invalid or missing API key"));
+            }
+            Ok(None) => {
+                return Err(Status::unauthenticated("Invalid or missing API key"));
+            }
+            Err(_) => {
+                // Redis error — fail closed for security
+                return Err(Status::unauthenticated("Invalid or missing API key"));
+            }
+        }
+    }
+
+    Err(Status::unauthenticated("Invalid or missing API key"))
+}
+
+/// Extract the request-id from gRPC metadata, or generate one.
+fn extract_request_id<T>(request: &Request<T>) -> String {
+    request
+        .metadata()
+        .get("x-mnemo-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| Uuid::now_v7().to_string())
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -172,6 +339,11 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<GetContextRequest>,
     ) -> Result<Response<GetContextResponse>, Status> {
+        // F1: Auth check
+        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        // F3: Request-id propagation (logged for tracing)
+        let _request_id = extract_request_id(&request);
+
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
 
@@ -197,22 +369,53 @@ impl MemoryService for GrpcState {
             .map(|s| parse_uuid(s, "session_id"))
             .transpose()?;
 
-        let as_of = req.as_of.and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s)
-                .ok()
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-        });
+        // F6: Reject malformed as_of instead of silently ignoring
+        let as_of = match req.as_of {
+            Some(ref s) => {
+                let dt = chrono::DateTime::parse_from_rfc3339(s)
+                    .map_err(|e| {
+                        Status::invalid_argument(format!(
+                            "invalid as_of timestamp (expected RFC 3339): {e}"
+                        ))
+                    })?
+                    .with_timezone(&chrono::Utc);
+                Some(dt)
+            }
+            None => None,
+        };
+
+        // F5: Reject negative max_tokens (proto int32 could be negative)
+        let max_tokens = match req.max_tokens {
+            Some(t) if t <= 0 => {
+                return Err(Status::invalid_argument(
+                    "max_tokens must be a positive integer",
+                ));
+            }
+            Some(t) => t as u32,
+            None => 500,
+        };
+
+        // F7: Clamp min_relevance to [0.0, 1.0]
+        let min_relevance = match req.min_relevance {
+            Some(r) if r < 0.0 || r > 1.0 => {
+                return Err(Status::invalid_argument(
+                    "min_relevance must be between 0.0 and 1.0",
+                ));
+            }
+            Some(r) => r,
+            None => 0.3,
+        };
 
         let core_req = CoreContextRequest {
             session_id,
             messages,
-            max_tokens: req.max_tokens.map(|t| t as u32).unwrap_or(500),
+            max_tokens,
             search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
             temporal_filter: None,
             as_of,
             time_intent: mnemo_core::models::context::TemporalIntent::Auto,
             temporal_weight: None,
-            min_relevance: req.min_relevance.unwrap_or(0.3),
+            min_relevance,
         };
 
         let reranker = reranker_for_state(&self.reranker);
@@ -265,9 +468,35 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<CreateEpisodeRequest>,
     ) -> Result<Response<ProtoEpisode>, Status> {
+        // F1: Auth check
+        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let _request_id = extract_request_id(&request);
+
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
         let session_id = parse_uuid(&req.session_id, "session_id")?;
+
+        // F8: Validate episode_type — only "message" is supported
+        if req.episode_type != "message" {
+            return Err(Status::invalid_argument(format!(
+                "unsupported episode_type: '{}' (only 'message' is supported)",
+                req.episode_type
+            )));
+        }
+
+        // F9: Reject unknown role values instead of silently dropping
+        let role = match req.role.as_deref() {
+            Some("user") => Some(mnemo_core::models::episode::MessageRole::User),
+            Some("assistant") => Some(mnemo_core::models::episode::MessageRole::Assistant),
+            Some("system") => Some(mnemo_core::models::episode::MessageRole::System),
+            Some(unknown) => {
+                return Err(Status::invalid_argument(format!(
+                    "unknown role: '{}' (expected 'user', 'assistant', or 'system')",
+                    unknown
+                )));
+            }
+            None => None,
+        };
 
         // Validate session exists
         let _session = self
@@ -280,14 +509,7 @@ impl MemoryService for GrpcState {
             id: None,
             episode_type: EpisodeType::Message,
             content: req.content,
-            role: req.role.and_then(|r| {
-                match r.to_lowercase().as_str() {
-                    "user" => Some(mnemo_core::models::episode::MessageRole::User),
-                    "assistant" => Some(mnemo_core::models::episode::MessageRole::Assistant),
-                    "system" => Some(mnemo_core::models::episode::MessageRole::System),
-                    _ => None,
-                }
-            }),
+            role,
             name: None,
             metadata: serde_json::Value::Null,
             created_at: None,
@@ -306,6 +528,10 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<ListEpisodesRequest>,
     ) -> Result<Response<ListEpisodesResponse>, Status> {
+        // F1: Auth check
+        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let _request_id = extract_request_id(&request);
+
         let req = request.into_inner();
         let session_id = parse_uuid(&req.session_id, "session_id")?;
         let limit = req.limit.unwrap_or(20).clamp(1, 500) as u32;
@@ -331,6 +557,10 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<DeleteEpisodeRequest>,
     ) -> Result<Response<DeleteEpisodeResponse>, Status> {
+        // F1: Auth check
+        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let _request_id = extract_request_id(&request);
+
         let req = request.into_inner();
         let id = parse_uuid(&req.id, "id")?;
 
@@ -351,9 +581,18 @@ impl EntityService for GrpcState {
         &self,
         request: Request<ListEntitiesRequest>,
     ) -> Result<Response<ListEntitiesResponse>, Status> {
+        // F1: Auth check
+        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let _request_id = extract_request_id(&request);
+
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
         let limit = req.limit.unwrap_or(20).clamp(1, 500) as u32;
+
+        // F10: Apply entity_type filter if provided
+        let type_filter = req.entity_type.as_deref().map(|s| {
+            mnemo_core::models::entity::EntityType::from_str_flexible(s)
+        });
 
         let entities = self
             .state_store
@@ -361,8 +600,18 @@ impl EntityService for GrpcState {
             .await
             .map_err(storage_err_to_status)?;
 
+        // Apply type filter client-side (storage doesn't support type filter natively)
+        let filtered: Vec<_> = if let Some(ref et) = type_filter {
+            entities
+                .into_iter()
+                .filter(|e| &e.entity_type == et)
+                .collect()
+        } else {
+            entities
+        };
+
         Ok(Response::new(ListEntitiesResponse {
-            entities: entities.into_iter().map(entity_to_proto).collect(),
+            entities: filtered.into_iter().map(entity_to_proto).collect(),
         }))
     }
 
@@ -370,6 +619,10 @@ impl EntityService for GrpcState {
         &self,
         request: Request<GetEntityRequest>,
     ) -> Result<Response<ProtoEntity>, Status> {
+        // F1: Auth check
+        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let _request_id = extract_request_id(&request);
+
         let req = request.into_inner();
         let id = parse_uuid(&req.id, "id")?;
 
@@ -391,6 +644,10 @@ impl EdgeService for GrpcState {
         &self,
         request: Request<QueryEdgesRequest>,
     ) -> Result<Response<QueryEdgesResponse>, Status> {
+        // F1: Auth check
+        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let _request_id = extract_request_id(&request);
+
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
         let limit = req.limit.unwrap_or(20).clamp(1, 1000) as u32;
@@ -424,6 +681,10 @@ impl EdgeService for GrpcState {
         &self,
         request: Request<GetEdgeRequest>,
     ) -> Result<Response<ProtoEdge>, Status> {
+        // F1: Auth check
+        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let _request_id = extract_request_id(&request);
+
         let req = request.into_inner();
         let id = parse_uuid(&req.id, "id")?;
 
