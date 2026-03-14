@@ -140,6 +140,11 @@ topologySpreadConstraints:
     labelSelector:
       matchLabels: {}  # populated by template
 
+# -- NetworkPolicy configuration (requires a CNI that supports NetworkPolicy)
+networkPolicy:
+  # -- Enable NetworkPolicy to restrict pod-to-pod traffic
+  enabled: false
+
 # ============================================================================
 # Mnemo Configuration
 # ============================================================================

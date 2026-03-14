@@ -211,7 +211,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Mnemo internal types in OpenAPI**: `utoipa` derives on internal structs (e.g., `GraphNode`, `RedisEdge`) expose implementation details in the schema. Needs a DTO separation layer.
 - **Mnemo Helm Qdrant auth**: Qdrant API key auth is supported via `qdrant.apiKey` in Helm values and `MNEMO_QDRANT_API_KEY` env var. Disabled by default; NOTES.txt warns and provides configuration guidance when auth is off.
 - **Mnemo Helm Ingress TLS**: Ingress template supports TLS but defaults to disabled. NOTES.txt warns when ingress is enabled without TLS. Operators must configure cert-manager or bring their own TLS secret.
-- **Mnemo Helm NetworkPolicy**: No NetworkPolicy template. Pod-to-pod traffic is unrestricted within the namespace.
+- **Mnemo Helm NetworkPolicy**: Optional NetworkPolicy template available (`networkPolicy.enabled: true`). Restricts Redis and Qdrant ingress to Mnemo pods only. Disabled by default (requires CNI support).
 - **Zep self-hosted**: [Graphiti](https://github.com/getzep/graphiti) is now fully open-source (Apache 2.0, 23.7k stars) with Neo4j, FalkorDB, Kuzu, and Neptune backends. Prior "partial" rating was stale. Zep Cloud remains the managed platform.
 - **Zep graph traversal**: BFS shipped (`bfs_origin_node_uuids`), plus node-distance reranker. No shortest-path API.
 - **Zep reranking**: Five rerankers: RRF, MMR, cross-encoder, node_distance, episode_mentions. Full parity.

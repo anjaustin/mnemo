@@ -1,0 +1,99 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mnemo.fullname" . }}
+  labels:
+    {{- include "mnemo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mnemo.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow external traffic to Mnemo (REST + gRPC on same port)
+    - ports:
+        - port: {{ .Values.service.port }}
+          protocol: TCP
+  egress:
+    # Allow Mnemo -> Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    # Allow Mnemo -> Qdrant (HTTP + gRPC)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: qdrant
+      ports:
+        - port: 6333
+          protocol: TCP
+        - port: 6334
+          protocol: TCP
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- if .Values.mnemo.otelEnabled }}
+    # Allow Mnemo -> OTLP collector
+    - to: []
+      ports:
+        - port: 4317
+          protocol: TCP
+{{- end }}
+---
+# Restrict Redis ingress to Mnemo pods only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mnemo.fullname" . }}-redis
+  labels:
+    {{- include "mnemo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "mnemo.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 6379
+          protocol: TCP
+---
+# Restrict Qdrant ingress to Mnemo pods only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mnemo.fullname" . }}-qdrant
+  labels:
+    {{- include "mnemo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "mnemo.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 6333
+          protocol: TCP
+        - port: 6334
+          protocol: TCP
+{{- end }}
