@@ -26,15 +26,15 @@ Mnemo is a free, open-source, self-hosted memory and context engine for agent sy
 
 ## Deploy Mnemo
 
-All 10 targets fully falsified (5-gate test: health, write, context, list-episodes, delete). Production deployment guides in `deploy/`.
+All 10 targets fully falsified (5-gate test: health, write, context, list-episodes, delete). Production Helm chart for Kubernetes. Deployment guides in `deploy/` and `docs/DEPLOY.md`.
 
 | Docker | AWS | GCP | DigitalOcean | Render |
 |:------:|:---:|:---:|:------------:|:------:|
 | [![Deploy with Docker][docker-btn]][docker-deploy] | [![Deploy on AWS][aws-btn]][aws-deploy] | [![Deploy on GCP][gcp-btn]][gcp-deploy] | [![Deploy on DigitalOcean][do-btn]][do-deploy] | [![Deploy on Render][render-btn]][render-deploy] |
 
-| Railway | Vultr | Northflank | Linode |
-|:-------:|:-----:|:----------:|:------:|
-| [![Deploy on Railway][railway-btn]][railway-deploy] | [![Deploy on Vultr][vultr-btn]][vultr-deploy] | [![Deploy on Northflank][northflank-btn]][northflank-deploy] | [![Deploy on Linode][linode-btn]][linode-deploy] |
+| Railway | Vultr | Northflank | Linode | Kubernetes |
+|:-------:|:-----:|:----------:|:------:|:----------:|
+| [![Deploy on Railway][railway-btn]][railway-deploy] | [![Deploy on Vultr][vultr-btn]][vultr-deploy] | [![Deploy on Northflank][northflank-btn]][northflank-deploy] | [![Deploy on Linode][linode-btn]][linode-deploy] | [![Deploy on Kubernetes][k8s-btn]][k8s-deploy] |
 
 [docker-btn]: ./img/deploy/docker.svg
 [docker-deploy]: deploy/docker/DEPLOY.md
@@ -54,8 +54,10 @@ All 10 targets fully falsified (5-gate test: health, write, context, list-episod
 [northflank-deploy]: deploy/northflank/DEPLOY.md
 [linode-btn]: ./img/deploy/linode.svg
 [linode-deploy]: deploy/linode/DEPLOY.md
+[k8s-btn]: ./img/deploy/kubernetes.svg
+[k8s-deploy]: docs/DEPLOY.md
 
-[or set up a production Mnemo instance without Docker →](deploy/bare-metal/DEPLOY.md)
+[or set up a production Mnemo instance without Docker →](deploy/bare-metal/DEPLOY.md) | [Kubernetes / Helm →](docs/DEPLOY.md)
 
 ## Why teams choose Mnemo
 
@@ -67,7 +69,7 @@ All 10 targets fully falsified (5-gate test: health, write, context, list-episod
 
 ## Competitive Feature Matrix
 
-How Mnemo compares to the three leading AI memory systems. Assessed feature-by-feature against public documentation, GitHub repos, and SDK references as of March 2026. Updated after the gRPC red-team hardening cycle.
+How Mnemo compares to the three leading AI memory systems. Assessed feature-by-feature against public documentation, GitHub repos, and SDK references as of March 2026. Updated for v0.7.0 (OpenTelemetry, BYOK encryption, OpenAPI spec, Helm chart, red-team hardening).
 
 > Legend: :green_circle: Shipped  :yellow_circle: Partial / limited  :red_circle: Not available
 
@@ -123,7 +125,7 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Time travel debugger (snapshot comparison) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | DAG pipeline metrics | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | Operator dashboard | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
-| OpenTelemetry export | :red_circle: | :green_circle: | :red_circle: | :green_circle: |
+| OpenTelemetry export | :green_circle: | :green_circle: | :red_circle: | :green_circle: |
 
 ### Governance & Compliance (12 features)
 
@@ -140,7 +142,7 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Governance audit trail | :green_circle: | :green_circle: | :yellow_circle: | :red_circle: |
 | SOC 2 Type II certification | :yellow_circle: | :green_circle: | :yellow_circle: | :red_circle: |
 | HIPAA compliance (BAA available) | :red_circle: | :green_circle: | :green_circle: | :red_circle: |
-| BYOK (customer-managed encryption keys) | :red_circle: | :green_circle: | :green_circle: | :green_circle: |
+| BYOK (customer-managed encryption keys) | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
 
 ### Webhooks & Events (6 features)
 
@@ -167,10 +169,10 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | CrewAI / AutoGen adapter | :red_circle: | :green_circle: | :green_circle: | :red_circle: |
 | gRPC API | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | MCP server | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
-| OpenAPI spec | :red_circle: | :green_circle: | :green_circle: | :green_circle: |
+| OpenAPI spec | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
 | CLI tool | :red_circle: | :green_circle: | :yellow_circle: | :green_circle: |
 
-### Deployment & Operations (7 features)
+### Deployment & Operations (8 features)
 
 | Feature | Mnemo | Zep | Mem0 | Letta |
 |---|:---:|:---:|:---:|:---:|
@@ -179,6 +181,7 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Cloud IaC templates (AWS, GCP, DO, etc.) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | Managed cloud offering | :red_circle: | :green_circle: | :green_circle: | :green_circle: |
 | Local embeddings (no API key needed) | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
+| Kubernetes / Helm chart | :green_circle: | :yellow_circle: | :yellow_circle: | :green_circle: |
 | Pluggable graph backends | :red_circle: | :green_circle: | :green_circle: | :red_circle: |
 | Pluggable vector backends | :red_circle: | :yellow_circle: | :green_circle: | :yellow_circle: |
 
@@ -186,10 +189,10 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 
 | | Mnemo | Zep | Mem0 | Letta |
 |---|---:|---:|---:|---:|
-| :green_circle: Shipped | **60** | **38** | **26** | **21** |
-| :yellow_circle: Partial | **2** | **13** | **18** | **11** |
-| :red_circle: Not available | **14** | **25** | **32** | **44** |
-| **Total features** | **76** | **76** | **76** | **76** |
+| :green_circle: Shipped | **64** | **38** | **26** | **22** |
+| :yellow_circle: Partial | **2** | **14** | **19** | **11** |
+| :red_circle: Not available | **11** | **25** | **32** | **44** |
+| **Total features** | **77** | **77** | **77** | **77** |
 
 ### Honesty notes
 
@@ -276,6 +279,11 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Multi-Agent Shared Memory** - Memory regions with per-agent ACLs (`read`/`write`/`manage`), owner-only mutation, optional expiry, and lazy cleanup of stale grants.
 - **Agent Promotion Governance** - Proposal-based approval workflows for agent identity changes with configurable quorum, cooling periods, auto-reject deadlines, and conflict analysis.
 - **MCP Server** - Model Context Protocol over stdio transport with 7 tools and 2 resource templates for Claude Code and compatible clients.
+- **OpenAPI 3.1 Spec + Swagger UI** - Machine-readable API specification with embedded Swagger UI at `/swagger-ui/`. CDN pinned for supply-chain safety.
+- **OpenTelemetry Export** - OTLP trace export with graceful fallback to console-only tracing when the collector is unavailable.
+- **BYOK Envelope Encryption** - AES-256-GCM at-rest encryption for Redis state with customer-managed keys. Key ID rotation support. Intermediate buffers zeroized.
+- **Production Helm Chart** - HA-ready Kubernetes deployment with Redis and Qdrant subcharts, security-hardened defaults (seccompProfile, SA automount disabled, emptyDir sizeLimit), and configurable replicas.
+- **gRPC API** - 3 services, 8 RPCs on the same port as REST. Proto3 with optional fields, streaming support, and full red-team hardening.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 
 ## Quality Gates
@@ -298,7 +306,7 @@ Nightly soak and flake-detection workflow: `.github/workflows/nightly-soak.yml`.
 
 - Tags matching `v*.*.*` trigger automated GitHub Releases via `.github/workflows/release.yml`.
 - Release workflow expectation: bump `Cargo.toml` (`workspace.package.version`) and `sdk/python/pyproject.toml` together before tagging.
-- Current in-repo development version: `0.5.0`.
+- Current in-repo development version: `0.7.0`.
 - Release artifacts include:
   - `mnemo-server-<version>-linux-amd64`
   - `mnemo-server-<version>-linux-amd64.tar.gz`
@@ -662,6 +670,7 @@ curl -X POST http://localhost:8080/api/v1/memory/acct_mgr_jordan/context \
 
 | Document | Description |
 |----------|-------------|
+| [Kubernetes Deployment](docs/DEPLOY.md) | Helm chart install, HA configuration, values reference |
 | [Deployment PRD](docs/PRD_DEPLOY.md) | T1–T10 deployment targets (all 10 falsified), gates, rollout phasing |
 | [API Reference](docs/API.md) | Every endpoint with request/response examples |
 | [Architecture](docs/ARCHITECTURE.md) | Data model, temporal reasoning, pipeline internals |
@@ -734,6 +743,12 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_SLEEP_IDLE_WINDOW_SECONDS` | Seconds of user inactivity before triggering background tasks | `300` |
 | `MNEMO_REQUIRE_TLS` | Reject non-HTTPS webhook targets | `false` |
 | `MNEMO_AUDIT_SIGNING_SECRET` | HMAC secret for signing audit export responses (SOC 2 compliance) | (none) |
+| `MNEMO_ENCRYPTION_ENABLED` | Enable AES-256-GCM at-rest encryption for Redis state | `false` |
+| `MNEMO_ENCRYPTION_MASTER_KEY` | Base64-encoded 32-byte master encryption key | (none) |
+| `MNEMO_ENCRYPTION_KEY_ID` | Identifier for the active encryption key (rotation support) | `default` |
+| `MNEMO_OTEL_ENABLED` | Enable OpenTelemetry OTLP trace export | `false` |
+| `MNEMO_OTEL_ENDPOINT` | OTLP gRPC collector endpoint | `http://localhost:4317` |
+| `MNEMO_OTEL_SERVICE_NAME` | Service name reported in traces | `mnemo` |
 
 For cloud targets that do not have a managed embedding API available, Mnemo also supports a self-hosted embedding path:
 
@@ -814,6 +829,25 @@ See `docs/OPERATOR_UX_PRD.md`, `docs/SDK_INTEGRATIONS_PRD.md`, and `docs/OPERATO
 - 3 new scripts (`credential_scan.sh`, `deploy_artifact_validation.sh`, `docker_build_test.sh`)
 
 See `docs/QA_QC_FALSIFICATION_PRD.md` for the full 25-domain falsification plan.
+
+**v0.6.0 — Enterprise Access Control** ✅ released
+
+- Scoped API keys with RBAC (read/write/admin roles, optional user/agent/classification scoping) ✅
+- Data classification labels (public/internal/confidential/restricted) ✅
+- Policy-scoped memory views ✅
+- Memory guardrails engine ✅
+- Agent identity Phase B (experience weighting, COW branching, fork) ✅
+- Multi-agent shared memory regions with ACLs ✅
+- gRPC API (3 services, 8 RPCs) with red-team hardening ✅
+
+**v0.7.0 — DevEx, Kubernetes & Enterprise Hardening** ✅ released
+
+- OpenAPI 3.1 spec + Swagger UI (`/swagger-ui/`) ✅
+- Production Helm chart with Redis/Qdrant subcharts ✅
+- OpenTelemetry OTLP trace export ✅
+- BYOK AES-256-GCM envelope encryption ✅
+- Red-team audit (30 findings, 15 fixed — all CRITICAL + HIGH + most MEDIUM) ✅
+- Version sync across all workspace crates, SDKs, and Helm chart ✅
 
 ## Contributing
 
