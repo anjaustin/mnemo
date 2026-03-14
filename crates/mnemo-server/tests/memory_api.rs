@@ -15,6 +15,7 @@ use sha2::Sha256;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use mnemo_core::models::api_key::CallerContext;
 use mnemo_core::models::edge::{Edge, ExtractedRelationship};
 use mnemo_core::models::entity::{Entity, EntityType, ExtractedEntity};
 use mnemo_core::traits::fulltext::FullTextStore;
@@ -30,6 +31,24 @@ use mnemo_server::state::{
     RerankerMode, ServerMetrics, WebhookDeliveryConfig, WebhookRuntimeState,
 };
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
+
+/// Middleware that injects `CallerContext::admin_bootstrap()` into requests
+/// that don't already have a `CallerContext`, simulating auth-disabled mode.
+/// Without this the handler fallback `caller_from_extension()` returns
+/// `anonymous()` (Read role) and most write/admin endpoints return 403.
+/// When `AuthLayer` is present (authed test harness), it sets `CallerContext`
+/// before this middleware runs, so the admin fallback is skipped.
+async fn inject_admin_caller(
+    mut request: Request<Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if request.extensions().get::<CallerContext>().is_none() {
+        request
+            .extensions_mut()
+            .insert(CallerContext::admin_bootstrap());
+    }
+    next.run(request).await
+}
 
 async fn build_test_app() -> axum::Router {
     build_test_harness_with_prefilter(MetadataPrefilterConfig {
@@ -67,7 +86,9 @@ async fn build_test_app_require_tls() -> axum::Router {
     )
     .await;
     state.require_tls = true;
-    build_router(state.clone()).layer(from_fn_with_state(state, request_context_middleware))
+    build_router(state.clone())
+        .layer(axum::middleware::from_fn(inject_admin_caller))
+        .layer(from_fn_with_state(state, request_context_middleware))
 }
 
 async fn build_test_harness_with_prefilter(
@@ -187,10 +208,12 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         )),
     };
 
-    let app = build_router(state.clone()).layer(from_fn_with_state(
-        state.clone(),
-        request_context_middleware,
-    ));
+    let app = build_router(state.clone())
+        .layer(axum::middleware::from_fn(inject_admin_caller))
+        .layer(from_fn_with_state(
+            state.clone(),
+            request_context_middleware,
+        ));
 
     (app, state, state_store.clone())
 }
@@ -5060,10 +5083,12 @@ async fn test_webhook_persistence_survives_restart() {
         )),
     };
 
-    let app1 = build_router(state1.clone()).layer(from_fn_with_state(
-        state1.clone(),
-        request_context_middleware,
-    ));
+    let app1 = build_router(state1.clone())
+        .layer(axum::middleware::from_fn(inject_admin_caller))
+        .layer(from_fn_with_state(
+            state1.clone(),
+            request_context_middleware,
+        ));
 
     // First create a user by writing memory
     let user_name = format!("wh15_user_{}", uid);
