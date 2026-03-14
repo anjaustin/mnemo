@@ -5,6 +5,9 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use uuid::Uuid;
 
+use std::sync::Arc;
+
+use mnemo_core::encryption::EnvelopeEncryptor;
 use mnemo_core::error::MnemoError;
 use mnemo_core::models::{
     agent::{
@@ -57,6 +60,8 @@ use mnemo_core::traits::storage::*;
 pub struct RedisStateStore {
     pub(crate) conn: ConnectionManager,
     pub(crate) prefix: String,
+    /// Optional BYOK envelope encryptor for data-at-rest encryption.
+    pub(crate) encryptor: Option<Arc<EnvelopeEncryptor>>,
 }
 
 impl RedisStateStore {
@@ -70,7 +75,14 @@ impl RedisStateStore {
         Ok(Self {
             conn,
             prefix: prefix.to_string(),
+            encryptor: None,
         })
+    }
+
+    /// Enable BYOK envelope encryption for all stored data.
+    pub fn with_encryption(mut self, encryptor: EnvelopeEncryptor) -> Self {
+        self.encryptor = Some(Arc::new(encryptor));
+        self
     }
 
     pub(crate) fn key(&self, parts: &[&str]) -> String {
@@ -79,12 +91,22 @@ impl RedisStateStore {
 
     async fn set_json<T: Serialize>(&self, key: &str, value: &T) -> StorageResult<()> {
         let json = serde_json::to_string(value)?;
+
+        // If BYOK encryption is enabled, envelope-encrypt the JSON before storage.
+        let stored = if let Some(enc) = &self.encryptor {
+            enc.encrypt(&json)?
+        } else {
+            json
+        };
+
         let mut conn = self.conn.clone();
         // Use JSON.SET so that RediSearch ON JSON indexes can scan these documents.
+        // Note: when encrypted, the document is an envelope object — RediSearch
+        // full-text indexes on plaintext fields will not match encrypted content.
         redis::cmd("JSON.SET")
             .arg(key)
             .arg("$")
-            .arg(&json)
+            .arg(&stored)
             .exec_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
@@ -106,7 +128,22 @@ impl RedisStateStore {
                 // JSON.GET with path "$" returns an array: [<document>]
                 let arr: Vec<serde_json::Value> = serde_json::from_str(&raw)?;
                 match arr.into_iter().next() {
-                    Some(val) => Ok(Some(serde_json::from_value(val)?)),
+                    Some(val) => {
+                        let val_str = val.to_string();
+                        // Check if this is an encrypted envelope and decrypt if so.
+                        if mnemo_core::encryption::is_encrypted(&val_str) {
+                            if let Some(enc) = &self.encryptor {
+                                let plaintext = enc.decrypt(&val_str)?;
+                                Ok(Some(serde_json::from_str(&plaintext)?))
+                            } else {
+                                Err(MnemoError::Internal(
+                                    "Encrypted data found but no encryptor configured".to_string(),
+                                ))
+                            }
+                        } else {
+                            Ok(Some(serde_json::from_value(val)?))
+                        }
+                    }
                     None => Ok(None),
                 }
             }

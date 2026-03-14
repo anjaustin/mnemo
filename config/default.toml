@@ -128,3 +128,12 @@ otel_enabled = false
 otel_endpoint = ""
 # OpenTelemetry service name.
 otel_service_name = "mnemo-server"
+
+[encryption]
+# Enable BYOK envelope encryption for data at rest.
+enabled = false
+# Base64-encoded 256-bit (32-byte) master key.
+# Set via MNEMO_ENCRYPTION_MASTER_KEY env var in production.
+master_key = ""
+# Key identifier for rotation tracking.
+key_id = "kek-001"

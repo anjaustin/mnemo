@@ -63,15 +63,30 @@ async fn main() -> anyhow::Result<()> {
     let config = MnemoConfig::load(config_path.as_deref())?;
 
     // Logging + OpenTelemetry
-    let _otel_provider =
-        mnemo_server::telemetry::init_telemetry(&config.observability);
+    let _otel_provider = mnemo_server::telemetry::init_telemetry(&config.observability);
 
     tracing::info!("Starting Mnemo v{}", env!("CARGO_PKG_VERSION"));
 
     // Storage
     tracing::info!(url = %config.redis.url, "Connecting to Redis");
-    let state_store =
-        Arc::new(RedisStateStore::new(&config.redis.url, &config.redis.prefix).await?);
+    let mut state_store = RedisStateStore::new(&config.redis.url, &config.redis.prefix).await?;
+
+    // BYOK envelope encryption
+    if config.encryption.enabled {
+        if config.encryption.master_key.is_empty() {
+            return Err(anyhow::anyhow!(
+                "MNEMO_ENCRYPTION_ENABLED=true but MNEMO_ENCRYPTION_MASTER_KEY is not set"
+            ));
+        }
+        let encryptor = mnemo_core::encryption::EnvelopeEncryptor::from_base64(
+            &config.encryption.master_key,
+            config.encryption.key_id.clone(),
+        )?;
+        state_store = state_store.with_encryption(encryptor);
+        tracing::info!(key_id = %config.encryption.key_id, "BYOK envelope encryption enabled");
+    }
+
+    let state_store = Arc::new(state_store);
     tracing::info!(url = %config.qdrant.url, "Connecting to Qdrant");
     let vector_store = Arc::new(
         QdrantVectorStore::new(

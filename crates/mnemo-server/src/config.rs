@@ -23,6 +23,8 @@ pub struct MnemoConfig {
     pub observability: ObservabilitySection,
     #[serde(default)]
     pub webhooks: WebhookSection,
+    #[serde(default)]
+    pub encryption: EncryptionSection,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -306,6 +308,31 @@ impl Default for ObservabilitySection {
     }
 }
 
+/// BYOK envelope encryption configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct EncryptionSection {
+    /// Enable envelope encryption for data at rest.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Base64-encoded 256-bit (32-byte) master key (KEK).
+    /// Set via `MNEMO_ENCRYPTION_MASTER_KEY` env var in production.
+    #[serde(default)]
+    pub master_key: String,
+    /// Key identifier for rotation tracking.
+    #[serde(default = "default_encryption_key_id")]
+    pub key_id: String,
+}
+
+impl Default for EncryptionSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            master_key: String::new(),
+            key_id: default_encryption_key_id(),
+        }
+    }
+}
+
 // Default value functions
 fn default_host() -> String {
     "0.0.0.0".into()
@@ -369,6 +396,9 @@ fn default_log_format() -> String {
 }
 fn default_otel_service_name() -> String {
     "mnemo-server".into()
+}
+fn default_encryption_key_id() -> String {
+    "kek-001".into()
 }
 fn default_webhook_enabled() -> bool {
     true
@@ -568,6 +598,17 @@ impl MnemoConfig {
             config.observability.otel_service_name = v;
         }
 
+        // Encryption overrides
+        if let Ok(v) = std::env::var("MNEMO_ENCRYPTION_ENABLED") {
+            config.encryption.enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_ENCRYPTION_MASTER_KEY") {
+            config.encryption.master_key = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_ENCRYPTION_KEY_ID") {
+            config.encryption.key_id = v;
+        }
+
         Ok(config)
     }
 
@@ -710,6 +751,11 @@ mod tests {
         assert!(!config.observability.otel_enabled);
         assert!(config.observability.otel_endpoint.is_empty());
         assert_eq!(config.observability.otel_service_name, "mnemo-server");
+
+        // Encryption
+        assert!(!config.encryption.enabled);
+        assert!(config.encryption.master_key.is_empty());
+        assert_eq!(config.encryption.key_id, "kek-001");
     }
 
     #[test]
@@ -889,6 +935,29 @@ mod tests {
         assert!(config.observability.otel_enabled);
         assert_eq!(config.observability.otel_endpoint, "http://collector:4317");
         assert_eq!(config.observability.otel_service_name, "my-mnemo");
+
+        clear_mnemo_env();
+    }
+
+    #[test]
+    fn cfg02_env_overrides_encryption() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_mnemo_env();
+
+        std::env::set_var("MNEMO_ENCRYPTION_ENABLED", "true");
+        std::env::set_var(
+            "MNEMO_ENCRYPTION_MASTER_KEY",
+            "dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleTE=",
+        );
+        std::env::set_var("MNEMO_ENCRYPTION_KEY_ID", "kek-2025-q1");
+
+        let config = MnemoConfig::load(None).unwrap();
+        assert!(config.encryption.enabled);
+        assert_eq!(
+            config.encryption.master_key,
+            "dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleTE="
+        );
+        assert_eq!(config.encryption.key_id, "kek-2025-q1");
 
         clear_mnemo_env();
     }
