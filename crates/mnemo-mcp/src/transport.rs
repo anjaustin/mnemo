@@ -286,7 +286,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 10);
     }
 
     #[tokio::test]
@@ -349,8 +349,8 @@ mod tests {
     #[tokio::test]
     async fn test_tools_call_dispatches_correctly() {
         let server = test_server();
-        // Call mnemo_health — will fail to connect but should not panic
-        let msg = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"mnemo_health","arguments":{}}}"#;
+        // Call health — will fail to connect but should not panic
+        let msg = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"health","arguments":{}}}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
@@ -445,7 +445,7 @@ mod tests {
     async fn test_falsify_tools_call_with_null_arguments() {
         let server = test_server();
         // null arguments should be treated as empty object
-        let msg = r#"{"jsonrpc":"2.0","id":103,"method":"tools/call","params":{"name":"mnemo_health","arguments":null}}"#;
+        let msg = r#"{"jsonrpc":"2.0","id":103,"method":"tools/call","params":{"name":"health","arguments":null}}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
         // Should dispatch (may fail at HTTP level) but not panic or return protocol error
@@ -460,7 +460,7 @@ mod tests {
         let server = test_server();
         // Entirely missing arguments field
         let msg =
-            r#"{"jsonrpc":"2.0","id":104,"method":"tools/call","params":{"name":"mnemo_health"}}"#;
+            r#"{"jsonrpc":"2.0","id":104,"method":"tools/call","params":{"name":"health"}}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert!(

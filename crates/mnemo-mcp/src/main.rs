@@ -4,7 +4,7 @@
 //!
 //! ## Configuration
 //!
-//! - `MNEMO_MCP_BASE_URL` — Mnemo HTTP server URL (default: `http://localhost:3000`)
+//! - `MNEMO_MCP_BASE_URL` — Mnemo HTTP server URL (default: `http://localhost:8080`)
 //! - `MNEMO_API_KEY` — Optional API key for Mnemo authentication
 //! - `MNEMO_MCP_DEFAULT_USER` — Default user identifier for tools that require one
 //! - `RUST_LOG` — Log level (default: `warn`, logs go to stderr)
@@ -16,7 +16,7 @@
 //! mnemo-mcp-server
 //!
 //! # With configuration
-//! MNEMO_MCP_BASE_URL=http://localhost:3000 MNEMO_MCP_DEFAULT_USER=kendra mnemo-mcp-server
+//! MNEMO_MCP_BASE_URL=http://localhost:8080 MNEMO_MCP_DEFAULT_USER=kendra mnemo-mcp-server
 //! ```
 //!
 //! ## Claude Code integration
@@ -28,7 +28,7 @@
 //!     "mnemo": {
 //!       "command": "mnemo-mcp-server",
 //!       "env": {
-//!         "MNEMO_MCP_BASE_URL": "http://localhost:3000",
+//!         "MNEMO_MCP_BASE_URL": "http://localhost:8080",
 //!         "MNEMO_MCP_DEFAULT_USER": "your-user-id"
 //!       }
 //!     }

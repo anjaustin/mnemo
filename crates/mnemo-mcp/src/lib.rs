@@ -31,7 +31,7 @@ pub mod transport;
 /// Configuration for the MCP server.
 #[derive(Debug, Clone)]
 pub struct McpConfig {
-    /// Base URL of the Mnemo HTTP server (e.g., "http://localhost:3000").
+    /// Base URL of the Mnemo HTTP server (e.g., "http://localhost:8080").
     pub mnemo_base_url: String,
     /// Optional API key for authenticating with the Mnemo server.
     pub api_key: Option<String>,
@@ -93,6 +93,16 @@ impl McpServer {
             req = req.header("X-Api-Key", key);
         }
         req.header("Content-Type", "application/json")
+    }
+
+    /// Build a DELETE request with auth headers.
+    pub fn delete(&self, path: &str) -> reqwest::RequestBuilder {
+        let url = format!("{}{}", self.config.mnemo_base_url, path);
+        let mut req = self.http.delete(&url);
+        if let Some(ref key) = self.config.api_key {
+            req = req.header("X-Api-Key", key);
+        }
+        req
     }
 
     /// Resolve a user identifier: use the provided one or fall back to default.

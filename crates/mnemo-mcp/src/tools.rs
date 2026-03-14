@@ -1,6 +1,13 @@
 //! MCP tool definitions and dispatch for Mnemo.
 //!
 //! Each tool maps to one or more Mnemo HTTP API calls.
+//!
+//! ## Tool naming
+//!
+//! Tools use short names (`remember`, `recall`, etc.) since the MCP server is
+//! already namespaced as "mnemo". For backward compatibility, the old
+//! `mnemo_*`-prefixed names are accepted in `dispatch_tool` with a deprecation
+//! warning logged to stderr.
 
 use serde_json::Value;
 
@@ -31,9 +38,9 @@ fn validate_path_segment(value: &str, field_name: &str) -> Result<(), String> {
 pub fn list_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
-            name: "mnemo_remember".to_string(),
-            description: "Store a memory for a user. The text will be processed, entities and \
-                          relationships extracted, and the knowledge graph updated."
+            name: "remember".to_string(),
+            description: "Store a memory. The text will be processed, entities and relationships \
+                          extracted, and the knowledge graph updated."
                 .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -55,9 +62,9 @@ pub fn list_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "mnemo_recall".to_string(),
-            description: "Retrieve context from a user's memory for a given query. Returns \
-                          relevant entities, facts, and episodes assembled into a context block."
+            name: "recall".to_string(),
+            description: "Retrieve context from memory for a given query. Returns relevant \
+                          entities, facts, and episodes assembled into a context block."
                 .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -83,9 +90,9 @@ pub fn list_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "mnemo_graph_query".to_string(),
+            name: "graph".to_string(),
             description: "Query the knowledge graph. List entities, edges, find shortest paths, \
-                          or detect communities for a user."
+                          or detect communities."
                 .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -112,7 +119,7 @@ pub fn list_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "mnemo_agent_identity".to_string(),
+            name: "identity".to_string(),
             description: "Get or update an agent's identity profile. Supports reading the full \
                           profile or updating specific fields."
                 .to_string(),
@@ -137,9 +144,9 @@ pub fn list_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "mnemo_digest".to_string(),
-            description: "Get or generate a prose memory digest for a user. The digest summarizes \
-                          the user's knowledge graph into a human-readable narrative."
+            name: "digest".to_string(),
+            description: "Get or generate a prose memory digest. The digest summarizes the \
+                          knowledge graph into a human-readable narrative."
                 .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -158,8 +165,8 @@ pub fn list_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "mnemo_coherence".to_string(),
-            description: "Get a coherence report for a user's knowledge graph. Measures internal \
+            name: "coherence".to_string(),
+            description: "Get a coherence report for the knowledge graph. Measures internal \
                           consistency across entity, fact, temporal, and structural dimensions."
                 .to_string(),
             input_schema: serde_json::json!({
@@ -174,7 +181,7 @@ pub fn list_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "mnemo_health".to_string(),
+            name: "health".to_string(),
             description: "Check the health of the Mnemo server.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -182,23 +189,129 @@ pub fn list_tools() -> Vec<ToolDefinition> {
                 "required": []
             }),
         },
+        // ─── New topology tools ───────────────────────────────────────
+        ToolDefinition {
+            name: "delegate".to_string(),
+            description: "Grant another agent read access to a memory scope. Creates a memory \
+                          region (if needed) and adds an ACL entry for the target agent."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "string",
+                        "description": "User identifier whose memory to share."
+                    },
+                    "region_name": {
+                        "type": "string",
+                        "description": "Name for the memory region / scope."
+                    },
+                    "target_agent_id": {
+                        "type": "string",
+                        "description": "Agent UUID to grant access to."
+                    },
+                    "permission": {
+                        "type": "string",
+                        "enum": ["read", "write", "manage"],
+                        "description": "Permission level to grant (default: 'read')."
+                    }
+                },
+                "required": ["region_name", "target_agent_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "revoke".to_string(),
+            description: "Revoke a previously delegated memory scope access from an agent."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "region_id": {
+                        "type": "string",
+                        "description": "Memory region UUID."
+                    },
+                    "target_agent_id": {
+                        "type": "string",
+                        "description": "Agent UUID to revoke access from."
+                    }
+                },
+                "required": ["region_id", "target_agent_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "scopes".to_string(),
+            description: "List memory scopes (regions) visible to the current agent or a \
+                          specified user."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "string",
+                        "description": "User identifier."
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent UUID to check scopes for. If omitted, lists all regions for the user."
+                    }
+                },
+                "required": []
+            }),
+        },
     ]
 }
 
+/// Map deprecated `mnemo_*` names to their canonical short names.
+///
+/// Returns `Some(canonical_name)` if the input is a deprecated alias,
+/// or `None` if it's not a known deprecated name.
+fn resolve_deprecated_name(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "mnemo_remember" => Some("remember"),
+        "mnemo_recall" => Some("recall"),
+        "mnemo_graph_query" => Some("graph"),
+        "mnemo_agent_identity" => Some("identity"),
+        "mnemo_digest" => Some("digest"),
+        "mnemo_coherence" => Some("coherence"),
+        "mnemo_health" => Some("health"),
+        _ => None,
+    }
+}
+
 /// Dispatch a tool call to the appropriate handler.
+///
+/// Accepts both new short names and deprecated `mnemo_*` names (with a warning).
 pub async fn dispatch_tool(
     server: &McpServer,
     tool_name: &str,
     arguments: &Value,
 ) -> ToolCallResult {
-    match tool_name {
-        "mnemo_remember" => handle_remember(server, arguments).await,
-        "mnemo_recall" => handle_recall(server, arguments).await,
-        "mnemo_graph_query" => handle_graph_query(server, arguments).await,
-        "mnemo_agent_identity" => handle_agent_identity(server, arguments).await,
-        "mnemo_digest" => handle_digest(server, arguments).await,
-        "mnemo_coherence" => handle_coherence(server, arguments).await,
-        "mnemo_health" => handle_health(server).await,
+    // Resolve deprecated names
+    let canonical = if let Some(new_name) = resolve_deprecated_name(tool_name) {
+        tracing::warn!(
+            old_name = tool_name,
+            new_name = new_name,
+            "Deprecated tool name used. Use '{}' instead of '{}'. \
+             The mnemo_* prefix will be removed in a future release.",
+            new_name,
+            tool_name
+        );
+        new_name
+    } else {
+        tool_name
+    };
+
+    match canonical {
+        "remember" => handle_remember(server, arguments).await,
+        "recall" => handle_recall(server, arguments).await,
+        "graph" => handle_graph_query(server, arguments).await,
+        "identity" => handle_agent_identity(server, arguments).await,
+        "digest" => handle_digest(server, arguments).await,
+        "coherence" => handle_coherence(server, arguments).await,
+        "health" => handle_health(server).await,
+        "delegate" => handle_delegate(server, arguments).await,
+        "revoke" => handle_revoke(server, arguments).await,
+        "scopes" => handle_scopes(server, arguments).await,
         _ => ToolCallResult::error(format!("Unknown tool: {}", tool_name)),
     }
 }
@@ -522,23 +635,265 @@ async fn handle_health(server: &McpServer) -> ToolCallResult {
     }
 }
 
+// ─── Topology tool handlers ──────────────────────────────────────
+
+async fn handle_delegate(server: &McpServer, args: &Value) -> ToolCallResult {
+    let user = match server.resolve_user(args.get("user").and_then(|v| v.as_str())) {
+        Ok(u) => u.to_string(),
+        Err(e) => return ToolCallResult::error(e),
+    };
+
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
+
+    let region_name = match args.get("region_name").and_then(|v| v.as_str()) {
+        Some(n) if !n.trim().is_empty() => n,
+        _ => {
+            return ToolCallResult::error(
+                "'region_name' argument is required and must be non-empty",
+            )
+        }
+    };
+
+    let target_agent_id = match args.get("target_agent_id").and_then(|v| v.as_str()) {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => {
+            return ToolCallResult::error(
+                "'target_agent_id' argument is required and must be non-empty",
+            )
+        }
+    };
+
+    if let Err(e) = validate_path_segment(target_agent_id, "target_agent_id") {
+        return ToolCallResult::error(e);
+    }
+
+    let permission = args
+        .get("permission")
+        .and_then(|v| v.as_str())
+        .unwrap_or("read");
+
+    if !["read", "write", "manage"].contains(&permission) {
+        return ToolCallResult::error(format!(
+            "Invalid permission '{}'. Must be one of: read, write, manage",
+            permission
+        ));
+    }
+
+    // Step 1: Create or find the memory region
+    let region_body = serde_json::json!({
+        "name": region_name,
+        "user_id": user,
+    });
+
+    let region_id = match server
+        .post("/api/v1/regions")
+        .json(&region_body)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            match resp.json::<Value>().await {
+                Ok(json) if status.is_success() => match json.get("id").and_then(|v| v.as_str()) {
+                    Some(id) => id.to_string(),
+                    None => {
+                        return ToolCallResult::error(
+                            "Region created but response missing 'id' field",
+                        )
+                    }
+                },
+                Ok(json) => {
+                    return ToolCallResult::error(format!(
+                        "Failed to create region ({}): {}",
+                        status,
+                        serde_json::to_string_pretty(&json).unwrap_or_default()
+                    ))
+                }
+                Err(e) => return ToolCallResult::error(format!("Failed to parse response: {}", e)),
+            }
+        }
+        Err(e) => return ToolCallResult::error(format!("HTTP request failed: {}", e)),
+    };
+
+    // Step 2: Grant ACL on the region
+    let acl_body = serde_json::json!({
+        "agent_id": target_agent_id,
+        "permission": permission,
+    });
+
+    let acl_path = format!("/api/v1/regions/{}/acl", region_id);
+    match server.post(&acl_path).json(&acl_body).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            match resp.json::<Value>().await {
+                Ok(json) if status.is_success() => {
+                    let result = serde_json::json!({
+                        "region_id": region_id,
+                        "region_name": region_name,
+                        "target_agent_id": target_agent_id,
+                        "permission": permission,
+                        "status": "delegated",
+                    });
+                    ToolCallResult::json(&result)
+                }
+                Ok(json) => ToolCallResult::error(format!(
+                    "Region created but ACL grant failed ({}): {}",
+                    status,
+                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                )),
+                Err(e) => ToolCallResult::error(format!("Failed to parse ACL response: {}", e)),
+            }
+        }
+        Err(e) => ToolCallResult::error(format!("ACL grant HTTP request failed: {}", e)),
+    }
+}
+
+async fn handle_revoke(server: &McpServer, args: &Value) -> ToolCallResult {
+    let region_id = match args.get("region_id").and_then(|v| v.as_str()) {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => {
+            return ToolCallResult::error(
+                "'region_id' argument is required and must be non-empty",
+            )
+        }
+    };
+
+    if let Err(e) = validate_path_segment(region_id, "region_id") {
+        return ToolCallResult::error(e);
+    }
+
+    let target_agent_id = match args.get("target_agent_id").and_then(|v| v.as_str()) {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => {
+            return ToolCallResult::error(
+                "'target_agent_id' argument is required and must be non-empty",
+            )
+        }
+    };
+
+    if let Err(e) = validate_path_segment(target_agent_id, "target_agent_id") {
+        return ToolCallResult::error(e);
+    }
+
+    let path = format!("/api/v1/regions/{}/acl/{}", region_id, target_agent_id);
+    match server.delete(&path).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                let result = serde_json::json!({
+                    "region_id": region_id,
+                    "target_agent_id": target_agent_id,
+                    "status": "revoked",
+                });
+                ToolCallResult::json(&result)
+            } else {
+                match resp.json::<Value>().await {
+                    Ok(json) => ToolCallResult::error(format!(
+                        "Revoke failed ({}): {}",
+                        status,
+                        serde_json::to_string_pretty(&json).unwrap_or_default()
+                    )),
+                    Err(e) => ToolCallResult::error(format!(
+                        "Revoke failed ({}) and response unparseable: {}",
+                        status, e
+                    )),
+                }
+            }
+        }
+        Err(e) => ToolCallResult::error(format!("HTTP request failed: {}", e)),
+    }
+}
+
+async fn handle_scopes(server: &McpServer, args: &Value) -> ToolCallResult {
+    let user = match server.resolve_user(args.get("user").and_then(|v| v.as_str())) {
+        Ok(u) => u.to_string(),
+        Err(e) => return ToolCallResult::error(e),
+    };
+
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
+
+    let mut path = format!("/api/v1/regions?user_id={}", user);
+    if let Some(agent_id) = args.get("agent_id").and_then(|v| v.as_str()) {
+        if let Err(e) = validate_path_segment(agent_id, "agent_id") {
+            return ToolCallResult::error(e);
+        }
+        path.push_str(&format!("&agent_id={}", agent_id));
+    }
+
+    match server.get(&path).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            match resp.json::<Value>().await {
+                Ok(json) if status.is_success() => ToolCallResult::json(&json),
+                Ok(json) => ToolCallResult::error(format!(
+                    "Mnemo API error ({}): {}",
+                    status,
+                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                )),
+                Err(e) => ToolCallResult::error(format!("Failed to parse response: {}", e)),
+            }
+        }
+        Err(e) => ToolCallResult::error(format!("HTTP request failed: {}", e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_list_tools_returns_7_tools() {
+    fn test_list_tools_returns_10_tools() {
         let tools = list_tools();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 10);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"mnemo_remember"));
-        assert!(names.contains(&"mnemo_recall"));
-        assert!(names.contains(&"mnemo_graph_query"));
-        assert!(names.contains(&"mnemo_agent_identity"));
-        assert!(names.contains(&"mnemo_digest"));
-        assert!(names.contains(&"mnemo_coherence"));
-        assert!(names.contains(&"mnemo_health"));
+        assert!(names.contains(&"remember"));
+        assert!(names.contains(&"recall"));
+        assert!(names.contains(&"graph"));
+        assert!(names.contains(&"identity"));
+        assert!(names.contains(&"digest"));
+        assert!(names.contains(&"coherence"));
+        assert!(names.contains(&"health"));
+        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"revoke"));
+        assert!(names.contains(&"scopes"));
+    }
+
+    #[test]
+    fn test_no_tools_use_mnemo_prefix() {
+        for tool in list_tools() {
+            assert!(
+                !tool.name.starts_with("mnemo_"),
+                "Tool '{}' should not use deprecated mnemo_ prefix",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_deprecated_name_resolution() {
+        assert_eq!(resolve_deprecated_name("mnemo_remember"), Some("remember"));
+        assert_eq!(resolve_deprecated_name("mnemo_recall"), Some("recall"));
+        assert_eq!(
+            resolve_deprecated_name("mnemo_graph_query"),
+            Some("graph")
+        );
+        assert_eq!(
+            resolve_deprecated_name("mnemo_agent_identity"),
+            Some("identity")
+        );
+        assert_eq!(resolve_deprecated_name("mnemo_digest"), Some("digest"));
+        assert_eq!(
+            resolve_deprecated_name("mnemo_coherence"),
+            Some("coherence")
+        );
+        assert_eq!(resolve_deprecated_name("mnemo_health"), Some("health"));
+        assert_eq!(resolve_deprecated_name("remember"), None);
+        assert_eq!(resolve_deprecated_name("unknown"), None);
     }
 
     #[test]
@@ -578,7 +933,7 @@ mod tests {
     fn test_remember_tool_requires_text() {
         let tool = list_tools()
             .into_iter()
-            .find(|t| t.name == "mnemo_remember")
+            .find(|t| t.name == "remember")
             .unwrap();
         let required = tool.input_schema["required"].as_array().unwrap();
         assert!(required.contains(&serde_json::json!("text")));
@@ -588,7 +943,7 @@ mod tests {
     fn test_recall_tool_requires_query() {
         let tool = list_tools()
             .into_iter()
-            .find(|t| t.name == "mnemo_recall")
+            .find(|t| t.name == "recall")
             .unwrap();
         let required = tool.input_schema["required"].as_array().unwrap();
         assert!(required.contains(&serde_json::json!("query")));
@@ -598,7 +953,7 @@ mod tests {
     fn test_graph_query_operations_documented() {
         let tool = list_tools()
             .into_iter()
-            .find(|t| t.name == "mnemo_graph_query")
+            .find(|t| t.name == "graph")
             .unwrap();
         let ops = tool.input_schema["properties"]["operation"]["enum"]
             .as_array()
@@ -606,6 +961,42 @@ mod tests {
         assert!(ops.contains(&serde_json::json!("list_entities")));
         assert!(ops.contains(&serde_json::json!("list_edges")));
         assert!(ops.contains(&serde_json::json!("communities")));
+    }
+
+    #[test]
+    fn test_delegate_tool_requires_fields() {
+        let tool = list_tools()
+            .into_iter()
+            .find(|t| t.name == "delegate")
+            .unwrap();
+        let required = tool.input_schema["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("region_name")));
+        assert!(required.contains(&serde_json::json!("target_agent_id")));
+    }
+
+    #[test]
+    fn test_revoke_tool_requires_fields() {
+        let tool = list_tools()
+            .into_iter()
+            .find(|t| t.name == "revoke")
+            .unwrap();
+        let required = tool.input_schema["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("region_id")));
+        assert!(required.contains(&serde_json::json!("target_agent_id")));
+    }
+
+    #[test]
+    fn test_delegate_permission_enum() {
+        let tool = list_tools()
+            .into_iter()
+            .find(|t| t.name == "delegate")
+            .unwrap();
+        let perms = tool.input_schema["properties"]["permission"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(perms.contains(&serde_json::json!("read")));
+        assert!(perms.contains(&serde_json::json!("write")));
+        assert!(perms.contains(&serde_json::json!("manage")));
     }
 
     #[tokio::test]
@@ -621,6 +1012,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_deprecated_mnemo_remember_dispatches() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        // Old name should still work (will fail at HTTP level, but dispatch succeeds)
+        let result = dispatch_tool(
+            &server,
+            "mnemo_remember",
+            &serde_json::json!({"text": "hello"}),
+        )
+        .await;
+        // Should get a connection error, NOT "Unknown tool"
+        assert!(
+            !result.content[0].text.contains("Unknown tool"),
+            "Deprecated name should dispatch: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
     async fn test_remember_rejects_empty_text() {
         let server = McpServer::new(crate::McpConfig {
             mnemo_base_url: "http://localhost:99999".to_string(),
@@ -628,7 +1041,7 @@ mod tests {
             default_user: Some("test-user".to_string()),
         });
         let result =
-            dispatch_tool(&server, "mnemo_remember", &serde_json::json!({"text": ""})).await;
+            dispatch_tool(&server, "remember", &serde_json::json!({"text": ""})).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("non-empty"));
     }
@@ -641,7 +1054,7 @@ mod tests {
             default_user: Some("test-user".to_string()),
         });
         let result =
-            dispatch_tool(&server, "mnemo_recall", &serde_json::json!({"query": "  "})).await;
+            dispatch_tool(&server, "recall", &serde_json::json!({"query": "  "})).await;
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -654,7 +1067,7 @@ mod tests {
         });
         let result = dispatch_tool(
             &server,
-            "mnemo_remember",
+            "remember",
             &serde_json::json!({"text": "hello"}),
         )
         .await;
@@ -671,7 +1084,7 @@ mod tests {
         });
         let result = dispatch_tool(
             &server,
-            "mnemo_graph_query",
+            "graph",
             &serde_json::json!({"operation": "delete_everything"}),
         )
         .await;
@@ -689,7 +1102,7 @@ mod tests {
         // Missing agent_id
         let result = dispatch_tool(
             &server,
-            "mnemo_agent_identity",
+            "identity",
             &serde_json::json!({"action": "get"}),
         )
         .await;
@@ -698,11 +1111,114 @@ mod tests {
         // Missing action
         let result = dispatch_tool(
             &server,
-            "mnemo_agent_identity",
+            "identity",
             &serde_json::json!({"agent_id": "abc"}),
         )
         .await;
         assert_eq!(result.is_error, Some(true));
+    }
+
+    // ─── New tool validation tests ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_delegate_rejects_missing_region_name() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "delegate",
+            &serde_json::json!({"target_agent_id": "agent-1"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("region_name"));
+    }
+
+    #[tokio::test]
+    async fn test_delegate_rejects_missing_target_agent() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "delegate",
+            &serde_json::json!({"region_name": "shared-scope"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("target_agent_id"));
+    }
+
+    #[tokio::test]
+    async fn test_delegate_rejects_invalid_permission() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "delegate",
+            &serde_json::json!({
+                "region_name": "scope",
+                "target_agent_id": "agent-1",
+                "permission": "admin"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("Invalid permission"));
+    }
+
+    #[tokio::test]
+    async fn test_revoke_rejects_missing_region_id() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "revoke",
+            &serde_json::json!({"target_agent_id": "agent-1"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("region_id"));
+    }
+
+    #[tokio::test]
+    async fn test_revoke_rejects_missing_target_agent() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "revoke",
+            &serde_json::json!({"region_id": "some-id"}),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("target_agent_id"));
+    }
+
+    #[tokio::test]
+    async fn test_scopes_rejects_missing_user() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None, // no default
+        });
+        let result = dispatch_tool(&server, "scopes", &serde_json::json!({})).await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("MNEMO_MCP_DEFAULT_USER"));
     }
 
     // ─── Falsification: adversarial tool tests ────────────────────
@@ -717,7 +1233,7 @@ mod tests {
         // Path traversal attempt via user field
         let result = dispatch_tool(
             &server,
-            "mnemo_recall",
+            "recall",
             &serde_json::json!({"query": "test", "user": "../../etc/passwd"}),
         )
         .await;
@@ -738,7 +1254,7 @@ mod tests {
         });
         let result = dispatch_tool(
             &server,
-            "mnemo_agent_identity",
+            "identity",
             &serde_json::json!({"agent_id": "../../../admin", "action": "get"}),
         )
         .await;
@@ -755,7 +1271,7 @@ mod tests {
         });
         let result = dispatch_tool(
             &server,
-            "mnemo_coherence",
+            "coherence",
             &serde_json::json!({"user": "user\u{0000}admin"}),
         )
         .await;
@@ -773,7 +1289,7 @@ mod tests {
         // Forward slash injection
         let result = dispatch_tool(
             &server,
-            "mnemo_remember",
+            "remember",
             &serde_json::json!({"text": "hello", "user": "user/admin"}),
         )
         .await;
@@ -790,7 +1306,7 @@ mod tests {
         let huge_user = "a".repeat(300);
         let result = dispatch_tool(
             &server,
-            "mnemo_coherence",
+            "coherence",
             &serde_json::json!({"user": huge_user}),
         )
         .await;
@@ -807,7 +1323,7 @@ mod tests {
         });
         let result = dispatch_tool(
             &server,
-            "mnemo_remember",
+            "remember",
             &serde_json::json!({"text": "   \t\n  "}),
         )
         .await;
@@ -824,7 +1340,7 @@ mod tests {
         });
         let result = dispatch_tool(
             &server,
-            "mnemo_digest",
+            "digest",
             &serde_json::json!({"action": "delete"}),
         )
         .await;
@@ -841,7 +1357,7 @@ mod tests {
         });
         let result = dispatch_tool(
             &server,
-            "mnemo_agent_identity",
+            "identity",
             &serde_json::json!({"agent_id": "abc-123", "action": "update"}),
         )
         .await;
@@ -858,7 +1374,7 @@ mod tests {
         });
         let result = dispatch_tool(
             &server,
-            "mnemo_agent_identity",
+            "identity",
             &serde_json::json!({"agent_id": "abc-123", "action": "delete"}),
         )
         .await;
@@ -873,7 +1389,7 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result = dispatch_tool(&server, "mnemo_graph_query", &serde_json::json!({})).await;
+        let result = dispatch_tool(&server, "graph", &serde_json::json!({})).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("operation"));
     }
@@ -885,7 +1401,7 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result = dispatch_tool(&server, "mnemo_recall", &serde_json::json!({})).await;
+        let result = dispatch_tool(&server, "recall", &serde_json::json!({})).await;
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -899,7 +1415,7 @@ mod tests {
         // text is a number, not a string
         let result = dispatch_tool(
             &server,
-            "mnemo_remember",
+            "remember",
             &serde_json::json!({"text": 12345}),
         )
         .await;
@@ -914,7 +1430,47 @@ mod tests {
             api_key: None,
             default_user: Some("../../../etc/shadow".to_string()),
         });
-        let result = dispatch_tool(&server, "mnemo_coherence", &serde_json::json!({})).await;
+        let result = dispatch_tool(&server, "coherence", &serde_json::json!({})).await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("illegal characters"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_delegate_path_traversal_in_target_agent() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "delegate",
+            &serde_json::json!({
+                "region_name": "scope",
+                "target_agent_id": "../../../etc/passwd"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("illegal characters"));
+    }
+
+    #[tokio::test]
+    async fn test_falsify_revoke_path_traversal_in_region_id() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "revoke",
+            &serde_json::json!({
+                "region_id": "../../admin",
+                "target_agent_id": "agent-1"
+            }),
+        )
+        .await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("illegal characters"));
     }

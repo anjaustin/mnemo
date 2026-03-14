@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn test_tool_definition_serializes() {
         let tool = ToolDefinition {
-            name: "mnemo_remember".to_string(),
+            name: "remember".to_string(),
             description: "Store a memory".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -316,7 +316,7 @@ mod tests {
             }),
         };
         let json = serde_json::to_value(&tool).unwrap();
-        assert_eq!(json["name"], "mnemo_remember");
+        assert_eq!(json["name"], "remember");
         assert_eq!(json["inputSchema"]["type"], "object");
     }
 
