@@ -79,6 +79,17 @@
         </a>
       </li>
       <li>
+        <a href="/_/memory" class="nav-link" data-page="memory">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="2" width="12" height="3" rx="1"/>
+            <rect x="2" y="7" width="12" height="3" rx="1"/>
+            <rect x="2" y="12" width="8" height="3" rx="1"/>
+            <circle cx="13" cy="13.5" r="1" fill="currentColor" stroke="none"/>
+          </svg>
+          Memory
+        </a>
+      </li>
+      <li>
         <a href="/_/spans" class="nav-link" data-page="spans">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
             <rect x="1" y="4" width="8" height="2.5" rx="0.5"/>
@@ -332,6 +343,86 @@
           </div>
         </div>
         <div class="node-detail-panel hidden" id="node-detail-panel"></div>
+      </div>
+    </section>
+
+    <!-- ─────────── MEMORY ─────────── -->
+    <section class="page hidden" id="page-memory" aria-label="Memory Explorer">
+      <h1>Memory Explorer</h1>
+      <p class="page-subtitle">Browse episodes, facts, and search memory content</p>
+
+      <div class="form-panel">
+        <div class="form-row">
+          <label>User
+            <input type="text" id="mem-user" placeholder="username or UUID" autocomplete="off">
+          </label>
+          <button type="button" class="btn" id="mem-load-btn">Load Memory</button>
+        </div>
+      </div>
+
+      <!-- Tabbed interface -->
+      <div id="mem-tabs" class="hidden">
+        <div class="tab-bar">
+          <button class="tab-btn active" data-mem-tab="episodes">Episodes</button>
+          <button class="tab-btn" data-mem-tab="facts">Facts</button>
+          <button class="tab-btn" data-mem-tab="search">Search</button>
+          <button class="tab-btn" data-mem-tab="diff">Temporal Diff</button>
+        </div>
+
+        <!-- Episodes tab -->
+        <div class="tab-panel" id="mem-tab-episodes">
+          <div id="mem-episodes-list" class="panel">
+            <p class="muted">Click "Load Memory" to see episodes.</p>
+          </div>
+        </div>
+
+        <!-- Facts tab -->
+        <div class="tab-panel hidden" id="mem-tab-facts">
+          <div class="form-row" style="margin-bottom:0.75rem">
+            <label class="check-label">
+              <input type="checkbox" id="mem-facts-show-superseded"> Show superseded facts
+            </label>
+          </div>
+          <div id="mem-facts-table" class="panel">
+            <p class="muted">Click "Load Memory" to see facts.</p>
+          </div>
+        </div>
+
+        <!-- Search tab -->
+        <div class="tab-panel hidden" id="mem-tab-search">
+          <div class="form-row" style="margin-bottom:0.75rem">
+            <label style="flex:1">
+              Query
+              <input type="text" id="mem-search-query" placeholder="What does the agent see for this query?" autocomplete="off">
+            </label>
+            <label>
+              Max tokens
+              <input type="number" id="mem-search-max-tokens" value="1000" min="100" max="10000" style="width:100px">
+            </label>
+            <button type="button" class="btn" id="mem-search-btn" style="align-self:flex-end">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="6.5" cy="6.5" r="4"/>
+                <line x1="10" y1="10" x2="14" y2="14"/>
+              </svg>
+              Search
+            </button>
+          </div>
+          <div id="mem-search-results" class="panel">
+            <p class="muted">Enter a query and click Search to see what context an agent would receive.</p>
+          </div>
+        </div>
+
+        <!-- Temporal diff tab -->
+        <div class="tab-panel hidden" id="mem-tab-diff">
+          <div class="form-row" style="margin-bottom:0.75rem">
+            <label>From <input type="datetime-local" id="mem-diff-from"></label>
+            <label>To <input type="datetime-local" id="mem-diff-to"></label>
+            <button type="button" class="btn" id="mem-diff-btn" style="align-self:flex-end">Compare</button>
+          </div>
+          <div id="mem-diff-results" class="panel">
+            <p class="muted">Select a time range to see what facts were added or superseded.</p>
+          </div>
+        </div>
       </div>
     </section>
 

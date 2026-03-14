@@ -895,6 +895,103 @@ a.link:hover { color: var(--accent-hover); text-decoration: underline; }
   background: var(--bg-hover);
 }
 
+/* ─── Tab bar (Memory page) ───────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--duration), border-color var(--duration);
+  white-space: nowrap;
+}
+.tab-btn:hover {
+  color: var(--text);
+}
+.tab-btn.active {
+  color: var(--accent-hover);
+  border-bottom-color: var(--accent);
+}
+
+.tab-panel {
+  animation: page-in var(--duration) var(--ease) both;
+}
+.tab-panel.hidden { display: none !important; }
+
+/* ─── Memory session details ──────────────────────────────────── */
+.mem-session-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.mem-session-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  background: var(--bg-card);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background var(--duration);
+  list-style: none;
+}
+.mem-session-summary::-webkit-details-marker { display: none; }
+.mem-session-summary::before {
+  content: '\25B6';
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform var(--duration);
+}
+.mem-session-details[open] > .mem-session-summary::before {
+  transform: rotate(90deg);
+}
+.mem-session-summary:hover {
+  background: var(--bg-hover);
+}
+
+.mem-session-details .table-wrap {
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  margin-bottom: 0;
+}
+
+/* ─── Memory context block ────────────────────────────────────── */
+.mem-context-block {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.mem-context-block pre {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
 /* ─── Utility ─────────────────────────────────────────────────── */
 .hidden { display: none !important; }
 .flex   { display: flex; }

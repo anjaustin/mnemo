@@ -362,6 +362,11 @@ function syncPageFromPath(pageName) {
     return;
   }
 
+  if (pageName === 'memory') {
+    // No deep-link sync needed — user enters identifier manually
+    return;
+  }
+
   if (pageName === 'rca') {
     const query = dashboardQuery();
     const user = query.get('user') || '';
@@ -2224,6 +2229,393 @@ async function loadMemoryDigest(user, refresh) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// MEMORY PAGE
+// ═══════════════════════════════════════════════════════════════════
+let _memUser = null;   // resolved external user identifier
+let _memUserId = null; // resolved internal UUID
+
+function initMemory() {
+  document.getElementById('mem-load-btn').addEventListener('click', () => loadMemory());
+  document.getElementById('mem-user').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadMemory();
+  });
+  document.getElementById('mem-search-btn').addEventListener('click', () => memSearch());
+  document.getElementById('mem-search-query').addEventListener('keydown', e => {
+    if (e.key === 'Enter') memSearch();
+  });
+  document.getElementById('mem-diff-btn').addEventListener('click', () => memDiff());
+
+  // Tab switching
+  document.querySelectorAll('.tab-btn[data-mem-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn[data-mem-tab]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('#mem-tabs .tab-panel').forEach(p => p.classList.add('hidden'));
+      const target = document.getElementById('mem-tab-' + btn.dataset.memTab);
+      if (target) target.classList.remove('hidden');
+    });
+  });
+}
+
+async function loadMemory() {
+  const user = document.getElementById('mem-user').value.trim();
+  if (!user) { toast.warn('Input required', 'Enter a username or UUID.'); return; }
+  _memUser = user;
+  mnemo.show('mem-tabs');
+
+  // Resolve user → internal UUID
+  try {
+    const userObj = await mnemo.api('GET', `/api/v1/users/external/${encodeURIComponent(user)}`);
+    _memUserId = userObj.id;
+  } catch (_) {
+    // Might already be a UUID
+    _memUserId = user;
+  }
+
+  // Load episodes + facts in parallel
+  loadMemEpisodes();
+  loadMemFacts();
+
+  // Set default diff window (last 7 days)
+  const now = new Date();
+  const week = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  const toLocal = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const fromEl = document.getElementById('mem-diff-from');
+  const toEl = document.getElementById('mem-diff-to');
+  if (fromEl && !fromEl.value) fromEl.value = toLocal(week);
+  if (toEl && !toEl.value) toEl.value = toLocal(now);
+}
+
+async function loadMemEpisodes() {
+  mnemo.loading('mem-episodes-list');
+  try {
+    const sessData = await mnemo.api('GET', `/api/v1/users/${encodeURIComponent(_memUserId)}/sessions`);
+    const sessions = sessData.data || [];
+
+    if (sessions.length === 0) {
+      mnemo.setHtml('mem-episodes-list', '<p class="muted">No sessions found for this user.</p>');
+      return;
+    }
+
+    // Fetch episodes for each session (parallel, first 5 sessions)
+    const sessionSlice = sessions.slice(0, 20);
+    const episodeLists = await Promise.all(
+      sessionSlice.map(s =>
+        mnemo.api('GET', `/api/v1/sessions/${s.id}/episodes?limit=50`).catch(() => ({ data: [] }))
+      )
+    );
+
+    let html = `<div class="stat-grid" style="margin-bottom:12px">
+      <div class="stat-row"><span>Sessions</span><span>${sessions.length}</span></div>
+    </div>`;
+
+    sessionSlice.forEach((session, idx) => {
+      const episodes = (episodeLists[idx].data || []);
+      const sessionLabel = session.name || truncId(session.id);
+      const episodeRows = episodes.length > 0
+        ? episodes.map(ep => `<tr>
+            <td><code>${escapeHtml(truncId(ep.id))}</code></td>
+            <td>${ep.role ? badge(ep.role, ep.role === 'user' ? 'blue' : (ep.role === 'assistant' ? 'green' : 'gray')) : '--'}</td>
+            <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml((ep.content || '').substring(0, 120))}</td>
+            <td>${fmtDateAgo(ep.created_at)}</td>
+          </tr>`).join('')
+        : '<tr><td colspan="4" class="muted">No episodes</td></tr>';
+
+      html += `
+        <details class="mem-session-details" ${idx === 0 ? 'open' : ''}>
+          <summary class="mem-session-summary">
+            <span>${escapeHtml(sessionLabel)}</span>
+            ${badge(episodes.length + ' episodes', 'gray')}
+            <span class="muted" style="font-size:11px">${fmtDateAgo(session.created_at)}</span>
+          </summary>
+          <div class="table-wrap"><table>
+            <thead><tr><th>ID</th><th>Role</th><th>Content</th><th>Created</th></tr></thead>
+            <tbody>${episodeRows}</tbody>
+          </table></div>
+        </details>`;
+    });
+
+    if (sessions.length > sessionSlice.length) {
+      html += `<p class="muted" style="margin-top:8px">Showing ${sessionSlice.length} of ${sessions.length} sessions.</p>`;
+    }
+
+    mnemo.setHtml('mem-episodes-list', html);
+  } catch (e) {
+    mnemo.error('mem-episodes-list', 'Failed to load episodes: ' + e.message);
+  }
+}
+
+async function loadMemFacts() {
+  mnemo.loading('mem-facts-table');
+  try {
+    const showSuperseded = document.getElementById('mem-facts-show-superseded')?.checked;
+    const validOnly = showSuperseded ? 'false' : 'true';
+    const data = await mnemo.api('GET', `/api/v1/graph/${encodeURIComponent(_memUser)}/edges?limit=500&valid_only=${validOnly}`);
+    const edges = data.data || [];
+
+    if (edges.length === 0) {
+      mnemo.setHtml('mem-facts-table', '<p class="muted">No facts found for this user.</p>');
+      return;
+    }
+
+    const rows = edges.map(e => {
+      const isInvalid = !!e.invalid_at;
+      const rowClass = isInvalid ? ' style="opacity:0.55"' : '';
+      return `<tr${rowClass}>
+        <td><code>${escapeHtml(truncId(e.id))}</code></td>
+        <td>${escapeHtml(e.label)}</td>
+        <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.fact || '--')}</td>
+        <td>${(e.confidence != null ? (e.confidence * 100).toFixed(0) + '%' : '--')}</td>
+        <td>${isInvalid ? badge('superseded', 'yellow') : badge('valid', 'green')}</td>
+        <td>${fmtDateAgo(e.valid_at)}</td>
+      </tr>`;
+    }).join('');
+
+    mnemo.setHtml('mem-facts-table', `
+      <div class="stat-grid" style="margin-bottom:12px">
+        <div class="stat-row"><span>Total Facts</span><span>${data.count || edges.length}</span></div>
+        <div class="stat-row"><span>Valid</span><span>${edges.filter(e => !e.invalid_at).length}</span></div>
+        <div class="stat-row"><span>Superseded</span><span>${edges.filter(e => !!e.invalid_at).length}</span></div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ID</th><th>Label</th><th>Fact</th><th>Confidence</th><th>Status</th><th>Valid At</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`);
+
+    // Re-bind the checkbox to reload on change
+    const chk = document.getElementById('mem-facts-show-superseded');
+    if (chk) {
+      chk.removeEventListener('change', _memFactsChkHandler);
+      chk.addEventListener('change', _memFactsChkHandler);
+    }
+  } catch (e) {
+    mnemo.error('mem-facts-table', 'Failed to load facts: ' + e.message);
+  }
+}
+
+function _memFactsChkHandler() {
+  if (_memUser) loadMemFacts();
+}
+
+async function memSearch() {
+  const query = document.getElementById('mem-search-query').value.trim();
+  if (!query) { toast.warn('Input required', 'Enter a search query.'); return; }
+  if (!_memUser) { toast.warn('No user loaded', 'Click "Load Memory" first.'); return; }
+  const maxTokens = parseInt(document.getElementById('mem-search-max-tokens').value) || 1000;
+
+  mnemo.loading('mem-search-results');
+  try {
+    const data = await mnemo.api('POST', `/api/v1/memory/${encodeURIComponent(_memUser)}/context`, {
+      query,
+      max_tokens: maxTokens,
+    });
+
+    // data has: context, token_count, entities, facts, episodes, latency_ms, sources, mode, ...
+    const entities = data.entities || [];
+    const facts = data.facts || [];
+    const episodes = data.episodes || [];
+    const sources = (data.sources || []).map(s => badge(s, 'blue')).join(' ');
+
+    let html = `
+      <div class="stat-grid" style="margin-bottom:12px">
+        <div class="stat-row"><span>Tokens</span><span>${data.token_count || 0}</span></div>
+        <div class="stat-row"><span>Latency</span><span>${data.latency_ms || 0}ms</span></div>
+        <div class="stat-row"><span>Mode</span><span>${badge(data.mode || '--', 'blue')}</span></div>
+        <div class="stat-row"><span>Sources</span><span>${sources || '--'}</span></div>
+        <div class="stat-row"><span>Entities</span><span>${entities.length}</span></div>
+        <div class="stat-row"><span>Facts</span><span>${facts.length}</span></div>
+        <div class="stat-row"><span>Episodes</span><span>${episodes.length}</span></div>
+      </div>`;
+
+    // Context string (the actual assembled context)
+    if (data.context) {
+      html += `<h3>Assembled Context</h3>
+        <div class="mem-context-block"><pre>${escapeHtml(data.context)}</pre></div>`;
+    }
+
+    // Facts table
+    if (facts.length > 0) {
+      const factRows = facts.map(f => `<tr>
+        <td>${escapeHtml(f.source_entity)} &rarr; ${escapeHtml(f.target_entity)}</td>
+        <td>${escapeHtml(f.label)}</td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(f.fact)}</td>
+        <td>${(f.relevance * 100).toFixed(0)}%</td>
+        <td>${f.invalid_at ? badge('superseded', 'yellow') : badge('valid', 'green')}</td>
+      </tr>`).join('');
+      html += `<h3>Retrieved Facts (${facts.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Entities</th><th>Label</th><th>Fact</th><th>Relevance</th><th>Status</th></tr></thead>
+          <tbody>${factRows}</tbody>
+        </table></div>`;
+    }
+
+    // Entities table
+    if (entities.length > 0) {
+      const entRows = entities.map(e => `<tr>
+        <td>${escapeHtml(e.name)}</td>
+        <td>${badge(e.entity_type, 'blue')}</td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(e.summary || '--')}</td>
+        <td>${(e.relevance * 100).toFixed(0)}%</td>
+      </tr>`).join('');
+      html += `<h3>Retrieved Entities (${entities.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>Type</th><th>Summary</th><th>Relevance</th></tr></thead>
+          <tbody>${entRows}</tbody>
+        </table></div>`;
+    }
+
+    // Episodes table
+    if (episodes.length > 0) {
+      const epRows = episodes.map(ep => `<tr>
+        <td><code>${escapeHtml(truncId(ep.id))}</code></td>
+        <td>${ep.role ? badge(ep.role, 'gray') : '--'}</td>
+        <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(ep.preview)}</td>
+        <td>${(ep.relevance * 100).toFixed(0)}%</td>
+        <td>${fmtDateAgo(ep.created_at)}</td>
+      </tr>`).join('');
+      html += `<h3>Retrieved Episodes (${episodes.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>ID</th><th>Role</th><th>Preview</th><th>Relevance</th><th>Created</th></tr></thead>
+          <tbody>${epRows}</tbody>
+        </table></div>`;
+    }
+
+    mnemo.setHtml('mem-search-results', html);
+  } catch (e) {
+    mnemo.error('mem-search-results', 'Search failed: ' + e.message);
+  }
+}
+
+async function memDiff() {
+  if (!_memUser) { toast.warn('No user loaded', 'Click "Load Memory" first.'); return; }
+  const fromVal = document.getElementById('mem-diff-from').value;
+  const toVal = document.getElementById('mem-diff-to').value;
+  if (!fromVal || !toVal) { toast.warn('Missing fields', 'Select both From and To dates.'); return; }
+  const from = toIso(fromVal);
+  const to = toIso(toVal);
+
+  mnemo.loading('mem-diff-results');
+  try {
+    const data = await mnemo.api('POST', `/api/v1/memory/${encodeURIComponent(_memUser)}/changes_since`, {
+      from, to,
+    });
+
+    const addedFacts = data.added_facts || [];
+    const supersededFacts = data.superseded_facts || [];
+    const confidenceDeltas = data.confidence_deltas || [];
+    const headChanges = data.head_changes || [];
+    const addedEpisodes = data.added_episodes || [];
+
+    let html = `
+      <div class="stat-grid" style="margin-bottom:12px">
+        <div class="stat-row"><span>Added Facts</span><span>${addedFacts.length}</span></div>
+        <div class="stat-row"><span>Superseded Facts</span><span>${supersededFacts.length}</span></div>
+        <div class="stat-row"><span>Confidence Changes</span><span>${confidenceDeltas.length}</span></div>
+        <div class="stat-row"><span>Head Changes</span><span>${headChanges.length}</span></div>
+        <div class="stat-row"><span>Added Episodes</span><span>${addedEpisodes.length}</span></div>
+      </div>`;
+
+    if (data.summary) {
+      html += `<div class="panel" style="margin-bottom:16px"><p>${escapeHtml(data.summary)}</p></div>`;
+    }
+
+    // Added facts
+    if (addedFacts.length > 0) {
+      const rows = addedFacts.map(f => `<tr>
+        <td>${escapeHtml(f.source_entity)} &rarr; ${escapeHtml(f.target_entity)}</td>
+        <td>${escapeHtml(f.label)}</td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(f.fact)}</td>
+        <td>${(f.confidence * 100).toFixed(0)}%</td>
+        <td>${fmtDateAgo(f.occurred_at)}</td>
+      </tr>`).join('');
+      html += `<h3 style="color:var(--green)">Added Facts (${addedFacts.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Entities</th><th>Label</th><th>Fact</th><th>Confidence</th><th>When</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    }
+
+    // Superseded facts
+    if (supersededFacts.length > 0) {
+      const rows = supersededFacts.map(f => `<tr style="opacity:0.7">
+        <td>${escapeHtml(f.source_entity)} &rarr; ${escapeHtml(f.target_entity)}</td>
+        <td>${escapeHtml(f.label)}</td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(f.fact)}</td>
+        <td>${(f.confidence * 100).toFixed(0)}%</td>
+        <td>${fmtDateAgo(f.occurred_at)}</td>
+      </tr>`).join('');
+      html += `<h3 style="color:var(--yellow)">Superseded Facts (${supersededFacts.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Entities</th><th>Label</th><th>Fact</th><th>Confidence</th><th>When</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    }
+
+    // Confidence deltas
+    if (confidenceDeltas.length > 0) {
+      const rows = confidenceDeltas.map(d => {
+        const arrow = d.delta > 0 ? '&uarr;' : '&darr;';
+        const color = d.delta > 0 ? 'var(--green)' : 'var(--red)';
+        return `<tr>
+          <td>${escapeHtml(d.source_entity)} &rarr; ${escapeHtml(d.target_entity)}</td>
+          <td>${escapeHtml(d.label)}</td>
+          <td>${(d.previous_confidence * 100).toFixed(0)}%</td>
+          <td>${(d.current_confidence * 100).toFixed(0)}%</td>
+          <td style="color:${color}">${arrow} ${(d.delta * 100).toFixed(1)}%</td>
+          <td>${fmtDateAgo(d.at)}</td>
+        </tr>`;
+      }).join('');
+      html += `<h3>Confidence Changes (${confidenceDeltas.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Entities</th><th>Label</th><th>Before</th><th>After</th><th>Delta</th><th>When</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    }
+
+    // Head changes
+    if (headChanges.length > 0) {
+      const rows = headChanges.map(h => `<tr>
+        <td><code>${escapeHtml(truncId(h.session_id))}</code></td>
+        <td>${escapeHtml(h.session_name || '--')}</td>
+        <td>v${h.head_version}</td>
+        <td>${h.head_episode_id ? '<code>' + escapeHtml(truncId(h.head_episode_id)) + '</code>' : '--'}</td>
+        <td>${fmtDateAgo(h.at)}</td>
+      </tr>`).join('');
+      html += `<h3>Head Changes (${headChanges.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Session</th><th>Name</th><th>Version</th><th>Episode</th><th>When</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    }
+
+    // Added episodes
+    if (addedEpisodes.length > 0) {
+      const rows = addedEpisodes.map(ep => `<tr>
+        <td><code>${escapeHtml(truncId(ep.episode_id))}</code></td>
+        <td>${ep.role ? badge(ep.role, 'gray') : '--'}</td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(ep.preview)}</td>
+        <td>${escapeHtml(ep.session_name || truncId(ep.session_id))}</td>
+        <td>${fmtDateAgo(ep.created_at)}</td>
+      </tr>`).join('');
+      html += `<h3>Added Episodes (${addedEpisodes.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>ID</th><th>Role</th><th>Preview</th><th>Session</th><th>Created</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    }
+
+    if (addedFacts.length === 0 && supersededFacts.length === 0 && confidenceDeltas.length === 0 && headChanges.length === 0 && addedEpisodes.length === 0) {
+      html += '<p class="muted">No changes detected in this time window.</p>';
+    }
+
+    mnemo.setHtml('mem-diff-results', html);
+  } catch (e) {
+    mnemo.error('mem-diff-results', 'Diff failed: ' + e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // LLM SPANS PAGE
 // ═══════════════════════════════════════════════════════════════════
 
@@ -2308,6 +2700,7 @@ document.addEventListener('DOMContentLoaded', () => {
   _pageInits['governance'] = { init: initGovernance };
   _pageInits['traces'] = { init: initTraces };
   _pageInits['explorer'] = { init: initExplorer };
+  _pageInits['memory'] = { init: initMemory };
   _pageInits['spans'] = { init: initSpans };
 
   initNav();
