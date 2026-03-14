@@ -212,7 +212,6 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Mnemo Helm Qdrant auth**: Qdrant subchart does not expose an auth toggle. Qdrant runs unauthenticated inside the cluster by default.
 - **Mnemo Helm Ingress TLS**: Ingress template has no TLS block. Requires cluster-specific setup (cert-manager, cloud LB).
 - **Mnemo Helm NetworkPolicy**: No NetworkPolicy template. Pod-to-pod traffic is unrestricted within the namespace.
-- **Mnemo Helm subchart seccomp**: Only the Mnemo deployment has `seccompProfile: RuntimeDefault`. Redis and Qdrant pods inherit cluster defaults.
 - **Zep self-hosted**: [Graphiti](https://github.com/getzep/graphiti) is now fully open-source (Apache 2.0, 23.7k stars) with Neo4j, FalkorDB, Kuzu, and Neptune backends. Prior "partial" rating was stale. Zep Cloud remains the managed platform.
 - **Zep graph traversal**: BFS shipped (`bfs_origin_node_uuids`), plus node-distance reranker. No shortest-path API.
 - **Zep reranking**: Five rerankers: RRF, MMR, cross-encoder, node_distance, episode_mentions. Full parity.
