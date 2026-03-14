@@ -42,12 +42,10 @@ from mnemo._models import (
     DeleteResult,
     ExperienceEventResult,
     GraphCommunityResult,
-    GraphEdge,
     GraphEdgesResult,
     GraphEntitiesResult,
     GraphEntity,
     GraphEntityDetail,
-    AdjacencyEdge,
     GraphNeighborsResult,
     HealthResult,
     ImportJobResult,
@@ -72,16 +70,24 @@ from mnemo._models import (
     WebhookStats,
 )
 from mnemo._transport import opt
-from mnemo.client import (
-    _parse_audit,
-    _parse_context,
-    _parse_graph_entity_detail,
-    _parse_import_job,
-    _parse_policy,
-    _parse_spans_result,
-    _parse_webhook,
-    _parse_webhook_event,
+from mnemo._parsers import (
+    parse_agent_audit as _parse_agent_audit,
+    parse_agent_context as _parse_agent_context,
+    parse_agent_identity as _parse_agent_identity,
+    parse_audit as _parse_audit,
+    parse_context as _parse_context,
+    parse_experience_event as _parse_experience_event,
+    parse_graph_edges_result as _parse_graph_edges_result,
+    parse_graph_entities_result as _parse_graph_entities_result,
+    parse_graph_entity_detail as _parse_graph_entity_detail,
+    parse_import_job as _parse_import_job,
+    parse_policy as _parse_policy,
+    parse_promotion_proposal as _parse_promotion_proposal,
+    parse_spans_result as _parse_spans_result,
+    parse_webhook as _parse_webhook,
+    parse_webhook_event as _parse_webhook_event,
 )
+from typing import AsyncIterator
 
 
 class AsyncMnemo:
@@ -1004,25 +1010,7 @@ class AsyncMnemo:
             f"/api/v1/graph/{user}/entities?limit={limit}",
             request_id=request_id,
         )
-        entities = [
-            GraphEntity(
-                id=str(e.get("id", "")),
-                name=str(e.get("name", "")),
-                entity_type=str(e.get("entity_type", "unknown")),
-                summary=e.get("summary"),
-                mention_count=int(e.get("mention_count", 0)),
-                community_id=e.get("community_id"),
-                created_at=str(e.get("created_at", "")),
-                updated_at=str(e.get("updated_at", "")),
-            )
-            for e in body.get("data", [])
-        ]
-        return GraphEntitiesResult(
-            data=entities,
-            count=int(body.get("count", len(entities))),
-            user_id=str(body.get("user_id", "")),
-            request_id=rid,
-        )
+        return _parse_graph_entities_result(body, rid)
 
     async def graph_entity(
         self,
@@ -1053,27 +1041,7 @@ class AsyncMnemo:
         if label:
             path += f"&label={label}"
         body, rid = await self._req("GET", path, request_id=request_id)
-        edges = [
-            GraphEdge(
-                id=str(e.get("id", "")),
-                source_entity_id=str(e.get("source_entity_id", "")),
-                target_entity_id=str(e.get("target_entity_id", "")),
-                label=str(e.get("label", "")),
-                fact=str(e.get("fact", "")),
-                confidence=float(e.get("confidence", 1.0)),
-                valid=bool(e.get("valid", True)),
-                valid_at=str(e.get("valid_at", "")),
-                invalid_at=e.get("invalid_at"),
-                created_at=str(e.get("created_at", "")),
-            )
-            for e in body.get("data", [])
-        ]
-        return GraphEdgesResult(
-            data=edges,
-            count=int(body.get("count", len(edges))),
-            user_id=str(body.get("user_id", "")),
-            request_id=rid,
-        )
+        return _parse_graph_edges_result(body, rid)
 
     async def graph_neighbors(
         self,
@@ -1203,7 +1171,7 @@ class AsyncMnemo:
         body, rid = await self._req(
             "GET", f"/api/v1/agents/{agent_id}/identity", request_id=request_id
         )
-        return _aio_parse_agent_identity(body, rid)
+        return _parse_agent_identity(body, rid)
 
     async def update_agent_identity(
         self,
@@ -1219,7 +1187,7 @@ class AsyncMnemo:
             {"core": core},
             request_id=request_id,
         )
-        return _aio_parse_agent_identity(body, rid)
+        return _parse_agent_identity(body, rid)
 
     async def list_agent_identity_versions(
         self,
@@ -1234,7 +1202,7 @@ class AsyncMnemo:
             f"/api/v1/agents/{agent_id}/identity/versions?limit={limit}",
             request_id=request_id,
         )
-        return [_aio_parse_agent_identity(v, rid) for v in body.get("versions", [])]
+        return [_parse_agent_identity(v, rid) for v in body.get("versions", [])]
 
     async def list_agent_identity_audit(
         self,
@@ -1249,7 +1217,7 @@ class AsyncMnemo:
             f"/api/v1/agents/{agent_id}/identity/audit?limit={limit}",
             request_id=request_id,
         )
-        return [_aio_parse_agent_audit(a, rid) for a in body.get("audit", [])]
+        return [_parse_agent_audit(a, rid) for a in body.get("audit", [])]
 
     async def rollback_agent_identity(
         self,
@@ -1269,7 +1237,7 @@ class AsyncMnemo:
             payload,
             request_id=request_id,
         )
-        return _aio_parse_agent_identity(body, rid)
+        return _parse_agent_identity(body, rid)
 
     async def add_agent_experience(
         self,
@@ -1303,7 +1271,7 @@ class AsyncMnemo:
             payload,
             request_id=request_id,
         )
-        return _aio_parse_experience_event(body, rid)
+        return _parse_experience_event(body, rid)
 
     async def create_promotion_proposal(
         self,
@@ -1329,7 +1297,7 @@ class AsyncMnemo:
             },
             request_id=request_id,
         )
-        return _aio_parse_promotion_proposal(body, rid)
+        return _parse_promotion_proposal(body, rid)
 
     async def list_promotion_proposals(
         self,
@@ -1344,9 +1312,7 @@ class AsyncMnemo:
             f"/api/v1/agents/{agent_id}/promotions?limit={limit}",
             request_id=request_id,
         )
-        return [
-            _aio_parse_promotion_proposal(p, rid) for p in body.get("proposals", [])
-        ]
+        return [_parse_promotion_proposal(p, rid) for p in body.get("proposals", [])]
 
     async def approve_promotion(
         self,
@@ -1362,7 +1328,7 @@ class AsyncMnemo:
             {},
             request_id=request_id,
         )
-        return _aio_parse_promotion_proposal(body, rid)
+        return _parse_promotion_proposal(body, rid)
 
     async def reject_promotion(
         self,
@@ -1382,7 +1348,7 @@ class AsyncMnemo:
             payload,
             request_id=request_id,
         )
-        return _aio_parse_promotion_proposal(body, rid)
+        return _parse_promotion_proposal(body, rid)
 
     async def agent_context(
         self,
@@ -1412,7 +1378,118 @@ class AsyncMnemo:
             payload,
             request_id=request_id,
         )
-        return _aio_parse_agent_context(body, rid)
+        return _parse_agent_context(body, rid)
+
+    # ── Pagination helpers ──────────────────────────────────────────
+
+    async def aiter_entities(
+        self,
+        user: str,
+        *,
+        page_size: int = 100,
+        request_id: str | None = None,
+    ) -> AsyncIterator[GraphEntity]:
+        """Auto-paginate through all entities for a user.
+
+        Yields :class:`GraphEntity` instances one at a time, fetching
+        pages of ``page_size`` behind the scenes.
+
+        Example::
+
+            async for entity in client.aiter_entities("kendra"):
+                print(entity.name, entity.entity_type)
+        """
+        from mnemo._parsers import parse_graph_entity
+
+        after: str | None = None
+        while True:
+            path = f"/api/v1/graph/{user}/entities?limit={page_size}"
+            if after:
+                path += f"&after={after}"
+            body, rid = await self._req("GET", path, request_id=request_id)
+            items = body.get("data", [])
+            if not items:
+                break
+            for raw in items:
+                yield parse_graph_entity(raw)
+            if len(items) < page_size:
+                break
+            after = str(items[-1].get("id", ""))
+
+    async def aiter_sessions(
+        self,
+        user_id: str,
+        *,
+        page_size: int = 100,
+        request_id: str | None = None,
+    ) -> AsyncIterator[SessionInfo]:
+        """Auto-paginate through all sessions for a user (by UUID).
+
+        Yields :class:`SessionInfo` instances one at a time.
+
+        Example::
+
+            async for session in client.aiter_sessions(user_uuid):
+                print(session.name, session.episode_count)
+        """
+        after: str | None = None
+        while True:
+            path = f"/api/v1/users/{user_id}/sessions?limit={page_size}"
+            if after:
+                path += f"&after={after}"
+            body, rid = await self._req("GET", path, request_id=request_id)
+            items = body.get("data", [])
+            if not items:
+                break
+            for s in items:
+                yield SessionInfo(
+                    id=str(s.get("id", "")),
+                    name=s.get("name"),
+                    user_id=str(s.get("user_id", "")),
+                    created_at=str(s.get("created_at", "")),
+                    updated_at=str(s.get("updated_at", "")),
+                    episode_count=int(s.get("episode_count", 0)),
+                )
+            if len(items) < page_size:
+                break
+            after = str(items[-1].get("id", ""))
+
+    async def aiter_messages(
+        self,
+        session_id: str,
+        *,
+        page_size: int = 100,
+        request_id: str | None = None,
+    ) -> AsyncIterator[Message]:
+        """Auto-paginate through all messages in a session.
+
+        Yields :class:`Message` instances one at a time.
+
+        Example::
+
+            async for msg in client.aiter_messages(session_uuid):
+                print(msg.role, msg.content[:60])
+        """
+        after: str | None = None
+        while True:
+            path = f"/api/v1/sessions/{session_id}/messages?limit={page_size}"
+            if after:
+                path += f"&after={after}"
+            body, rid = await self._req("GET", path, request_id=request_id)
+            items = body.get("messages", [])
+            if not items:
+                break
+            for i, m in enumerate(items):
+                yield Message(
+                    idx=int(m.get("idx", i)),
+                    id=str(m.get("id", "")),
+                    role=m.get("role"),
+                    content=str(m.get("content", "")),
+                    created_at=str(m.get("created_at", "")),
+                )
+            if len(items) < page_size:
+                break
+            after = str(items[-1].get("id", ""))
 
 
 def _aio_extract_message(body: dict[str, Any]) -> str:
@@ -1434,88 +1511,3 @@ def _aio_extract_retry_ms(body: dict[str, Any]) -> int | None:
     if isinstance(err, dict):
         return err.get("retry_after_ms")
     return None
-
-
-# ─── Agent Identity parsers ───────────────────────────────────────
-
-
-def _aio_parse_agent_identity(
-    body: dict[str, Any], rid: str | None
-) -> AgentIdentityResult:
-    return AgentIdentityResult(
-        agent_id=str(body.get("agent_id", "")),
-        version=int(body.get("version", 0)),
-        core=dict(body.get("core", {})),
-        updated_at=str(body.get("updated_at", "")),
-        request_id=rid,
-    )
-
-
-def _aio_parse_experience_event(
-    body: dict[str, Any], rid: str | None
-) -> ExperienceEventResult:
-    return ExperienceEventResult(
-        id=str(body.get("id", "")),
-        agent_id=str(body.get("agent_id", "")),
-        user_id=str(body.get("user_id", "")),
-        session_id=str(body.get("session_id", "")),
-        category=str(body.get("category", "")),
-        signal=str(body.get("signal", "")),
-        confidence=float(body.get("confidence", 0.0)),
-        weight=float(body.get("weight", 0.0)),
-        decay_half_life_days=int(body.get("decay_half_life_days", 0)),
-        evidence_episode_ids=[str(eid) for eid in body.get("evidence_episode_ids", [])],
-        created_at=str(body.get("created_at", "")),
-        request_id=rid,
-    )
-
-
-def _aio_parse_agent_audit(
-    body: dict[str, Any], rid: str | None
-) -> AgentIdentityAuditResult:
-    return AgentIdentityAuditResult(
-        id=str(body.get("id", "")),
-        agent_id=str(body.get("agent_id", "")),
-        action=str(body.get("action", "")),
-        from_version=body.get("from_version"),
-        to_version=body.get("to_version"),
-        rollback_to_version=body.get("rollback_to_version"),
-        reason=body.get("reason"),
-        created_at=str(body.get("created_at", "")),
-        request_id=rid,
-    )
-
-
-def _aio_parse_promotion_proposal(
-    body: dict[str, Any], rid: str | None
-) -> PromotionProposalResult:
-    return PromotionProposalResult(
-        id=str(body.get("id", "")),
-        agent_id=str(body.get("agent_id", "")),
-        proposal=str(body.get("proposal", "")),
-        candidate_core=dict(body.get("candidate_core", {})),
-        reason=str(body.get("reason", "")),
-        risk_level=str(body.get("risk_level", "medium")),
-        status=str(body.get("status", "")),
-        source_event_ids=[str(eid) for eid in body.get("source_event_ids", [])],
-        created_at=str(body.get("created_at", "")),
-        approved_at=body.get("approved_at"),
-        rejected_at=body.get("rejected_at"),
-        request_id=rid,
-    )
-
-
-def _aio_parse_agent_context(
-    body: dict[str, Any], rid: str | None
-) -> AgentContextResult:
-    identity_raw = body.get("identity", {})
-    return AgentContextResult(
-        context=dict(body.get("context", {})),
-        identity=_aio_parse_agent_identity(identity_raw, None),
-        identity_version=int(body.get("identity_version", 0)),
-        experience_events_used=int(body.get("experience_events_used", 0)),
-        experience_weight_sum=float(body.get("experience_weight_sum", 0.0)),
-        user_memory_items_used=int(body.get("user_memory_items_used", 0)),
-        attribution_guards=dict(body.get("attribution_guards", {})),
-        request_id=rid,
-    )

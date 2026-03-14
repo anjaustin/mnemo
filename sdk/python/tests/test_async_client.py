@@ -643,14 +643,20 @@ async def test_async_preview_policy():
             m.post(
                 f"{BASE}/api/v1/policies/kendra/preview",
                 payload={
-                    "estimated_episodes_affected": 7,
-                    "policy": {"retention_days_message": 30},
+                    "user_id": "u-kendra",
+                    "current_policy": {"retention_days_message": 90},
+                    "preview_policy": {"retention_days_message": 30},
+                    "estimated_affected_episodes_total": 7,
+                    "estimated_affected_message_episodes": 5,
+                    "estimated_affected_text_episodes": 2,
+                    "estimated_affected_json_episodes": 0,
+                    "confidence": "high",
                 },
             )
             result = await client.preview_policy("kendra", retention_days_message=30)
             assert isinstance(result, PolicyPreviewResult)
-            assert result.estimated_episodes_affected == 7
-            assert result.policy.get("retention_days_message") == 30
+            assert result.estimated_affected_episodes_total == 7
+            assert result.preview_policy.get("retention_days_message") == 30
 
 
 @pytest.mark.asyncio
@@ -661,13 +667,13 @@ async def test_async_get_policy_audit():
             m.get(
                 f"{BASE}/api/v1/policies/kendra/audit?limit=50",
                 payload={
-                    "data": [
+                    "audit": [
                         {
                             "id": "a-1",
                             "user_id": "u-kendra",
-                            "action": "policy_updated",
+                            "event_type": "policy_updated",
                             "details": {},
-                            "at": "2025-01-01T00:00:00Z",
+                            "created_at": "2025-01-01T00:00:00Z",
                         }
                     ]
                 },
@@ -675,7 +681,7 @@ async def test_async_get_policy_audit():
             records = await client.get_policy_audit("kendra")
             assert len(records) == 1
             assert isinstance(records[0], AuditRecord)
-            assert records[0].action == "policy_updated"
+            assert records[0].event_type == "policy_updated"
 
 
 @pytest.mark.asyncio
@@ -687,13 +693,13 @@ async def test_async_get_policy_violations():
                 f"{BASE}/api/v1/policies/kendra/violations"
                 f"?from=2025-01-01T00:00:00Z&to=2025-06-01T00:00:00Z&limit=50",
                 payload={
-                    "data": [
+                    "audit": [
                         {
                             "id": "v-1",
                             "user_id": "u-kendra",
-                            "action": "retention_violation",
+                            "event_type": "retention_violation",
                             "details": {},
-                            "at": "2025-03-01T00:00:00Z",
+                            "created_at": "2025-03-01T00:00:00Z",
                         }
                     ]
                 },
@@ -705,7 +711,7 @@ async def test_async_get_policy_violations():
             )
             assert len(records) == 1
             assert isinstance(records[0], AuditRecord)
-            assert records[0].action == "retention_violation"
+            assert records[0].event_type == "retention_violation"
 
 
 @pytest.mark.asyncio
@@ -843,11 +849,15 @@ async def test_async_replay_events():
             m.get(
                 f"{BASE}/api/v1/memory/webhooks/wh-1/events/replay"
                 f"?limit=100&include_delivered=true&include_dead_letter=true",
-                payload={"replayed": 3, "events": ["ev-1", "ev-2", "ev-3"]},
+                payload={
+                    "webhook_id": "wh-1",
+                    "count": 3,
+                    "events": [{"id": "ev-1"}, {"id": "ev-2"}, {"id": "ev-3"}],
+                },
             )
             result = await client.replay_events("wh-1")
             assert isinstance(result, ReplayResult)
-            assert result.replayed == 3
+            assert result.count == 3
             assert len(result.events) == 3
 
 
@@ -858,11 +868,16 @@ async def test_async_retry_event():
         with aioresponses() as m:
             m.post(
                 f"{BASE}/api/v1/memory/webhooks/wh-1/events/ev-1/retry",
-                payload={"ok": True, "event_id": "ev-1"},
+                payload={
+                    "webhook_id": "wh-1",
+                    "event_id": "ev-1",
+                    "queued": True,
+                    "reason": "manual retry",
+                },
             )
             result = await client.retry_event("wh-1", "ev-1")
             assert isinstance(result, RetryResult)
-            assert result.ok is True
+            assert result.queued is True
             assert result.event_id == "ev-1"
 
 
@@ -875,17 +890,19 @@ async def test_async_get_webhook_stats():
                 f"{BASE}/api/v1/memory/webhooks/wh-1/stats?window_seconds=300",
                 payload={
                     "webhook_id": "wh-1",
-                    "window_seconds": 300,
-                    "delivered": 10,
-                    "failed": 2,
-                    "dead_letter": 1,
+                    "total_events": 13,
+                    "delivered_events": 10,
+                    "pending_events": 0,
+                    "dead_letter_events": 1,
+                    "failed_events": 2,
+                    "recent_failures": 1,
                 },
             )
             result = await client.get_webhook_stats("wh-1")
             assert isinstance(result, WebhookStats)
-            assert result.delivered == 10
-            assert result.failed == 2
-            assert result.dead_letter == 1
+            assert result.delivered_events == 10
+            assert result.failed_events == 2
+            assert result.dead_letter_events == 1
 
 
 @pytest.mark.asyncio
@@ -896,13 +913,13 @@ async def test_async_get_webhook_audit():
             m.get(
                 f"{BASE}/api/v1/memory/webhooks/wh-1/audit?limit=20",
                 payload={
-                    "events": [
+                    "audit": [
                         {
                             "id": "wa-1",
                             "user_id": "u-kendra",
-                            "action": "webhook_created",
+                            "event_type": "webhook_created",
                             "details": {},
-                            "at": "2025-01-01T00:00:00Z",
+                            "created_at": "2025-01-01T00:00:00Z",
                         }
                     ]
                 },
@@ -910,7 +927,7 @@ async def test_async_get_webhook_audit():
             records = await client.get_webhook_audit("wh-1")
             assert len(records) == 1
             assert isinstance(records[0], AuditRecord)
-            assert records[0].action == "webhook_created"
+            assert records[0].event_type == "webhook_created"
 
 
 @pytest.mark.asyncio
@@ -921,16 +938,16 @@ async def test_async_trace_lookup():
             m.get(
                 f"{BASE}/api/v1/traces/req-abc?limit=100",
                 payload={
-                    "episodes": [{"id": "ep-1"}],
-                    "webhook_events": [],
-                    "webhook_audit": [],
-                    "governance_audit": [],
+                    "matched_episodes": [{"id": "ep-1"}],
+                    "matched_webhook_events": [],
+                    "matched_webhook_audit": [],
+                    "matched_governance_audit": [],
                 },
             )
             result = await client.trace_lookup("req-abc")
             assert isinstance(result, TraceLookupResult)
             assert result.request_id == "req-abc"
-            assert len(result.episodes) == 1
+            assert len(result.matched_episodes) == 1
 
 
 @pytest.mark.asyncio

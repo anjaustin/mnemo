@@ -68,7 +68,25 @@ from mnemo._models import (
     WebhookResult,
     WebhookStats,
 )
+from mnemo._parsers import (
+    parse_agent_audit as _parse_agent_audit,
+    parse_agent_context as _parse_agent_context,
+    parse_agent_identity as _parse_agent_identity,
+    parse_audit as _parse_audit,
+    parse_context as _parse_context,
+    parse_experience_event as _parse_experience_event,
+    parse_graph_edges_result as _parse_graph_edges_result,
+    parse_graph_entities_result as _parse_graph_entities_result,
+    parse_graph_entity_detail as _parse_graph_entity_detail,
+    parse_import_job as _parse_import_job,
+    parse_policy as _parse_policy,
+    parse_promotion_proposal as _parse_promotion_proposal,
+    parse_spans_result as _parse_spans_result,
+    parse_webhook as _parse_webhook,
+    parse_webhook_event as _parse_webhook_event,
+)
 from mnemo._transport import SyncTransport, opt
+from typing import Iterator
 
 
 class Mnemo:
@@ -762,25 +780,7 @@ class Mnemo:
             f"/api/v1/graph/{user}/entities?limit={limit}",
             request_id=request_id,
         )
-        entities = [
-            GraphEntity(
-                id=str(e.get("id", "")),
-                name=str(e.get("name", "")),
-                entity_type=str(e.get("entity_type", "unknown")),
-                summary=e.get("summary"),
-                mention_count=int(e.get("mention_count", 0)),
-                community_id=e.get("community_id"),
-                created_at=str(e.get("created_at", "")),
-                updated_at=str(e.get("updated_at", "")),
-            )
-            for e in body.get("data", [])
-        ]
-        return GraphEntitiesResult(
-            data=entities,
-            count=int(body.get("count", len(entities))),
-            user_id=str(body.get("user_id", "")),
-            request_id=rid,
-        )
+        return _parse_graph_entities_result(body, rid)
 
     def graph_entity(
         self,
@@ -811,27 +811,7 @@ class Mnemo:
         if label:
             path += f"&label={label}"
         body, rid = self._req("GET", path, request_id=request_id)
-        edges = [
-            GraphEdge(
-                id=str(e.get("id", "")),
-                source_entity_id=str(e.get("source_entity_id", "")),
-                target_entity_id=str(e.get("target_entity_id", "")),
-                label=str(e.get("label", "")),
-                fact=str(e.get("fact", "")),
-                confidence=float(e.get("confidence", 1.0)),
-                valid=bool(e.get("valid", True)),
-                valid_at=str(e.get("valid_at", "")),
-                invalid_at=e.get("invalid_at"),
-                created_at=str(e.get("created_at", "")),
-            )
-            for e in body.get("data", [])
-        ]
-        return GraphEdgesResult(
-            data=edges,
-            count=int(body.get("count", len(edges))),
-            user_id=str(body.get("user_id", "")),
-            request_id=rid,
-        )
+        return _parse_graph_edges_result(body, rid)
 
     def graph_neighbors(
         self,
@@ -1346,243 +1326,113 @@ class Mnemo:
         )
         return DeleteResult(deleted=True, request_id=rid)
 
+    # ── Pagination helpers ──────────────────────────────────────────
 
-# ─── Parsing helpers ───────────────────────────────────────────────
+    def iter_entities(
+        self,
+        user: str,
+        *,
+        page_size: int = 100,
+        request_id: str | None = None,
+    ) -> Iterator[GraphEntity]:
+        """Auto-paginate through all entities for a user.
 
+        Yields :class:`GraphEntity` instances one at a time, fetching
+        pages of ``page_size`` behind the scenes.
 
-def _parse_context(body: dict[str, Any], rid: str | None) -> ContextResult:
-    return ContextResult(
-        text=str(body.get("context", "")),
-        token_count=int(body.get("token_count", 0)),
-        entities=list(body.get("entities", [])),
-        facts=list(body.get("facts", [])),
-        episodes=list(body.get("episodes", [])),
-        latency_ms=int(body.get("latency_ms", 0)),
-        sources=list(body.get("sources", [])),
-        mode=str(body.get("mode", "hybrid")),
-        head=body.get("head") if isinstance(body.get("head"), dict) else None,
-        contract_applied=body.get("contract_applied"),
-        retrieval_policy_applied=body.get("retrieval_policy_applied"),
-        temporal_diagnostics=body.get("temporal_diagnostics"),
-        retrieval_policy_diagnostics=body.get("retrieval_policy_diagnostics"),
-        request_id=rid,
-    )
+        Example::
 
+            for entity in client.iter_entities("kendra"):
+                print(entity.name, entity.entity_type)
+        """
+        after: str | None = None
+        while True:
+            path = f"/api/v1/graph/{user}/entities?limit={page_size}"
+            if after:
+                path += f"&after={after}"
+            body, rid = self._req("GET", path, request_id=request_id)
+            from mnemo._parsers import parse_graph_entity
 
-def _parse_policy(body: dict[str, Any], rid: str | None) -> PolicyResult:
-    p = body.get("policy", body)
-    return PolicyResult(
-        user_id=str(p.get("user_id", "")),
-        retention_days_message=int(p.get("retention_days_message", 0)),
-        retention_days_text=int(p.get("retention_days_text", 0)),
-        retention_days_json=int(p.get("retention_days_json", 0)),
-        webhook_domain_allowlist=list(p.get("webhook_domain_allowlist", [])),
-        default_memory_contract=str(p.get("default_memory_contract", "default")),
-        default_retrieval_policy=str(p.get("default_retrieval_policy", "balanced")),
-        created_at=str(p.get("created_at", "")),
-        updated_at=str(p.get("updated_at", "")),
-        request_id=rid,
-    )
+            items = body.get("data", [])
+            if not items:
+                break
+            for raw in items:
+                yield parse_graph_entity(raw)
+            if len(items) < page_size:
+                break
+            after = str(items[-1].get("id", ""))
 
+    def iter_sessions(
+        self,
+        user_id: str,
+        *,
+        page_size: int = 100,
+        request_id: str | None = None,
+    ) -> Iterator[SessionInfo]:
+        """Auto-paginate through all sessions for a user (by UUID).
 
-def _parse_audit(r: dict[str, Any], rid: str | None) -> AuditRecord:
-    return AuditRecord(
-        id=str(r.get("id", "")),
-        user_id=str(r.get("user_id", "")),
-        event_type=str(r.get("event_type", "")),
-        details=dict(r.get("details", {})),
-        created_at=str(r.get("created_at", "")),
-        request_id=rid,
-    )
+        Yields :class:`SessionInfo` instances one at a time.
 
+        Example::
 
-def _parse_webhook(body: dict[str, Any], rid: str | None) -> WebhookResult:
-    w = body.get("webhook", body)
-    return WebhookResult(
-        id=str(w.get("id", "")),
-        user_id=str(w.get("user_id", "")),
-        target_url=str(w.get("target_url", "")),
-        events=list(w.get("events", [])),
-        enabled=bool(w.get("enabled", True)),
-        created_at=str(w.get("created_at", "")),
-        updated_at=str(w.get("updated_at", "")),
-        request_id=rid,
-    )
+            for session in client.iter_sessions(user_uuid):
+                print(session.name, session.episode_count)
+        """
+        after: str | None = None
+        while True:
+            path = f"/api/v1/users/{user_id}/sessions?limit={page_size}"
+            if after:
+                path += f"&after={after}"
+            body, rid = self._req("GET", path, request_id=request_id)
+            items = body.get("data", [])
+            if not items:
+                break
+            for s in items:
+                yield SessionInfo(
+                    id=str(s.get("id", "")),
+                    name=s.get("name"),
+                    user_id=str(s.get("user_id", "")),
+                    created_at=str(s.get("created_at", "")),
+                    updated_at=str(s.get("updated_at", "")),
+                    episode_count=int(s.get("episode_count", 0)),
+                )
+            if len(items) < page_size:
+                break
+            after = str(items[-1].get("id", ""))
 
+    def iter_messages(
+        self,
+        session_id: str,
+        *,
+        page_size: int = 100,
+        request_id: str | None = None,
+    ) -> Iterator[Message]:
+        """Auto-paginate through all messages in a session.
 
-def _parse_webhook_event(e: dict[str, Any], rid: str | None) -> WebhookEvent:
-    return WebhookEvent(
-        id=str(e.get("id", "")),
-        webhook_id=str(e.get("webhook_id", "")),
-        event_type=str(e.get("event_type", "")),
-        user_id=str(e.get("user_id", "")),
-        payload=dict(e.get("payload", {})),
-        created_at=str(e.get("created_at", "")),
-        attempts=int(e.get("attempts", 0)),
-        delivered=bool(e.get("delivered", False)),
-        dead_letter=bool(e.get("dead_letter", False)),
-        request_id=rid,
-    )
+        Yields :class:`Message` instances one at a time.
 
+        Example::
 
-def _parse_spans_result(body: dict[str, Any], rid: str | None) -> SpansResult:
-    spans = [
-        LlmSpan(
-            id=str(s.get("id", "")),
-            provider=str(s.get("provider", "")),
-            model=str(s.get("model", "")),
-            operation=str(s.get("operation", "")),
-            prompt_tokens=int(s.get("prompt_tokens", 0)),
-            completion_tokens=int(s.get("completion_tokens", 0)),
-            total_tokens=int(s.get("total_tokens", 0)),
-            latency_ms=int(s.get("latency_ms", 0)),
-            success=bool(s.get("success", True)),
-            started_at=str(s.get("started_at", "")),
-            finished_at=str(s.get("finished_at", "")),
-            request_id=s.get("request_id"),
-            user_id=s.get("user_id"),
-            error=s.get("error"),
-        )
-        for s in body.get("spans", [])
-    ]
-    return SpansResult(
-        spans=spans,
-        count=int(body.get("count", len(spans))),
-        total_tokens=int(body.get("total_tokens", 0)),
-        total_latency_ms=body.get("total_latency_ms"),
-        request_id=rid,
-    )
-
-
-def _parse_import_job(body: dict[str, Any], rid: str | None) -> ImportJobResult:
-    j = body.get("job", body)
-    return ImportJobResult(
-        id=str(j.get("id", "")),
-        source=str(j.get("source", "")),
-        user=str(j.get("user", "")),
-        dry_run=bool(j.get("dry_run", False)),
-        status=str(j.get("status", "")),
-        total_messages=int(j.get("total_messages", 0)),
-        imported_messages=int(j.get("imported_messages", 0)),
-        failed_messages=int(j.get("failed_messages", 0)),
-        sessions_touched=int(j.get("sessions_touched", 0)),
-        errors=list(j.get("errors", [])),
-        created_at=str(j.get("created_at", "")),
-        started_at=j.get("started_at"),
-        finished_at=j.get("finished_at"),
-        request_id=rid,
-    )
-
-
-def _parse_adjacency_edge(e: dict[str, Any]) -> AdjacencyEdge:
-    return AdjacencyEdge(
-        id=str(e.get("id", "")),
-        label=str(e.get("label", "")),
-        fact=str(e.get("fact", "")),
-        valid=bool(e.get("valid", True)),
-        source_entity_id=e.get("source_entity_id"),
-        target_entity_id=e.get("target_entity_id"),
-    )
-
-
-def _parse_graph_entity_detail(
-    body: dict[str, Any], rid: str | None
-) -> GraphEntityDetail:
-    return GraphEntityDetail(
-        id=str(body.get("id", "")),
-        name=str(body.get("name", "")),
-        entity_type=str(body.get("entity_type", "unknown")),
-        summary=body.get("summary"),
-        mention_count=int(body.get("mention_count", 0)),
-        community_id=body.get("community_id"),
-        created_at=str(body.get("created_at", "")),
-        updated_at=str(body.get("updated_at", "")),
-        outgoing_edges=[
-            _parse_adjacency_edge(e) for e in body.get("outgoing_edges", [])
-        ],
-        incoming_edges=[
-            _parse_adjacency_edge(e) for e in body.get("incoming_edges", [])
-        ],
-        request_id=rid,
-    )
-
-
-# ─── Agent Identity parsers ───────────────────────────────────────
-
-
-def _parse_agent_identity(body: dict[str, Any], rid: str | None) -> AgentIdentityResult:
-    return AgentIdentityResult(
-        agent_id=str(body.get("agent_id", "")),
-        version=int(body.get("version", 0)),
-        core=dict(body.get("core", {})),
-        updated_at=str(body.get("updated_at", "")),
-        request_id=rid,
-    )
-
-
-def _parse_experience_event(
-    body: dict[str, Any], rid: str | None
-) -> ExperienceEventResult:
-    return ExperienceEventResult(
-        id=str(body.get("id", "")),
-        agent_id=str(body.get("agent_id", "")),
-        user_id=str(body.get("user_id", "")),
-        session_id=str(body.get("session_id", "")),
-        category=str(body.get("category", "")),
-        signal=str(body.get("signal", "")),
-        confidence=float(body.get("confidence", 0.0)),
-        weight=float(body.get("weight", 0.0)),
-        decay_half_life_days=int(body.get("decay_half_life_days", 0)),
-        evidence_episode_ids=[str(eid) for eid in body.get("evidence_episode_ids", [])],
-        created_at=str(body.get("created_at", "")),
-        request_id=rid,
-    )
-
-
-def _parse_agent_audit(
-    body: dict[str, Any], rid: str | None
-) -> AgentIdentityAuditResult:
-    return AgentIdentityAuditResult(
-        id=str(body.get("id", "")),
-        agent_id=str(body.get("agent_id", "")),
-        action=str(body.get("action", "")),
-        from_version=body.get("from_version"),
-        to_version=body.get("to_version"),
-        rollback_to_version=body.get("rollback_to_version"),
-        reason=body.get("reason"),
-        created_at=str(body.get("created_at", "")),
-        request_id=rid,
-    )
-
-
-def _parse_promotion_proposal(
-    body: dict[str, Any], rid: str | None
-) -> PromotionProposalResult:
-    return PromotionProposalResult(
-        id=str(body.get("id", "")),
-        agent_id=str(body.get("agent_id", "")),
-        proposal=str(body.get("proposal", "")),
-        candidate_core=dict(body.get("candidate_core", {})),
-        reason=str(body.get("reason", "")),
-        risk_level=str(body.get("risk_level", "medium")),
-        status=str(body.get("status", "")),
-        source_event_ids=[str(eid) for eid in body.get("source_event_ids", [])],
-        created_at=str(body.get("created_at", "")),
-        approved_at=body.get("approved_at"),
-        rejected_at=body.get("rejected_at"),
-        request_id=rid,
-    )
-
-
-def _parse_agent_context(body: dict[str, Any], rid: str | None) -> AgentContextResult:
-    identity_raw = body.get("identity", {})
-    return AgentContextResult(
-        context=dict(body.get("context", {})),
-        identity=_parse_agent_identity(identity_raw, None),
-        identity_version=int(body.get("identity_version", 0)),
-        experience_events_used=int(body.get("experience_events_used", 0)),
-        experience_weight_sum=float(body.get("experience_weight_sum", 0.0)),
-        user_memory_items_used=int(body.get("user_memory_items_used", 0)),
-        attribution_guards=dict(body.get("attribution_guards", {})),
-        request_id=rid,
-    )
+            for msg in client.iter_messages(session_uuid):
+                print(msg.role, msg.content[:60])
+        """
+        after: str | None = None
+        while True:
+            path = f"/api/v1/sessions/{session_id}/messages?limit={page_size}"
+            if after:
+                path += f"&after={after}"
+            body, rid = self._req("GET", path, request_id=request_id)
+            items = body.get("messages", [])
+            if not items:
+                break
+            for i, m in enumerate(items):
+                yield Message(
+                    idx=int(m.get("idx", i)),
+                    id=str(m.get("id", "")),
+                    role=m.get("role"),
+                    content=str(m.get("content", "")),
+                    created_at=str(m.get("created_at", "")),
+                )
+            if len(items) < page_size:
+                break
+            after = str(items[-1].get("id", ""))

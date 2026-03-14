@@ -52,12 +52,49 @@ class RememberResult:
 
 
 @dataclass(slots=True)
+class ContextEntitySummary:
+    """Entity included in a context response."""
+
+    id: str
+    name: str
+    entity_type: str
+    summary: str | None = None
+    relevance: float = 0.0
+
+
+@dataclass(slots=True)
+class ContextFactSummary:
+    """Fact/edge included in a context response."""
+
+    id: str
+    source_entity: str
+    target_entity: str
+    label: str
+    fact: str
+    valid_at: str = ""
+    invalid_at: str | None = None
+    relevance: float = 0.0
+
+
+@dataclass(slots=True)
+class ContextEpisodeSummary:
+    """Episode included in a context response."""
+
+    id: str
+    session_id: str
+    role: str | None = None
+    preview: str = ""
+    created_at: str = ""
+    relevance: float = 0.0
+
+
+@dataclass(slots=True)
 class ContextResult:
     text: str
     token_count: int
-    entities: list[dict[str, Any]]
-    facts: list[dict[str, Any]]
-    episodes: list[dict[str, Any]]
+    entities: list[ContextEntitySummary]
+    facts: list[ContextFactSummary]
+    episodes: list[ContextEpisodeSummary]
     latency_ms: int
     sources: list[str]
     mode: str
