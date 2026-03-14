@@ -22,11 +22,11 @@ import { MnemoClient } from 'mnemo-client';
 const mnemo = new MnemoClient({ baseUrl: 'http://localhost:8080' });
 
 // Store a memory
-const result = await mnemo.add('alice', 'I love hiking in Colorado and skiing in Utah.');
+const result = await mnemo.add('jordan', 'Acme Corp renewal is due 2025-09-30. Procurement requires SOC 2 Type II before signature.');
 console.log(result.session_id);
 
 // Retrieve context
-const ctx = await mnemo.context('alice', 'What does Alice enjoy outdoors?');
+const ctx = await mnemo.context('jordan', 'What are the Acme renewal blockers?');
 console.log(ctx.text);
 console.log(ctx.token_count);
 ```
@@ -48,7 +48,7 @@ const mnemo = new MnemoClient({
 
 ```ts
 // Full context with all options
-const ctx = await mnemo.context('alice', 'What is Alice working on?', {
+const ctx = await mnemo.context('jordan', 'What still blocks the Acme renewal?', {
   maxTokens: 500,
   mode: 'hybrid',
   contract: 'support_safe',
@@ -59,25 +59,25 @@ const ctx = await mnemo.context('alice', 'What is Alice working on?', {
 // ctx: { text, token_count, entities, facts, episodes, latency_ms, ... }
 
 // Changes since a timestamp
-const changes = await mnemo.changesSince('alice', {
+const changes = await mnemo.changesSince('jordan', {
   from: '2024-11-01T00:00:00Z',
   to: '2024-12-01T00:00:00Z',
 });
 
 // Conflict radar
-const conflicts = await mnemo.conflictRadar('alice');
+const conflicts = await mnemo.conflictRadar('jordan');
 
 // Causal recall
-const chains = await mnemo.causalRecall('alice', 'Why did Alice change jobs?');
+const chains = await mnemo.causalRecall('jordan', 'Why is the Acme renewal at risk?');
 
 // Time-travel trace
-const trace = await mnemo.timeTravelTrace('alice', 'What changed?', {
+const trace = await mnemo.timeTravelTrace('jordan', 'What changed?', {
   from: '2024-10-01T00:00:00Z',
   to: '2024-12-01T00:00:00Z',
 });
 
 // Time-travel summary
-const summary = await mnemo.timeTravelSummary('alice', 'preference changes', {
+const summary = await mnemo.timeTravelSummary('jordan', 'Acme deal status changes', {
   from: '2024-10-01T00:00:00Z',
   to: '2024-12-01T00:00:00Z',
 });
@@ -87,26 +87,26 @@ const summary = await mnemo.timeTravelSummary('alice', 'preference changes', {
 
 ```ts
 // List entities
-const entities = await mnemo.graphEntities('alice', { limit: 50 });
+const entities = await mnemo.graphEntities('jordan', { limit: 50 });
 for (const e of entities.data) {
   console.log(e.name, e.entity_type, e.mention_count);
 }
 
 // Get entity with adjacency
-const entity = await mnemo.graphEntity('alice', '<entity-uuid>');
+const entity = await mnemo.graphEntity('jordan', '<entity-uuid>');
 
 // List edges
-const edges = await mnemo.graphEdges('alice', { validOnly: true });
+const edges = await mnemo.graphEdges('jordan', { validOnly: true });
 
 // BFS neighborhood
-const neighbors = await mnemo.graphNeighbors('alice', '<entity-uuid>', { depth: 2 });
+const neighbors = await mnemo.graphNeighbors('jordan', '<entity-uuid>', { depth: 2 });
 
 // Community detection
-const communities = await mnemo.graphCommunity('alice');
+const communities = await mnemo.graphCommunity('jordan');
 console.log(`${communities.community_count} communities`);
 
 // Shortest path between two entities
-const path = await mnemo.graphShortestPath('alice', '<entity-a>', '<entity-b>', { maxDepth: 5 });
+const path = await mnemo.graphShortestPath('jordan', '<entity-a>', '<entity-b>', { maxDepth: 5 });
 console.log(`Path length: ${path.path.length}, hops: ${path.hop_count}`);
 ```
 
@@ -114,12 +114,12 @@ console.log(`Path length: ${path.path.length}, hops: ${path.hop_count}`);
 
 ```ts
 // Get or generate a memory digest
-const digest = await mnemo.memoryDigest('alice');
+const digest = await mnemo.memoryDigest('jordan');
 console.log(digest.summary);
 console.log('Topics:', digest.dominant_topics);
 
 // Force LLM regeneration
-const fresh = await mnemo.memoryDigest('alice', { refresh: true });
+const fresh = await mnemo.memoryDigest('jordan', { refresh: true });
 ```
 
 ## LLM Span Tracing
@@ -133,17 +133,17 @@ for (const s of spans.spans) {
 }
 
 // Look up spans for a user
-const userSpans = await mnemo.spansByUser('alice', { limit: 20 });
+const userSpans = await mnemo.spansByUser('jordan', { limit: 20 });
 ```
 
 ## Governance
 
 ```ts
 // Get policy
-const policy = await mnemo.getPolicy('alice');
+const policy = await mnemo.getPolicy('jordan');
 
 // Set policy
-const updated = await mnemo.setPolicy('alice', {
+const updated = await mnemo.setPolicy('jordan', {
   retentionDaysMessage: 90,
   retentionDaysText: 365,
   webhookDomainAllowlist: ['example.com'],
@@ -152,11 +152,11 @@ const updated = await mnemo.setPolicy('alice', {
 });
 
 // Preview impact before applying
-const preview = await mnemo.previewPolicy('alice', { retentionDaysMessage: 30 });
+const preview = await mnemo.previewPolicy('jordan', { retentionDaysMessage: 30 });
 
 // Audit log
-const audit = await mnemo.getPolicyAudit('alice', { limit: 50 });
-const violations = await mnemo.getPolicyViolations('alice', {
+const audit = await mnemo.getPolicyAudit('jordan', { limit: 50 });
+const violations = await mnemo.getPolicyViolations('jordan', {
   from: '2024-11-01T00:00:00Z',
   to: '2024-12-01T00:00:00Z',
 });
@@ -167,7 +167,7 @@ const violations = await mnemo.getPolicyViolations('alice', {
 ```ts
 // Create
 const wh = await mnemo.createWebhook({
-  user: 'alice',
+  user: 'jordan',
   targetUrl: 'https://hooks.example.com/mnemo',
   events: ['fact_added', 'fact_superseded'],
   signingSecret: 'my-secret',
@@ -202,9 +202,9 @@ const identity = await mnemo.getAgentIdentity('my-agent');
 
 // Update identity core (contamination-guarded: no user/session/email keys allowed)
 const updated = await mnemo.updateAgentIdentity('my-agent', {
-  mission: 'Help users plan outdoor adventures',
-  style: { tone: 'friendly', verbosity: 'concise' },
-  boundaries: ['no medical advice'],
+  mission: 'Assist account managers with deal intelligence and renewal risk tracking',
+  style: { tone: 'direct', verbosity: 'concise' },
+  boundaries: ['no financial advice', 'no legal opinions'],
 });
 
 // Version history and audit trail
@@ -217,7 +217,7 @@ const rolledBack = await mnemo.rollbackAgentIdentity('my-agent', 2, 'reverted ex
 // Record an experience event (behavioral signal from runtime)
 const exp = await mnemo.addAgentExperience('my-agent', {
   category: 'tone',
-  signal: 'user preferred concise answers',
+  signal: 'account manager requested deal-risk summaries before full context',
   confidence: 0.85,
   weight: 0.6,
   decayHalfLifeDays: 30,
@@ -225,9 +225,9 @@ const exp = await mnemo.addAgentExperience('my-agent', {
 
 // Promotion proposals (evidence-gated identity evolution)
 const proposal = await mnemo.createPromotionProposal('my-agent', {
-  proposal: 'shift to concise style',
-  candidateCore: { mission: 'Help users plan adventures', style: { tone: 'direct' } },
-  reason: '3+ sessions showed preference for brevity',
+  proposal: 'lead with risk summary before full deal context',
+  candidateCore: { mission: 'Assist account managers with deal intelligence', style: { tone: 'direct', leadWith: 'risk_summary' } },
+  reason: '3+ sessions showed account managers act on risk flags first',
   sourceEventIds: [exp1.id, exp2.id, exp3.id],  // must reference real experience events
 });
 // { id, status: 'pending', ... }
@@ -238,8 +238,8 @@ const rejected = await mnemo.rejectPromotion('my-agent', proposal.id, 'insuffici
 
 // Full agent context (identity + experience + user memory in one call)
 const ctx = await mnemo.agentContext('my-agent', {
-  query: 'What should I recommend?',
-  user: 'alice',
+  query: 'What are the open risks across all accounts?',
+  user: 'jordan',
   maxTokens: 500,
 });
 // { identity_version, experience_events_used, experience_weight_sum,
@@ -265,7 +265,7 @@ const trace = await mnemo.traceLookup('req-abc123', {
 ```ts
 // Start an async chat history import job
 const job = await mnemo.importChatHistory({
-  user: 'alice',
+  user: 'jordan',
   source: 'ndjson',
   payloadData: { /* ... */ },
   idempotencyKey: 'import-2024-11',
@@ -303,7 +303,7 @@ import { MnemoChatMessageHistory } from 'mnemo-client/langchain';
 
 const history = new MnemoChatMessageHistory({
   baseUrl: 'http://localhost:8080',
-  user: 'alice',
+  user: 'jordan',
   sessionId: 'my-session',
 });
 
@@ -321,11 +321,11 @@ import { mnemoRemember, mnemoRecall, mnemoDigest } from 'mnemo-client/vercel-ai'
 const result = await generateText({
   model: openai('gpt-4o'),
   tools: {
-    remember: mnemoRemember({ baseUrl: 'http://localhost:8080', user: 'alice' }),
-    recall: mnemoRecall({ baseUrl: 'http://localhost:8080', user: 'alice' }),
-    digest: mnemoDigest({ baseUrl: 'http://localhost:8080', user: 'alice' }),
+    remember: mnemoRemember({ baseUrl: 'http://localhost:8080', user: 'jordan' }),
+    recall: mnemoRecall({ baseUrl: 'http://localhost:8080', user: 'jordan' }),
+    digest: mnemoDigest({ baseUrl: 'http://localhost:8080', user: 'jordan' }),
   },
-  prompt: 'Remember that I love hiking, then recall my hobbies.',
+  prompt: 'Remember that Acme procurement requires SOC 2, then recall all Acme renewal blockers.',
 });
 ```
 

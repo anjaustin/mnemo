@@ -41,11 +41,11 @@ from mnemo import Mnemo
 client = Mnemo("http://localhost:8080")
 
 # Store a memory
-result = client.add("alice", "I love hiking in Colorado and skiing in Utah.")
+result = client.add("jordan", "Acme Corp renewal is due 2025-09-30. Procurement requires SOC 2 Type II before signature.")
 print(result.session_id)  # server-assigned UUID
 
 # Retrieve context
-ctx = client.context("alice", "What does Alice enjoy outdoors?")
+ctx = client.context("jordan", "What are the Acme renewal blockers?")
 print(ctx.text)           # assembled context string
 print(ctx.token_count)    # token count of the context
 ```
@@ -54,24 +54,24 @@ print(ctx.token_count)    # token count of the context
 
 ```python
 # List entities in the user's knowledge graph
-entities = client.graph_entities("alice", limit=50)
+entities = client.graph_entities("jordan", limit=50)
 for e in entities.data:
     print(e.name, e.entity_type, e.mention_count)
 
 # Get entity with its adjacency (outgoing/incoming edges)
-entity = client.graph_entity("alice", entity_id="<uuid>")
+entity = client.graph_entity("jordan", entity_id="<uuid>")
 
 # List edges
-edges = client.graph_edges("alice", valid_only=True, limit=100)
+edges = client.graph_edges("jordan", valid_only=True, limit=100)
 for e in edges.data:
     print(e.fact)
 
 # 1-hop neighborhood of an entity
-neighbors = client.graph_neighbors("alice", "<entity_uuid>", depth=2)
+neighbors = client.graph_neighbors("jordan", "<entity_uuid>", depth=2)
 print(f"{neighbors.entities_visited} entities visited")
 
 # Community detection
-communities = client.graph_community("alice")
+communities = client.graph_community("jordan")
 print(f"{communities.community_count} communities detected")
 ```
 
@@ -79,13 +79,13 @@ print(f"{communities.community_count} communities detected")
 
 ```python
 # Get or generate a memory digest (prose summary + topic extraction)
-digest = client.memory_digest("alice")
+digest = client.memory_digest("jordan")
 print(digest.summary)
 print("Topics:", digest.dominant_topics)
 print(f"{digest.entity_count} entities, {digest.edge_count} edges, model: {digest.model}")
 
 # Force regeneration
-digest = client.memory_digest("alice", refresh=True)
+digest = client.memory_digest("jordan", refresh=True)
 ```
 
 ## LLM Span Tracing
@@ -121,8 +121,8 @@ from mnemo import AsyncMnemo
 
 async def main():
     async with AsyncMnemo("http://localhost:8080") as client:
-        result = await client.add("alice", "I prefer mountains over beaches.")
-        ctx = await client.context("alice", "What scenery does Alice prefer?")
+        result = await client.add("jordan", "Acme renewal is blocked — procurement needs SOC 2 evidence before signature.")
+        ctx = await client.context("jordan", "What is blocking the Acme renewal?")
         print(ctx.text)
 
 asyncio.run(main())
@@ -135,17 +135,17 @@ asyncio.run(main())
 ```python
 # Write a memory (creates user and session on first call)
 result = client.add(
-    user="alice",
-    text="I love hiking in Colorado.",
-    session="chat-2024-01",   # optional session name
+    user="jordan",
+    text="Acme Corp procurement flagged SOC 2 Type II as a hard requirement before renewal signature.",
+    session="acme-deal-room",   # optional session name
     role="user",              # "user" | "assistant" | "system" | "tool"
 )
 # result: RememberResult(ok, user_id, session_id, episode_id, request_id)
 
 # Retrieve context
 ctx = client.context(
-    user="alice",
-    query="What does Alice enjoy outdoors?",
+    user="jordan",
+    query="What still blocks the Acme renewal?",
     session=None,             # restrict to a session (UUID)
     max_tokens=2000,
     min_relevance=0.3,
@@ -163,42 +163,42 @@ ctx = client.context(
 #                    retrieval_policy_diagnostics, request_id)
 
 # Head context (fast path — most recent session only)
-ctx = client.context_head("alice", "What is Alice working on?")
+ctx = client.context_head("jordan", "What is the latest on Acme?")
 
 # Changes since a timestamp
-changes = client.changes_since("alice", from_dt="2024-11-01T00:00:00Z", to_dt="2024-12-01T00:00:00Z")
+changes = client.changes_since("jordan", from_dt="2025-01-01T00:00:00Z", to_dt="2025-03-01T00:00:00Z")
 # changes: ChangesSinceResult(added_facts, superseded_facts, confidence_deltas,
 #           head_changes, added_episodes, summary, from_dt, to_dt, request_id)
 
 # Conflict radar
-conflicts = client.conflict_radar("alice")
+conflicts = client.conflict_radar("jordan")
 # conflicts: ConflictRadarResult(conflicts, user_id, request_id)
 
 # Causal recall
-chains = client.causal_recall("alice", "Why did Alice change jobs?")
+chains = client.causal_recall("jordan", "Why is the Acme renewal at risk?")
 # chains: CausalRecallResult(chains, query, request_id)
 
 # Time-travel trace (snapshot diff over a time window)
 tt = client.time_travel_trace(
-    "alice", "What changed about Alice's preferences?",
-    from_dt="2024-10-01T00:00:00Z",
-    to_dt="2024-12-01T00:00:00Z",
+    "jordan", "How did Acme renewal risk evolve?",
+    from_dt="2025-01-01T00:00:00Z",
+    to_dt="2025-03-01T00:00:00Z",
 )
 # tt: TimeTravelTraceResult(snapshots, from_dt, to_dt, request_id)
 
 # Time-travel summary (lightweight delta counts)
-summary = client.time_travel_summary("alice", "preference changes", from_dt="...", to_dt="...")
+summary = client.time_travel_summary("jordan", "Acme deal status changes", from_dt="...", to_dt="...")
 ```
 
 ### Governance
 
 ```python
 # Get policy
-policy = client.get_policy("alice")
+policy = client.get_policy("jordan")
 
 # Set policy
 policy = client.set_policy(
-    "alice",
+    "jordan",
     retention_days_message=90,
     retention_days_text=365,
     retention_days_json=30,
@@ -211,12 +211,12 @@ policy = client.set_policy(
 #                      created_at, updated_at, request_id)
 
 # Preview impact before applying
-preview = client.preview_policy("alice", retention_days_message=30)
+preview = client.preview_policy("jordan", retention_days_message=30)
 # preview: PolicyPreviewResult(estimated_episodes_affected, policy, request_id)
 
 # Audit log
-audit = client.get_policy_audit("alice", limit=50)      # list[AuditRecord]
-violations = client.get_policy_violations("alice", from_dt="...", to_dt="...")
+audit = client.get_policy_audit("jordan", limit=50)      # list[AuditRecord]
+violations = client.get_policy_violations("jordan", from_dt="...", to_dt="...")
 ```
 
 ### Webhooks
@@ -224,7 +224,7 @@ violations = client.get_policy_violations("alice", from_dt="...", to_dt="...")
 ```python
 # Create a webhook
 wh = client.create_webhook(
-    "alice",
+    "jordan",
     target_url="https://hooks.example.com/mnemo",
     events=["fact_added", "fact_superseded"],
     signing_secret="my-secret",
@@ -261,9 +261,9 @@ identity = client.get_agent_identity("my-agent")
 
 # Update identity core (contamination-guarded: no user/session/email keys allowed)
 identity = client.update_agent_identity("my-agent", core={
-    "mission": "Help users plan outdoor adventures",
-    "style": {"tone": "friendly", "verbosity": "concise"},
-    "boundaries": ["no medical advice"],
+    "mission": "Assist account managers with deal intelligence and renewal risk tracking",
+    "style": {"tone": "direct", "verbosity": "concise"},
+    "boundaries": ["no financial advice", "no legal opinions"],
 })
 
 # Version history and audit trail
@@ -276,7 +276,7 @@ identity = client.rollback_agent_identity("my-agent", target_version=2, reason="
 # Record an experience event (behavioral signal from runtime)
 exp = client.add_agent_experience("my-agent",
     category="tone",
-    signal="user preferred concise answers",
+    signal="account manager requested deal-risk summaries before full context",
     confidence=0.85,
     weight=0.6,
     decay_half_life_days=30,
@@ -285,9 +285,9 @@ exp = client.add_agent_experience("my-agent",
 
 # Promotion proposals (evidence-gated identity evolution)
 proposal = client.create_promotion_proposal("my-agent",
-    proposal="shift to concise style",
-    candidate_core={"mission": "Help users plan adventures", "style": {"tone": "direct"}},
-    reason="3+ sessions showed preference for brevity",
+    proposal="lead with risk summary before full deal context",
+    candidate_core={"mission": "Assist account managers with deal intelligence", "style": {"tone": "direct", "lead_with": "risk_summary"}},
+    reason="3+ sessions showed account managers act on risk flags first",
     source_event_ids=[exp1.id, exp2.id, exp3.id],  # must reference real experience events
 )
 # proposal: PromotionProposalResult(id, status="pending", ...)
@@ -298,8 +298,8 @@ rejected = client.reject_promotion("my-agent", proposal.id, reason="insufficient
 
 # Full agent context (identity + experience + user memory in one call)
 ctx = client.agent_context("my-agent",
-    query="What should I recommend?",
-    user="alice",
+    query="What are the open risks on Jordan's accounts?",
+    user="jordan",
     max_tokens=500,
 )
 # ctx: AgentContextResult(identity_version, experience_events_used, experience_weight_sum,
@@ -326,7 +326,7 @@ trace = client.trace_lookup("req-abc123", from_dt="...", to_dt="...", limit=100)
 ```python
 # Start an async chat history import job
 job = client.import_chat_history(
-    user="alice",
+    user="jordan",
     source="ndjson",          # "ndjson" | "chatgpt_export" | "gemini_export"
     payload_data={...},
     idempotency_key="import-2024-11",
@@ -373,18 +373,18 @@ client = Mnemo("http://localhost:8080")
 # Create history for a session
 history = MnemoChatMessageHistory(
     session_name="chat-2024-11",
-    user_id="alice",
+    user_id="jordan",
     client=client,
 )
 
-history.add_user_message("Hello!")
-history.add_ai_message("Hello! How can I help?")
+history.add_user_message("What are the open blockers on the Acme renewal?")
+history.add_ai_message("Procurement requires SOC 2 Type II evidence before signature. Legal has cleared redlines.")
 print(history.messages)  # [HumanMessage(...), AIMessage(...)]
 history.clear()
 
 # Wire into a LangChain chain with session management
 def get_history(session_id: str) -> MnemoChatMessageHistory:
-    return MnemoChatMessageHistory(session_id, "alice", client)
+    return MnemoChatMessageHistory(session_id, "jordan", client)
 
 chain_with_history = RunnableWithMessageHistory(
     chain,
@@ -407,7 +407,7 @@ from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.llms import ChatMessage, MessageRole
 
 client = Mnemo("http://localhost:8080")
-store = MnemoChatStore(client=client, user_id="alice")
+store = MnemoChatStore(client=client, user_id="jordan")
 
 # Wire into a LlamaIndex chat engine
 memory = ChatMemoryBuffer.from_defaults(
@@ -454,7 +454,7 @@ except MnemoRateLimitError as e:
 Every method accepts and returns a `request_id` for end-to-end correlation:
 
 ```python
-result = client.add("alice", "Hello", request_id="req-abc123")
+result = client.add("jordan", "Acme legal cleared redlines.", request_id="req-abc123")
 print(result.request_id)  # echoed from x-mnemo-request-id response header
 
 # Later: find all pipeline events for that request

@@ -645,7 +645,7 @@ Old facts aren't deleted. This enables point-in-time queries and change tracking
 ### Real API Example
 
 ```bash
-# 1) Initial preference
+# 1) Record initial status
 curl -X POST http://localhost:8080/api/v1/memory \
   -H "Content-Type: application/json" \
   -d '{"user":"acct_mgr_jordan","text":"Acme renewal status is green and legal has no open issues."}'
