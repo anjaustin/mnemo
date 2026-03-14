@@ -79,6 +79,7 @@ pub struct MemoryWebhookSubscription {
     pub user_identifier: String,
     pub target_url: String,
     #[serde(skip_serializing)]
+    #[schema(ignore)]
     pub signing_secret: Option<String>,
     pub events: Vec<MemoryWebhookEventType>,
     pub enabled: bool,

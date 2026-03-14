@@ -31,8 +31,8 @@ use mnemo_core::models::{
     edge::{Edge, EdgeFilter},
     entity::{Entity, EntityType},
     episode::{
-        BatchCreateEpisodesRequest, CreateEpisodeRequest, Episode, EpisodeType, ListEpisodesParams,
-        MessageRole, ProcessingStatus,
+        BatchCreateEpisodesRequest, CreateEpisodeRequest, Episode, EpisodeType, MessageRole,
+        ProcessingStatus,
     },
     goal::GoalProfile,
     guardrail::{
@@ -44,12 +44,14 @@ use mnemo_core::models::{
         CreateRegionRequest, GrantRegionAccessRequest, MemoryRegion, MemoryRegionAcl,
         RegionPermission, UpdateRegionRequest,
     },
-    session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
+    session::{CreateSessionRequest, Session, UpdateSessionRequest},
     span::LlmSpan,
     user::{CreateUserRequest, UpdateUserRequest, User},
     view::{CreateViewRequest, MemoryView, TemporalScope},
-    webhook_event::IngestWebhookEvent,
 };
+
+// ─── Route-level schemas ────────────────────────────────────────────
+use crate::routes::PaginationParams;
 
 // ─── Server-specific schemas ────────────────────────────────────────
 use crate::state::{
@@ -73,10 +75,10 @@ use crate::state::{
         // Users
         User, CreateUserRequest, UpdateUserRequest,
         // Sessions
-        Session, CreateSessionRequest, UpdateSessionRequest, ListSessionsParams,
+        Session, CreateSessionRequest, UpdateSessionRequest,
         // Episodes
         Episode, CreateEpisodeRequest, BatchCreateEpisodesRequest,
-        ListEpisodesParams, EpisodeType, MessageRole, ProcessingStatus,
+        EpisodeType, MessageRole, ProcessingStatus,
         // Entities
         Entity, EntityType,
         // Edges
@@ -121,8 +123,10 @@ use crate::state::{
         // Spans
         LlmSpan,
         // Webhooks
-        IngestWebhookEvent, MemoryWebhookSubscription, MemoryWebhookEventRecord,
+        MemoryWebhookSubscription, MemoryWebhookEventRecord,
         MemoryWebhookEventType, MemoryWebhookAuditRecord,
+        // Pagination
+        PaginationParams,
         // State
         ImportJobRecord, ImportJobStatus, UserPolicyRecord, GovernanceAuditRecord,
     )),
@@ -150,3 +154,66 @@ use crate::state::{
     ),
 )]
 pub struct MnemoApiDoc;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RT-11: signing_secret field must not appear in the
+    /// MemoryWebhookSubscription schema.  We verify at the individual
+    /// type level because constructing the full `MnemoApiDoc::openapi()`
+    /// triggers stack overflow from recursive `serde_json::Value` schemas.
+    #[test]
+    fn rt11_signing_secret_hidden_from_webhook_schema() {
+        let mut collected = Vec::new();
+        <MemoryWebhookSubscription as utoipa::ToSchema>::schemas(&mut collected);
+
+        // Serialize every schema produced by the derive and verify none
+        // contain "signing_secret" in the output.
+        for (name, schema) in &collected {
+            let json = serde_json::to_string(schema).unwrap();
+            assert!(
+                !json.contains("signing_secret"),
+                "signing_secret must be hidden from schema '{name}' via #[schema(ignore)]"
+            );
+        }
+    }
+
+    /// RT-11: verify that the schemas(...) block in openapi.rs does NOT
+    /// register internal types and DOES register PaginationParams.
+    ///
+    /// We read the source and check only the `components(schemas(...))`
+    /// region (lines before the test module) to avoid false positives
+    /// from assertion messages in this test.
+    #[test]
+    fn rt11_schema_registration_source_audit() {
+        let source = include_str!("openapi.rs");
+
+        // Extract just the portion before #[cfg(test)] — the actual
+        // OpenAPI macro invocation.
+        let openapi_src = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("test module marker must exist");
+
+        // ── Must NOT be registered ───────────────────────────────────
+        assert!(
+            !openapi_src.contains("IngestWebhookEvent"),
+            "IngestWebhookEvent import/registration must be removed from OpenAPI spec"
+        );
+        assert!(
+            !openapi_src.contains("ListSessionsParams"),
+            "ListSessionsParams must not be registered in OpenAPI schemas"
+        );
+        assert!(
+            !openapi_src.contains("ListEpisodesParams"),
+            "ListEpisodesParams must not be registered in OpenAPI schemas"
+        );
+
+        // ── Must be registered ───────────────────────────────────────
+        assert!(
+            openapi_src.contains("PaginationParams"),
+            "PaginationParams must be registered in OpenAPI schemas"
+        );
+    }
+}
