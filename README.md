@@ -18,6 +18,14 @@
 
 Mnemo is a free, open-source, self-hosted memory and context engine for agent systems. It is built in Rust, uses Redis and Qdrant, and focuses on temporal correctness, fast recall, and operational simplicity.
 
+## Quickstart (5 minutes)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/anjaustin/mnemo/main/deploy/docker/quickstart.sh | bash
+```
+
+No API keys required. Starts Mnemo with local embeddings, Redis, and Qdrant. MCP server included — connect Claude Code or Cursor immediately. See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough.
+
 ## Who Mnemo is for
 
 - Teams shipping assistants or autonomous agents that need memory with auditability and temporal truth.

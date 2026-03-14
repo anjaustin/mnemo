@@ -60,8 +60,8 @@ COPY crates/ crates/
 # Touch source files to invalidate cache for our code only
 RUN find crates -name "*.rs" -exec touch {} +
 
-# Build the actual application
-RUN cargo build --release --bin mnemo-server
+# Build the actual application (server + MCP stdio bridge)
+RUN cargo build --release --bin mnemo-server --bin mnemo-mcp-server
 
 # ── Stage 2: App payload for minimal runtime ────────────────────────
 FROM debian:bookworm-slim AS runtime-rootfs
@@ -71,6 +71,7 @@ ARG ORT_VERSION=1.23.0
 RUN mkdir -p /rootfs/app/lib /rootfs/app/config /rootfs/app/.fastembed_cache
 
 COPY --from=builder /build/target/release/mnemo-server /rootfs/app/mnemo-server
+COPY --from=builder /build/target/release/mnemo-mcp-server /rootfs/app/mnemo-mcp-server
 COPY --from=builder /opt/ort/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.1.23.0 /rootfs/app/lib/libonnxruntime.so.1.23.0
 COPY config/ /rootfs/app/config/
 COPY --from=builder /lib/x86_64-linux-gnu/libssl.so.3 /rootfs/app/lib/libssl.so.3
