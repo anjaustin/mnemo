@@ -57,6 +57,10 @@ pub struct Edge {
     /// The episode that caused this edge to be created.
     pub source_episode_id: Uuid,
 
+    /// The agent that produced the source episode, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_agent_id: Option<String>,
+
     /// If this edge invalidated a previous edge, record which one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invalidated_by_episode_id: Option<Uuid>,
@@ -163,6 +167,7 @@ impl Edge {
         target_entity_id: Uuid,
         episode_id: Uuid,
         event_time: DateTime<Utc>,
+        source_agent_id: Option<String>,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -176,6 +181,7 @@ impl Edge {
             invalid_at: None,
             ingested_at: now,
             source_episode_id: episode_id,
+            source_agent_id,
             invalidated_by_episode_id: None,
             confidence: rel.confidence,
             corroboration_count: 1,
@@ -434,6 +440,7 @@ mod tests {
             tgt,
             episode_id,
             event_time,
+            None,
         );
 
         assert_eq!(edge.label, "loves");
@@ -457,6 +464,7 @@ mod tests {
             Uuid::now_v7(),
             Uuid::now_v7(),
             past, // valid since 30 days ago
+            None,
         );
 
         // Edge is valid at the current time
@@ -484,6 +492,7 @@ mod tests {
             Uuid::now_v7(),
             Uuid::now_v7(),
             Utc::now(),
+            None,
         );
 
         let invalidating_episode = Uuid::now_v7();
@@ -503,6 +512,7 @@ mod tests {
             Uuid::now_v7(),
             Uuid::now_v7(),
             Utc::now(),
+            None,
         );
 
         assert_eq!(edge.corroboration_count, 1);
@@ -522,6 +532,7 @@ mod tests {
             tgt,
             Uuid::now_v7(),
             Utc::now(),
+            None,
         );
 
         // Empty filter matches everything
@@ -563,6 +574,7 @@ mod tests {
             Uuid::now_v7(),
             Uuid::now_v7(),
             Utc::now(),
+            None,
         );
         edge.invalidate(Uuid::now_v7());
 
@@ -586,6 +598,7 @@ mod tests {
             Uuid::now_v7(),
             Uuid::now_v7(),
             Utc::now(),
+            None,
         );
         let json = serde_json::to_string(&edge).unwrap();
         let de: Edge = serde_json::from_str(&json).unwrap();
@@ -605,6 +618,7 @@ mod tests {
             Uuid::from_u128(3),
             Uuid::from_u128(4),
             valid_at,
+            None,
         );
         edge.confidence = confidence;
         edge.corroboration_count = corroboration_count;
@@ -845,6 +859,7 @@ mod tests {
                 Uuid::from_u128(3),
                 Uuid::from_u128(4),
                 valid_at,
+                None,
             );
             edge.confidence = 0.8;
             edge

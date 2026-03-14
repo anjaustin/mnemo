@@ -47,6 +47,10 @@ pub struct Episode {
     pub session_id: Uuid,
     pub user_id: Uuid,
 
+    /// Optional agent that produced this episode (multi-agent topology).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+
     /// What kind of data this episode contains.
     #[serde(rename = "type")]
     pub episode_type: EpisodeType,
@@ -126,6 +130,10 @@ pub struct CreateEpisodeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
+    /// Optional agent that produced this episode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+
     #[serde(default)]
     #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
@@ -160,12 +168,18 @@ fn default_limit() -> u32 {
 }
 
 impl Episode {
-    pub fn from_request(req: CreateEpisodeRequest, session_id: Uuid, user_id: Uuid) -> Self {
+    pub fn from_request(
+        req: CreateEpisodeRequest,
+        session_id: Uuid,
+        user_id: Uuid,
+        agent_id: Option<String>,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id: req.id.unwrap_or_else(Uuid::now_v7),
             session_id,
             user_id,
+            agent_id: req.agent_id.or(agent_id),
             episode_type: req.episode_type,
             content: req.content,
             role: req.role,
@@ -244,6 +258,7 @@ mod tests {
             content: "I just switched from Adidas to Nike".to_string(),
             role: Some(MessageRole::User),
             name: Some("Kendra".to_string()),
+            agent_id: None,
             metadata: serde_json::json!({}),
             created_at: None,
         }
@@ -253,7 +268,7 @@ mod tests {
     fn test_episode_from_request() {
         let session_id = Uuid::now_v7();
         let user_id = Uuid::now_v7();
-        let episode = Episode::from_request(sample_message_request(), session_id, user_id);
+        let episode = Episode::from_request(sample_message_request(), session_id, user_id, None);
 
         assert_eq!(episode.session_id, session_id);
         assert_eq!(episode.user_id, user_id);
@@ -264,8 +279,12 @@ mod tests {
 
     #[test]
     fn test_episode_processing_lifecycle() {
-        let mut episode =
-            Episode::from_request(sample_message_request(), Uuid::now_v7(), Uuid::now_v7());
+        let mut episode = Episode::from_request(
+            sample_message_request(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            None,
+        );
 
         assert_eq!(episode.processing_status, ProcessingStatus::Pending);
         assert!(episode.should_process());
@@ -284,8 +303,12 @@ mod tests {
 
     #[test]
     fn test_episode_failure_lifecycle() {
-        let mut episode =
-            Episode::from_request(sample_message_request(), Uuid::now_v7(), Uuid::now_v7());
+        let mut episode = Episode::from_request(
+            sample_message_request(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            None,
+        );
 
         episode.mark_processing();
         episode.mark_failed("LLM provider timeout".to_string());
@@ -301,7 +324,7 @@ mod tests {
     fn test_should_process_skips_empty_content() {
         let mut req = sample_message_request();
         req.content = "   ".to_string();
-        let episode = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7());
+        let episode = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7(), None);
         assert!(!episode.should_process());
     }
 
@@ -309,7 +332,7 @@ mod tests {
     fn test_should_process_skips_system_messages() {
         let mut req = sample_message_request();
         req.role = Some(MessageRole::System);
-        let episode = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7());
+        let episode = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7(), None);
         assert!(!episode.should_process());
     }
 
@@ -321,10 +344,11 @@ mod tests {
             content: r#"{"event":"purchase","item":"Nike Air Max","price":129.99}"#.to_string(),
             role: None,
             name: None,
+            agent_id: None,
             metadata: serde_json::json!({"source": "crm"}),
             created_at: None,
         };
-        let episode = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7());
+        let episode = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7(), None);
         assert_eq!(episode.episode_type, EpisodeType::Json);
         assert!(episode.role.is_none());
         assert!(episode.should_process());
@@ -332,8 +356,12 @@ mod tests {
 
     #[test]
     fn test_episode_serialization_roundtrip() {
-        let episode =
-            Episode::from_request(sample_message_request(), Uuid::now_v7(), Uuid::now_v7());
+        let episode = Episode::from_request(
+            sample_message_request(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            None,
+        );
         let json = serde_json::to_string(&episode).unwrap();
         let de: Episode = serde_json::from_str(&json).unwrap();
         assert_eq!(de.id, episode.id);

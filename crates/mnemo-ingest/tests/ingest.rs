@@ -370,10 +370,12 @@ async fn test_ingest_full_pipeline() {
                 role: Some(MessageRole::User),
                 name: Some("Kendra".into()),
                 metadata: serde_json::json!({}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();
@@ -466,10 +468,12 @@ async fn test_ingest_entity_dedup_across_episodes() {
                     role: Some(MessageRole::User),
                     name: None,
                     metadata: serde_json::json!({}),
+                    agent_id: None,
                     created_at: None,
                 },
                 session_id,
                 user_id,
+                None,
             )
             .await
             .unwrap();
@@ -517,10 +521,12 @@ async fn test_ingest_retry_on_failure() {
                 role: Some(MessageRole::User),
                 name: None,
                 metadata: serde_json::json!({}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();
@@ -584,10 +590,12 @@ async fn test_progressive_session_summarization_triggers_at_threshold() {
                 role: Some(MessageRole::User),
                 name: Some("Kendra".into()),
                 metadata: serde_json::json!({}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();
@@ -648,10 +656,12 @@ async fn test_progressive_summarization_disabled_when_threshold_zero() {
                 role: Some(MessageRole::User),
                 name: None,
                 metadata: serde_json::json!({}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();
@@ -710,10 +720,12 @@ async fn test_proactive_rerank_writes_relevance_scores() {
                 role: Some(MessageRole::User),
                 name: Some("Kendra".into()),
                 metadata: serde_json::json!({}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();
@@ -880,10 +892,12 @@ async fn test_proactive_rerank_idempotent_per_idle_window() {
                 role: Some(MessageRole::User),
                 name: Some("Kendra".into()),
                 metadata: serde_json::json!({}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();
@@ -957,10 +971,12 @@ async fn test_proactive_fact_added_webhook_event() {
                 role: Some(MessageRole::User),
                 name: Some("Kendra".into()),
                 metadata: serde_json::json!({"request_id": "req-fact-added-001"}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();
@@ -1060,10 +1076,12 @@ async fn test_proactive_fact_superseded_webhook_event() {
                 role: Some(MessageRole::User),
                 name: Some("Kendra".into()),
                 metadata: serde_json::json!({}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();
@@ -1121,10 +1139,12 @@ async fn test_proactive_fact_superseded_webhook_event() {
                 role: Some(MessageRole::User),
                 name: Some("Kendra".into()),
                 metadata: serde_json::json!({"request_id": "req-supersede-001"}),
+                agent_id: None,
                 created_at: None,
             },
             session_id,
             user_id,
+            None,
         )
         .await
         .unwrap();

@@ -180,6 +180,14 @@ pub struct ContextRequest {
     /// Minimum relevance threshold (0.0–1.0). Results below this are dropped.
     #[serde(default = "default_min_relevance")]
     pub min_relevance: f32,
+
+    /// Restrict retrieval to memories produced by a specific agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+
+    /// Restrict retrieval to specific memory regions by ID.
+    #[serde(default)]
+    pub region_ids: Vec<Uuid>,
 }
 
 /// A message provided as query context for retrieval.

@@ -400,6 +400,18 @@ impl SessionStore for RedisStateStore {
         .await
         .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
+        // Index by agent_id for multi-agent topology
+        if let Some(ref aid) = session.agent_id {
+            let agent_sess_key = self.key(&["agent_sessions", aid]);
+            conn.zadd::<_, _, _, ()>(
+                &agent_sess_key,
+                session.id.to_string(),
+                session.created_at.timestamp_millis() as f64,
+            )
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
+
         tracing::debug!(session_id = %session.id, user_id = %session.user_id, "Created session");
         Ok(session)
     }
@@ -451,8 +463,9 @@ impl EpisodeStore for RedisStateStore {
         req: CreateEpisodeRequest,
         session_id: Uuid,
         user_id: Uuid,
+        agent_id: Option<String>,
     ) -> StorageResult<Episode> {
-        let episode = Episode::from_request(req, session_id, user_id);
+        let episode = Episode::from_request(req, session_id, user_id, agent_id);
         let key = self.key(&["episode", &episode.id.to_string()]);
         self.set_json(&key, &episode).await?;
 
@@ -502,6 +515,18 @@ impl EpisodeStore for RedisStateStore {
                 .map_err(|e| MnemoError::Redis(e.to_string()))?;
         }
 
+        // Index by agent_id for multi-agent topology
+        if let Some(ref aid) = episode.agent_id {
+            let agent_ep_key = self.key(&["agent_episodes", aid]);
+            conn.zadd::<_, _, _, ()>(
+                &agent_ep_key,
+                episode.id.to_string(),
+                episode.created_at.timestamp_millis() as f64,
+            )
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
+
         tracing::debug!(episode_id = %episode.id, session_id = %session_id, "Created episode");
         Ok(episode)
     }
@@ -511,10 +536,13 @@ impl EpisodeStore for RedisStateStore {
         episodes: Vec<CreateEpisodeRequest>,
         session_id: Uuid,
         user_id: Uuid,
+        agent_id: Option<String>,
     ) -> StorageResult<Vec<Episode>> {
         let mut results = Vec::with_capacity(episodes.len());
         for req in episodes {
-            let ep = self.create_episode(req, session_id, user_id).await?;
+            let ep = self
+                .create_episode(req, session_id, user_id, agent_id.clone())
+                .await?;
             results.push(ep);
         }
         Ok(results)
@@ -861,6 +889,96 @@ impl EdgeStore for RedisStateStore {
 }
 
 impl AgentStore for RedisStateStore {
+    async fn register_agent(
+        &self,
+        agent_id: &str,
+        description: Option<String>,
+    ) -> StorageResult<AgentIdentityProfile> {
+        let key = self.key(&["agent_identity", agent_id]);
+        let identity = match self.get_json::<AgentIdentityProfile>(&key).await? {
+            Some(mut existing) => {
+                // Update description in core if provided
+                if let Some(desc) = description {
+                    if let serde_json::Value::Object(ref mut map) = existing.core {
+                        map.insert(
+                            "description".to_string(),
+                            serde_json::Value::String(desc),
+                        );
+                    }
+                    existing.updated_at = chrono::Utc::now();
+                    self.set_json(&key, &existing).await?;
+                }
+                existing
+            }
+            None => {
+                let mut identity = AgentIdentityProfile::new(agent_id.to_string());
+                if let Some(desc) = description {
+                    identity.core = serde_json::json!({ "description": desc });
+                }
+                self.persist_identity_snapshot(agent_id, &identity).await?;
+                self.append_identity_audit(
+                    agent_id,
+                    AgentIdentityAuditAction::Created,
+                    None,
+                    identity.version,
+                    None,
+                    None,
+                )
+                .await?;
+                identity
+            }
+        };
+        // Index in global agent registry
+        let agents_key = self.key(&["agents"]);
+        let mut conn = self.conn.clone();
+        conn.zadd::<_, _, _, ()>(
+            &agents_key,
+            agent_id,
+            identity.updated_at.timestamp_millis() as f64,
+        )
+        .await
+        .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        Ok(identity)
+    }
+
+    async fn list_agents(&self, limit: u32) -> StorageResult<Vec<AgentIdentityProfile>> {
+        let agents_key = self.key(&["agents"]);
+        let mut conn = self.conn.clone();
+        let agent_ids: Vec<String> = conn
+            .zrange(&agents_key, 0, limit as isize - 1)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        let mut profiles = Vec::with_capacity(agent_ids.len());
+        for id in agent_ids {
+            if let Ok(profile) = self.get_agent_identity(&id).await {
+                profiles.push(profile);
+            }
+        }
+        Ok(profiles)
+    }
+
+    async fn delete_agent(&self, agent_id: &str) -> StorageResult<()> {
+        let key = self.key(&["agent_identity", agent_id]);
+        // Check it exists first
+        self.get_json_required::<AgentIdentityProfile>(
+            &key,
+            MnemoError::NotFound {
+                resource_type: "agent".to_string(),
+                id: agent_id.to_string(),
+            },
+        )
+        .await?;
+        // Delete identity
+        self.del(&key).await?;
+        // Remove from global index
+        let agents_key = self.key(&["agents"]);
+        let mut conn = self.conn.clone();
+        conn.zrem::<_, _, ()>(&agents_key, agent_id)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        Ok(())
+    }
+
     async fn get_agent_identity(&self, agent_id: &str) -> StorageResult<AgentIdentityProfile> {
         let key = self.key(&["agent_identity", agent_id]);
         match self.get_json::<AgentIdentityProfile>(&key).await? {
@@ -2355,6 +2473,7 @@ impl GuardrailStore for RedisStateStore {
                 mnemo_core::models::guardrail::GuardrailScope::User { user_id: uid } => {
                     *uid == user_id
                 }
+                mnemo_core::models::guardrail::GuardrailScope::Agent { .. } => true,
             })
             .collect();
         applicable.sort_by_key(|r| r.priority);

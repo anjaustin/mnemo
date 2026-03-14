@@ -1230,6 +1230,12 @@ pub fn build_router(state: AppState) -> Router {
         // Import API
         .route("/api/v1/import/chat-history", post(import_chat_history))
         .route("/api/v1/import/jobs/:job_id", get(get_import_job))
+        // Agent registration lifecycle (Spec 02 D3)
+        .route("/api/v1/agents", post(register_agent).get(list_agents_handler))
+        .route(
+            "/api/v1/agents/:agent_id",
+            get(get_agent_handler).delete(delete_agent_handler),
+        )
         // Agent identity substrate (P0)
         .route("/api/v1/agents/:agent_id/identity", get(get_agent_identity))
         .route(
@@ -2933,11 +2939,24 @@ async fn add_episode(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
     caller: Option<Extension<CallerContext>>,
+    headers: axum::http::HeaderMap,
     Path(session_id): Path<Uuid>,
     Json(req): Json<CreateEpisodeRequest>,
 ) -> Result<(StatusCode, Json<Episode>), AppError> {
     let request_id = request_id_from_extension(ctx);
     let caller = caller_from_extension(caller);
+    // X-Agent-Id header provides agent identity; body field takes precedence
+    let agent_id = req.agent_id.clone().or_else(|| {
+        headers
+            .get("x-agent-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    });
+    // Validate agent access if agent_id is set
+    if let Some(ref aid) = agent_id {
+        caller.require_agent_access(aid).map_err(AppError)?;
+    }
     let session = state.state_store.get_session(session_id).await?;
     let policy =
         get_or_create_user_policy(&state, session.user_id, session.user_id.to_string()).await;
@@ -2954,6 +2973,7 @@ async fn add_episode(
             content: Some(req.content.clone()),
             caller_role: Some(caller.role),
             user_id: Some(session.user_id),
+            agent_id: agent_id.clone(),
             ..Default::default()
         };
         let verdict = evaluate_rules(&guardrail_rules, &GuardrailTrigger::OnIngest, &eval_ctx);
@@ -2973,7 +2993,7 @@ async fn add_episode(
     };
     let episode = state
         .state_store
-        .create_episode(req, session_id, session.user_id)
+        .create_episode(req, session_id, session.user_id, agent_id)
         .await?;
 
     emit_memory_webhook_event(
@@ -3010,10 +3030,17 @@ async fn add_episode(
 async fn add_episodes_batch(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    headers: axum::http::HeaderMap,
     Path(session_id): Path<Uuid>,
     Json(req): Json<BatchCreateEpisodesRequest>,
 ) -> Result<(StatusCode, Json<ListResponse<Episode>>), AppError> {
     let request_id = request_id_from_extension(ctx);
+    // Batch-level agent_id from header (individual episode agent_id takes precedence per-episode)
+    let batch_agent_id = headers
+        .get("x-agent-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let session = state.state_store.get_session(session_id).await?;
     let policy =
         get_or_create_user_policy(&state, session.user_id, session.user_id.to_string()).await;
@@ -3035,7 +3062,7 @@ async fn add_episodes_batch(
         .collect();
     let episodes = state
         .state_store
-        .create_episodes_batch(episodes_req, session_id, session.user_id)
+        .create_episodes_batch(episodes_req, session_id, session.user_id, batch_agent_id)
         .await?;
 
     if let Some(last) = episodes.last() {
@@ -4610,13 +4637,14 @@ async fn remember_memory(
         content: req.text,
         role: Some(req.role.unwrap_or(MessageRole::User)),
         name: Some(user.name.clone()),
+        agent_id: None,
         metadata: metadata_with_request_id(serde_json::json!({}), request_id.as_deref()),
         created_at: None,
     };
 
     let episode = state
         .state_store
-        .create_episode(episode_req, session.id, user.id)
+        .create_episode(episode_req, session.id, user.id, None)
         .await?;
 
     emit_memory_webhook_event(
@@ -5140,6 +5168,8 @@ async fn get_memory_context(
         time_intent: temporal_intent,
         temporal_weight: effective_temporal_weight,
         min_relevance,
+        agent_id: None,
+        region_ids: vec![],
     };
 
     let mut context = state
@@ -5783,6 +5813,8 @@ async fn time_travel_trace(
         time_intent: temporal_intent,
         temporal_weight,
         min_relevance,
+        agent_id: None,
+        region_ids: vec![],
     };
 
     let mut context_from = state
@@ -6230,6 +6262,8 @@ async fn time_travel_summary(
         time_intent: temporal_intent,
         temporal_weight,
         min_relevance,
+        agent_id: None,
+        region_ids: vec![],
     };
 
     let mut context_from = state
@@ -6548,6 +6582,8 @@ async fn causal_recall_chains(
         time_intent: temporal_intent,
         temporal_weight: None,
         min_relevance: 0.3,
+        agent_id: None,
+        region_ids: vec![],
     };
 
     let mut context = state
@@ -7575,6 +7611,99 @@ async fn export_trace_evidence_bundle(
     }))
 }
 
+// ─── Agent Registration (Spec 02 D3) ──────────────────────────────
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct RegisterAgentRequest {
+    /// Unique identifier for the agent (e.g., `"support-bot-v2"`).
+    pub agent_id: String,
+    /// Optional description of the agent's purpose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/agents",
+    tag = "agents",
+    summary = "Register agent",
+    description = "Register or upsert an agent. Returns the agent identity profile.",
+    request_body = RegisterAgentRequest,
+    responses(
+        (status = 201, description = "Agent registered", body = AgentIdentityProfile),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
+async fn register_agent(
+    State(state): State<AppState>,
+    Json(req): Json<RegisterAgentRequest>,
+) -> Result<(StatusCode, Json<AgentIdentityProfile>), AppError> {
+    let agent_id = normalize_agent_id(&req.agent_id)?;
+    let profile = state
+        .state_store
+        .register_agent(&agent_id, req.description)
+        .await?;
+    Ok((StatusCode::CREATED, Json(profile)))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/agents",
+    tag = "agents",
+    summary = "List agents",
+    description = "List all registered agents.",
+    responses(
+        (status = 200, description = "Agent list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
+async fn list_agents_handler(
+    State(state): State<AppState>,
+    Query(params): Query<PaginationParams>,
+) -> Result<Json<ListResponse<AgentIdentityProfile>>, AppError> {
+    let limit = params.limit.min(500);
+    let agents = state.state_store.list_agents(limit).await?;
+    Ok(Json(ListResponse::new(agents)))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}",
+    tag = "agents",
+    summary = "Get agent",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Agent profile", body = AgentIdentityProfile),
+        (status = 404, description = "Agent not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
+async fn get_agent_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<AgentIdentityProfile>, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let profile = state.state_store.get_agent_identity(&agent_id).await?;
+    Ok(Json(profile))
+}
+
+#[utoipa::path(
+    delete, path = "/api/v1/agents/{agent_id}",
+    tag = "agents",
+    summary = "Delete agent",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 204, description = "Agent deleted"),
+        (status = 404, description = "Agent not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
+async fn delete_agent_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    state.state_store.delete_agent(&agent_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[utoipa::path(
     get, path = "/api/v1/agents/{agent_id}/identity",
     tag = "agents",
@@ -8552,6 +8681,8 @@ async fn get_agent_context(
         time_intent: temporal_intent,
         temporal_weight: req.temporal_weight,
         min_relevance: req.min_relevance.unwrap_or(0.3),
+        agent_id: None,
+        region_ids: vec![],
     };
 
     let mut context = state
@@ -9133,13 +9264,14 @@ async fn run_import_job(
             content: message.content,
             role: Some(message.role),
             name: Some(user.name.clone()),
+            agent_id: None,
             metadata: serde_json::json!({ "import_source": source.as_str() }),
             created_at: Some(message.created_at),
         };
 
         match state
             .state_store
-            .create_episode(episode_req, session.id, user.id)
+            .create_episode(episode_req, session.id, user.id, None)
             .await
         {
             Ok(_) => imported_messages += 1,
@@ -9824,6 +9956,7 @@ async fn find_or_create_session(
         .create_session(CreateSessionRequest {
             id: None,
             user_id,
+            agent_id: None,
             name: Some(session_name.to_string()),
             metadata: serde_json::json!({}),
         })
@@ -11951,6 +12084,8 @@ async fn counterfactual_context(
         time_intent: mnemo_core::models::context::TemporalIntent::Current,
         temporal_weight: None,
         min_relevance,
+        agent_id: None,
+        region_ids: vec![],
     };
 
     let mut context = state

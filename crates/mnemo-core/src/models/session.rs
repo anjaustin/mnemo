@@ -18,6 +18,10 @@ pub struct Session {
     pub id: Uuid,
     pub user_id: Uuid,
 
+    /// Optional agent that owns this session (multi-agent topology).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+
     /// Optional human-readable label (e.g., "Support ticket #4521").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -63,6 +67,10 @@ pub struct CreateSessionRequest {
     pub id: Option<Uuid>,
 
     pub user_id: Uuid,
+
+    /// Optional agent that owns this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -115,6 +123,7 @@ impl Session {
         Self {
             id: req.id.unwrap_or_else(Uuid::now_v7),
             user_id: req.user_id,
+            agent_id: req.agent_id,
             name: req.name,
             metadata: req.metadata,
             episode_count: 0,
@@ -167,6 +176,7 @@ mod tests {
         let session = Session::from_request(CreateSessionRequest {
             id: None,
             user_id,
+            agent_id: None,
             name: Some("Support Chat".to_string()),
             metadata: serde_json::json!({}),
         });
@@ -184,6 +194,7 @@ mod tests {
         let mut session = Session::from_request(CreateSessionRequest {
             id: None,
             user_id: Uuid::now_v7(),
+            agent_id: None,
             name: None,
             metadata: serde_json::json!({}),
         });
@@ -202,6 +213,7 @@ mod tests {
         let session = Session::from_request(CreateSessionRequest {
             id: None,
             user_id: Uuid::now_v7(),
+            agent_id: None,
             name: Some("Test".to_string()),
             metadata: serde_json::json!({"channel": "web"}),
         });

@@ -132,7 +132,7 @@ pub enum GuardrailAction {
 
 // ─── Scope ─────────────────────────────────────────────────────────
 
-/// Whether a guardrail rule applies globally or to a specific user.
+/// Whether a guardrail rule applies globally, to a specific user, or to a specific agent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuardrailScope {
@@ -140,6 +140,8 @@ pub enum GuardrailScope {
     Global,
     /// Applies to a specific user only.
     User { user_id: Uuid },
+    /// Applies to a specific agent only.
+    Agent { agent_id: String },
 }
 
 // ─── Evaluation Context ────────────────────────────────────────────
@@ -164,6 +166,8 @@ pub struct EvalContext {
     pub confidence: Option<f32>,
     /// The user ID for scope matching.
     pub user_id: Option<Uuid>,
+    /// The agent ID for scope matching.
+    pub agent_id: Option<String>,
 }
 
 // ─── Evaluation Result ─────────────────────────────────────────────
@@ -243,7 +247,7 @@ impl GuardrailCondition {
 
 impl GuardrailRule {
     /// Check whether this rule applies to the given operation and scope.
-    pub fn applies_to(&self, trigger: &GuardrailTrigger, user_id: Option<Uuid>) -> bool {
+    pub fn applies_to(&self, trigger: &GuardrailTrigger, ctx: &EvalContext) -> bool {
         if !self.enabled {
             return false;
         }
@@ -252,7 +256,10 @@ impl GuardrailRule {
         }
         match &self.scope {
             GuardrailScope::Global => true,
-            GuardrailScope::User { user_id: rule_user } => user_id == Some(*rule_user),
+            GuardrailScope::User { user_id: rule_user } => ctx.user_id == Some(*rule_user),
+            GuardrailScope::Agent {
+                agent_id: rule_agent,
+            } => ctx.agent_id.as_deref() == Some(rule_agent.as_str()),
         }
     }
 }
@@ -269,7 +276,7 @@ pub fn evaluate_rules(
     let mut verdict = GuardrailVerdict::default();
 
     for rule in rules {
-        if !rule.applies_to(trigger, ctx.user_id) {
+        if !rule.applies_to(trigger, ctx) {
             continue;
         }
 
@@ -379,6 +386,7 @@ impl EvaluateGuardrailsRequest {
             fact_age_days: self.fact_age_days,
             confidence: self.confidence,
             user_id: self.user_id,
+            agent_id: None,
         }
     }
 }

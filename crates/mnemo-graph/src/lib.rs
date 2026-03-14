@@ -448,6 +448,7 @@ mod tests {
             invalid_at: if valid { None } else { Some(now) },
             ingested_at: now,
             source_episode_id: Uuid::now_v7(),
+            source_agent_id: None,
             invalidated_by_episode_id: None,
             confidence: 0.9,
             corroboration_count: 1,

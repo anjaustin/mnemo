@@ -27,6 +27,16 @@ use crate::models::{
 /// promotion proposals, approval policies, and witness chain audit events.
 #[allow(async_fn_in_trait)]
 pub trait AgentStore: Send + Sync {
+    /// Register or get an agent. Creates the identity if it doesn't exist.
+    async fn register_agent(
+        &self,
+        agent_id: &str,
+        description: Option<String>,
+    ) -> StorageResult<AgentIdentityProfile>;
+    /// List all registered agents (ordered by registration time).
+    async fn list_agents(&self, limit: u32) -> StorageResult<Vec<AgentIdentityProfile>>;
+    /// Delete an agent and all associated identity data.
+    async fn delete_agent(&self, agent_id: &str) -> StorageResult<()>;
     async fn get_agent_identity(&self, agent_id: &str) -> StorageResult<AgentIdentityProfile>;
     async fn update_agent_identity(
         &self,
@@ -171,6 +181,7 @@ pub trait EpisodeStore: Send + Sync {
         req: CreateEpisodeRequest,
         session_id: Uuid,
         user_id: Uuid,
+        agent_id: Option<String>,
     ) -> StorageResult<Episode>;
 
     async fn create_episodes_batch(
@@ -178,6 +189,7 @@ pub trait EpisodeStore: Send + Sync {
         episodes: Vec<CreateEpisodeRequest>,
         session_id: Uuid,
         user_id: Uuid,
+        agent_id: Option<String>,
     ) -> StorageResult<Vec<Episode>>;
 
     async fn get_episode(&self, id: Uuid) -> StorageResult<Episode>;

@@ -425,6 +425,8 @@ impl MemoryService for GrpcState {
             time_intent: mnemo_core::models::context::TemporalIntent::Auto,
             temporal_weight: None,
             min_relevance,
+            agent_id: None,
+            region_ids: vec![],
         };
 
         let reranker = reranker_for_state(&self.reranker);
@@ -522,13 +524,14 @@ impl MemoryService for GrpcState {
             content: req.content,
             role,
             name: None,
+            agent_id: None,
             metadata: serde_json::Value::Null,
             created_at: None,
         };
 
         let episode = self
             .state_store
-            .create_episode(core_req, session_id, user_id)
+            .create_episode(core_req, session_id, user_id, None)
             .await
             .map_err(storage_err_to_status)?;
 

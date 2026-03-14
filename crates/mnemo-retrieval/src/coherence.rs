@@ -394,6 +394,7 @@ mod tests {
             },
             ingested_at: created,
             source_episode_id: Uuid::now_v7(),
+            source_agent_id: None,
             invalidated_by_episode_id: if invalidated {
                 Some(Uuid::now_v7())
             } else {

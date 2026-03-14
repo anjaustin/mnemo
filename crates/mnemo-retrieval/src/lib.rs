@@ -245,6 +245,13 @@ where
 
         for (edge_id, rrf_score) in edge_ids.iter().take(15) {
             if let Ok(edge) = self.state_store.get_edge(*edge_id).await {
+                // Agent-scoped retrieval: skip edges not from the requested agent
+                if let Some(ref req_agent) = request.agent_id {
+                    if edge.source_agent_id.as_deref() != Some(req_agent.as_str()) {
+                        continue;
+                    }
+                }
+
                 if let Some(tf) = temporal_filter {
                     if !edge.is_valid_at(tf) {
                         continue;
@@ -327,6 +334,13 @@ where
 
         for (episode_id, rrf_score) in episode_ids.iter().take(5) {
             if let Ok(ep) = self.state_store.get_episode(*episode_id).await {
+                // Agent-scoped retrieval: skip episodes not from the requested agent
+                if let Some(ref req_agent) = request.agent_id {
+                    if ep.agent_id.as_deref() != Some(req_agent.as_str()) {
+                        continue;
+                    }
+                }
+
                 let preview = if ep.content.len() > 200 {
                     format!("{}...", &ep.content[..200])
                 } else {

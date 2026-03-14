@@ -818,6 +818,7 @@ where
                 tgt,
                 episode.id,
                 episode.created_at,
+                episode.agent_id.clone(),
             );
             let created = self.state_store.create_edge(edge).await?;
             new_edge_ids.push(created.id);
@@ -986,10 +987,11 @@ mod tests {
             content: "test".to_string(),
             role: Some(MessageRole::User),
             name: None,
+            agent_id: None,
             metadata: serde_json::json!({}),
             created_at: None,
         };
-        let mut ep = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7());
+        let mut ep = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7(), None);
 
         // Retry 1: 500ms delay
         let delay = ep.requeue_for_retry("timeout".into(), 3);
