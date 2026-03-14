@@ -72,15 +72,8 @@ poll_interval_ms = 500
 # Set to 0 to disable. The summary is stored in session.summary and updated in place.
 session_summary_threshold = 10
 
-[graph]
-# Enable community detection (groups related entities into clusters).
-community_detection = true
-# Minimum entities in a community before a summary is generated.
-community_min_size = 3
-# Auto-generate entity and community summaries.
-summarization = true
-# Maximum tokens for generated summaries.
-max_summary_tokens = 200
+# Note: Graph features (community detection, summarization) are built into the
+# graph engine and always active. There is no separate [graph] config section.
 
 [retrieval]
 # Default context assembly strategy.
@@ -109,11 +102,9 @@ persistence_enabled = true
 # Redis key suffix under the main Redis prefix (for example: mnemo:webhooks:* )
 persistence_prefix = "webhooks"
 
-[retention]
-# Default TTL in seconds. 0 = no expiration.
-default_ttl = 0
-episode_ttl = 0
-session_ttl = 0
+# Note: Retention is per-user, managed via the Policy API (PUT /api/v1/policies/:user).
+# Default retention is 3650 days (10 years) for all episode types.
+# There is no global [retention] config section.
 
 [observability]
 # Log level: "trace", "debug", "info", "warn", "error"
