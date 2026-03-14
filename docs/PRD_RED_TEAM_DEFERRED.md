@@ -1,9 +1,10 @@
 # PRD: Red-Team Deferred Findings (P0)
 
-**Version**: 1.0
-**Status**: Active
+**Version**: 1.1
+**Status**: Resolved
 **Created**: 2026-03-13
-**Relates to**: v0.7.0 red-team audit (30 findings total, 15 fixed in `13708c0`, 12 deferred)
+**Resolved**: 2026-03-14
+**Relates to**: v0.7.0 red-team audit (30 findings total, 15 fixed in `13708c0`, 12 deferred → all 12 now resolved)
 
 ## Context
 
@@ -266,17 +267,26 @@ Items are ordered by estimated complexity (LOC changed, blast radius, test surfa
 
 ## Summary
 
-| ID | Finding | Severity | Effort | Order |
-|----|---------|----------|--------|-------|
-| RT-01 | Dead `[graph]` config | LOW | XS | 1 |
-| RT-02 | Dead `[retention]` config | LOW | XS | 2 |
-| RT-03 | Helm subchart seccomp | MEDIUM | S | 3 |
-| RT-04 | Helm Ingress TLS warning | MEDIUM | S | 4 |
-| RT-05 | Helm Qdrant auth | MEDIUM | S | 5 |
-| RT-06 | Helm NetworkPolicy | MEDIUM | M | 6 |
-| RT-07 | CORS env-based config | HIGH | M | 7 |
-| RT-08 | Auth-exempt CallerContext | HIGH | M | 8 |
-| RT-09 | OTLP TLS + auth | MEDIUM | M | 9 |
-| RT-10 | BYOK key rotation | HIGH | L | 10 |
-| RT-11 | Internal types in OpenAPI | LOW | L | 11 |
-| RT-12 | OpenAPI path annotations | MEDIUM | XL | 12 |
+All 12 findings have been resolved. Each followed the cycle: code → test → falsify → update README → commit → push.
+
+| ID | Finding | Severity | Effort | Status | Commit |
+|----|---------|----------|--------|--------|--------|
+| RT-01 | Dead `[graph]` config | LOW | XS | ✅ Resolved | `f926915` |
+| RT-02 | Dead `[retention]` config | LOW | XS | ✅ Resolved | `f926915` |
+| RT-03 | Helm subchart seccomp | MEDIUM | S | ✅ Resolved | `ffdddc7` |
+| RT-04 | Helm Ingress TLS warning | MEDIUM | S | ✅ Resolved | `3e50dbc` |
+| RT-05 | Helm Qdrant auth | MEDIUM | S | ✅ Resolved | `1f2da6b` |
+| RT-06 | Helm NetworkPolicy | MEDIUM | M | ✅ Resolved | `bf720db` |
+| RT-07 | CORS env-based config | HIGH | M | ✅ Resolved | `dd49021` |
+| RT-08 | Auth-exempt CallerContext | HIGH | M | ✅ Resolved | `91b5fe7` |
+| RT-09 | OTLP TLS + auth | MEDIUM | M | ✅ Resolved | `e7190c8` |
+| RT-10 | BYOK key rotation | HIGH | L | ✅ Resolved | `85a41c8` |
+| RT-11 | Internal types in OpenAPI | LOW | L | ✅ Resolved | `daa071f` |
+| RT-12 | OpenAPI path annotations | MEDIUM | XL | ✅ Resolved | `59d084e` |
+
+### Post-Resolution Fixes
+
+| Fix | Commit |
+|-----|--------|
+| OpenAPI stack overflow (29 `Value` fields + recursive `GuardrailCondition`) | `b3265a8` |
+| Integration test harness CallerContext injection (244/244 pass) | `0899904` |

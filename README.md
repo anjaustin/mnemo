@@ -861,7 +861,7 @@ See `docs/QA_QC_FALSIFICATION_PRD.md` for the full 25-domain falsification plan.
 - Production Helm chart with Redis/Qdrant subcharts ✅
 - OpenTelemetry OTLP trace export ✅
 - BYOK AES-256-GCM envelope encryption ✅
-- Red-team audit (30 findings: 15 fixed — all CRITICAL + HIGH + most MEDIUM; 12 deferred as acceptable risk — see Honesty Notes) ✅
+- Red-team audit (30 findings: all 27 resolved — 15 fixed immediately, 12 deferred then promoted to P0 and resolved; see Honesty Notes and `docs/PRD_RED_TEAM_DEFERRED.md`) ✅
 - Version sync across all workspace crates, SDKs, and Helm chart ✅
 
 ## Contributing
