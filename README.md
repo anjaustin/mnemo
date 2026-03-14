@@ -210,7 +210,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Mnemo OTLP security**: The OpenTelemetry exporter connects to the collector over plaintext gRPC. No TLS or bearer token auth configuration is available yet.
 - **Mnemo internal types in OpenAPI**: `utoipa` derives on internal structs (e.g., `GraphNode`, `RedisEdge`) expose implementation details in the schema. Needs a DTO separation layer.
 - **Mnemo Helm Qdrant auth**: Qdrant subchart does not expose an auth toggle. Qdrant runs unauthenticated inside the cluster by default.
-- **Mnemo Helm Ingress TLS**: Ingress template has no TLS block. Requires cluster-specific setup (cert-manager, cloud LB).
+- **Mnemo Helm Ingress TLS**: Ingress template supports TLS but defaults to disabled. NOTES.txt warns when ingress is enabled without TLS. Operators must configure cert-manager or bring their own TLS secret.
 - **Mnemo Helm NetworkPolicy**: No NetworkPolicy template. Pod-to-pod traffic is unrestricted within the namespace.
 - **Zep self-hosted**: [Graphiti](https://github.com/getzep/graphiti) is now fully open-source (Apache 2.0, 23.7k stars) with Neo4j, FalkorDB, Kuzu, and Neptune backends. Prior "partial" rating was stale. Zep Cloud remains the managed platform.
 - **Zep graph traversal**: BFS shipped (`bfs_origin_node_uuids`), plus node-distance reranker. No shortest-path API.

@@ -34,6 +34,31 @@ Mnemo has been deployed to your Kubernetes cluster.
 5. Access gRPC (same port):
   grpcurl -plaintext localhost:8080 list
 
+{{- if .Values.ingress.enabled }}
+{{- if not (gt (len .Values.ingress.tls) 0) }}
+
+WARNING: Ingress is enabled without TLS!
+  Traffic between clients and the ingress controller will be unencrypted.
+  Configure TLS in your values:
+
+    ingress:
+      tls:
+        - secretName: mnemo-tls
+          hosts:
+            - {{ (index .Values.ingress.hosts 0).host }}
+
+  With cert-manager:
+    ingress:
+      annotations:
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+      tls:
+        - secretName: mnemo-tls
+          hosts:
+            - {{ (index .Values.ingress.hosts 0).host }}
+
+{{- end }}
+{{- end }}
+
 {{- if not .Values.mnemo.bootstrapKeys }}
 {{- if not .Values.mnemo.existingSecret }}
 
