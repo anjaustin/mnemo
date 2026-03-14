@@ -126,7 +126,7 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
     state_store.ensure_indexes().await.unwrap();
 
     let vector_store = Arc::new(
-        QdrantVectorStore::new(&qdrant_url, &qdrant_prefix, 1536)
+        QdrantVectorStore::new(&qdrant_url, &qdrant_prefix, 1536, None)
             .await
             .unwrap_or_else(|e| {
                 panic!(
@@ -4980,7 +4980,7 @@ async fn test_webhook_persistence_survives_restart() {
     state_store.ensure_indexes().await.unwrap();
 
     let vector_store = Arc::new(
-        QdrantVectorStore::new(&qdrant_url, &qdrant_prefix, 1536)
+        QdrantVectorStore::new(&qdrant_url, &qdrant_prefix, 1536, None)
             .await
             .expect("Qdrant required for WH-15 test"),
     );

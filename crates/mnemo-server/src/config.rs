@@ -89,6 +89,10 @@ pub struct QdrantConfig {
     pub url: String,
     #[serde(default = "default_qdrant_prefix")]
     pub collection_prefix: String,
+    /// Qdrant API key for authenticated access. Optional.
+    /// Set via `MNEMO_QDRANT_API_KEY` env var in production.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl Default for QdrantConfig {
@@ -96,6 +100,7 @@ impl Default for QdrantConfig {
         Self {
             url: default_qdrant_url(),
             collection_prefix: default_qdrant_prefix(),
+            api_key: None,
         }
     }
 }
@@ -468,6 +473,9 @@ impl MnemoConfig {
         }
         if let Ok(v) = std::env::var("MNEMO_QDRANT_PREFIX") {
             config.qdrant.collection_prefix = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_QDRANT_API_KEY") {
+            config.qdrant.api_key = Some(v);
         }
         if let Ok(v) = std::env::var("MNEMO_LLM_PROVIDER") {
             config.llm.provider = v;

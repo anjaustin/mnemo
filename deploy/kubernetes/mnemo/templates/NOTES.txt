@@ -72,3 +72,25 @@ WARNING: No authentication keys configured!
   SECURITY: Do NOT pass secrets via --set as they are stored in Helm release metadata.
 {{- end }}
 {{- end }}
+
+{{- if .Values.qdrant.enabled }}
+{{- if not .Values.qdrant.apiKey }}
+
+NOTE: Qdrant is deployed without API key authentication.
+  Qdrant is accessible without credentials from any pod in the namespace.
+  For production, enable Qdrant auth and pass the key to Mnemo:
+
+    qdrant:
+      apiKey: true   # auto-generates a key stored in a Secret
+
+    mnemo:
+      extraEnv:
+        - name: MNEMO_QDRANT_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "mnemo.fullname" . }}-qdrant-apikey
+              key: api-key
+
+  Or use a NetworkPolicy to restrict access (--set networkPolicy.enabled=true).
+{{- end }}
+{{- end }}

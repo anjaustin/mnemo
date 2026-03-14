@@ -56,7 +56,7 @@ async fn build_test_state() -> (AppState, Arc<RedisStateStore>) {
     state_store.ensure_indexes().await.unwrap();
 
     let vector_store = Arc::new(
-        QdrantVectorStore::new(&qdrant_url, &qdrant_prefix, 1536)
+        QdrantVectorStore::new(&qdrant_url, &qdrant_prefix, 1536, None)
             .await
             .expect("Qdrant required for gRPC tests"),
     );

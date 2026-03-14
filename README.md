@@ -209,7 +209,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Mnemo BYOK key rotation**: BYOK supports a single `key_id` but has no multi-key decryption or rotation workflow. Rotating keys currently requires re-encrypting all data. This is a genuine gap for compliance-sensitive deployments.
 - **Mnemo OTLP security**: The OpenTelemetry exporter connects to the collector over plaintext gRPC. No TLS or bearer token auth configuration is available yet.
 - **Mnemo internal types in OpenAPI**: `utoipa` derives on internal structs (e.g., `GraphNode`, `RedisEdge`) expose implementation details in the schema. Needs a DTO separation layer.
-- **Mnemo Helm Qdrant auth**: Qdrant subchart does not expose an auth toggle. Qdrant runs unauthenticated inside the cluster by default.
+- **Mnemo Helm Qdrant auth**: Qdrant API key auth is supported via `qdrant.apiKey` in Helm values and `MNEMO_QDRANT_API_KEY` env var. Disabled by default; NOTES.txt warns and provides configuration guidance when auth is off.
 - **Mnemo Helm Ingress TLS**: Ingress template supports TLS but defaults to disabled. NOTES.txt warns when ingress is enabled without TLS. Operators must configure cert-manager or bring their own TLS secret.
 - **Mnemo Helm NetworkPolicy**: No NetworkPolicy template. Pod-to-pod traffic is unrestricted within the namespace.
 - **Zep self-hosted**: [Graphiti](https://github.com/getzep/graphiti) is now fully open-source (Apache 2.0, 23.7k stars) with Neo4j, FalkorDB, Kuzu, and Neptune backends. Prior "partial" rating was stale. Zep Cloud remains the managed platform.
@@ -726,6 +726,7 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_REDIS_URL` | Redis connection | `redis://localhost:6379` |
 | `MNEMO_QDRANT_URL` | Qdrant connection | `http://localhost:6334` |
 | `MNEMO_QDRANT_PREFIX` | Qdrant collection prefix / namespace | `mnemo_` |
+| `MNEMO_QDRANT_API_KEY` | Qdrant API key for authenticated access | (none) |
 | `MNEMO_METADATA_PREFILTER_ENABLED` | Enable metadata prefilter planner | `true` |
 | `MNEMO_METADATA_SCAN_LIMIT` | Candidate scan limit for prefilter planner | `400` |
 | `MNEMO_METADATA_RELAX_IF_EMPTY` | Relax strict metadata filters when empty | `false` |

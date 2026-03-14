@@ -24,6 +24,8 @@ max_connections = 50
 url = "http://localhost:6334"
 # Collection name prefix.
 collection_prefix = "mnemo_"
+# Qdrant API key for authenticated access. Set via MNEMO_QDRANT_API_KEY env var.
+# api_key = ""
 
 [llm]
 # Provider for entity/relationship extraction.

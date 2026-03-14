@@ -93,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
             &config.qdrant.url,
             &config.qdrant.collection_prefix,
             config.embedding.dimensions,
+            config.qdrant.api_key.as_deref(),
         )
         .await?,
     );

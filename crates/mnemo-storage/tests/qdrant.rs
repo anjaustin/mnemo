@@ -30,7 +30,7 @@ async fn get_qdrant_store() -> QdrantVectorStore {
     // Use a fixed short prefix — tests isolate via unique user_id UUIDs, not
     // separate collections.  This keeps the Qdrant collection count at 3.
     let prefix = "qtest_";
-    match QdrantVectorStore::new(&url, prefix, TEST_DIMS).await {
+    match QdrantVectorStore::new(&url, prefix, TEST_DIMS, None).await {
         Ok(store) => store,
         Err(e) => {
             eprintln!(

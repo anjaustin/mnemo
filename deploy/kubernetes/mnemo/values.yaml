@@ -239,6 +239,10 @@ qdrant:
   # -- Deploy Qdrant as a subchart
   enabled: true
   replicaCount: 1
+  # -- Qdrant API key for authenticated access. Set to true (auto-generate),
+  # a string (fixed key), or false (disabled, default).
+  # apiKey: false
+  # readOnlyApiKey: false
   # -- Container security context (adds seccompProfile to subchart defaults)
   containerSecurityContext:
     runAsNonRoot: true
