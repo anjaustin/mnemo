@@ -1,3 +1,5 @@
+# Creates a GitHub Release with auto-generated changelog when a version
+# tag (v*) is pushed. Triggers downstream package-ghcr and SDK publish workflows.
 name: release
 
 on:

@@ -63,6 +63,24 @@ spec:
                   name: {{ include "mnemo.fullname" . }}-auth
                   key: MNEMO_AUTH_API_KEYS
             {{- end }}
+            {{- if and .Values.redis.enabled .Values.redis.auth.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.auth.existingSecret | default (printf "%s-redis" .Release.Name) }}
+                  key: redis-password
+            - name: MNEMO_REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@{{ .Release.Name }}-redis-master:6379"
+            {{- end }}
+            {{- if .Values.mnemo.encryptionEnabled }}
+            {{- if .Values.mnemo.encryptionMasterKey }}
+            - name: MNEMO_ENCRYPTION_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mnemo.fullname" . }}-encryption
+                  key: MNEMO_ENCRYPTION_MASTER_KEY
+            {{- end }}
+            {{- end }}
             {{- with .Values.mnemo.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

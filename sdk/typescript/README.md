@@ -2,6 +2,8 @@
 
 Production-grade TypeScript/JavaScript client for the [Mnemo](https://github.com/anjaustin/mnemo) memory API.
 
+**Compatibility**: SDK v0.7.0 requires Mnemo server v0.7.0+. Older SDK versions (v0.5.x–v0.6.x) work with server v0.5.0+.
+
 Covers: memory, knowledge graph, LLM span tracing, memory digest, agent identity, governance, webhooks, operator, import, and session message endpoints.
 Zero runtime dependencies. Works in Node.js, Deno, Bun, and modern browsers (fetch-based).
 Drop-in LangChain.js and Vercel AI SDK integrations included.

@@ -1,3 +1,5 @@
+# Publishes the mnemo Python SDK to PyPI when a version tag (v*) is pushed.
+# Requires PYPI_API_TOKEN secret.
 name: publish-python-sdk
 
 on:

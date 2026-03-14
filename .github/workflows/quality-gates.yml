@@ -1,3 +1,6 @@
+# Primary CI gate: Rust quality checks (fmt, clippy, unit tests, doc tests),
+# integration regression tests against Redis + Qdrant, and browser smoke tests
+# for the embedded dashboard SPA.
 name: quality-gates
 
 on:

@@ -180,15 +180,16 @@ mnemo:
   redisUrl: ""
   # -- Qdrant connection URL (overridden if qdrant.enabled=true)
   qdrantUrl: ""
-  # -- Qdrant collection prefix
-  qdrantPrefix: "mnemo"
+  # -- Qdrant collection prefix (must include trailing underscore)
+  qdrantPrefix: "mnemo_"
 
   # -- Enable BYOK envelope encryption for data at rest
   encryptionEnabled: false
   # -- Encryption key ID for rotation tracking
   encryptionKeyId: "kek-001"
-  # -- Base64-encoded 256-bit master key (use existingSecret in production)
-  # encryptionMasterKey: ""
+  # -- Base64-encoded 256-bit master key. Set via --set or existingSecret in production.
+  # WARNING: Do NOT commit secrets to values files. Use --set-file or existingSecret.
+  encryptionMasterKey: ""
 
   # -- Enable OpenTelemetry OTLP trace export
   otelEnabled: false

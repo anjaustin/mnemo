@@ -9,8 +9,11 @@ Thank you for your interest in contributing! This guide covers everything you ne
 ### Prerequisites
 
 - Rust 1.85+ (`rustup update stable`)
+- `protoc` (Protocol Buffers compiler, v25+ recommended — needed by `mnemo-proto`)
 - Docker and Docker Compose
 - An LLM API key (optional — Mnemo works without one using rule-based extraction)
+- Python 3.11+ (only if contributing to the Python SDK)
+- Node.js 20+ (only if contributing to the TypeScript SDK)
 
 ### Getting Started
 
@@ -40,11 +43,19 @@ mnemo/
 │   ├── mnemo-storage/    # Redis + Qdrant implementations
 │   ├── mnemo-llm/        # LLM & embedding providers
 │   ├── mnemo-ingest/     # Background ingestion pipeline
-│   ├── mnemo-retrieval/  # Search + context assembly
+│   ├── mnemo-retrieval/  # Search + context assembly + compression
 │   ├── mnemo-graph/      # Graph traversal, community detection
-│   └── mnemo-server/     # HTTP server, config, routes
-├── config/               # Default configuration
-├── docs/                 # Documentation
+│   ├── mnemo-gnn/        # GNN-inspired retrieval feedback
+│   ├── mnemo-mcp/        # Model Context Protocol (MCP) server
+│   ├── mnemo-proto/      # gRPC proto definitions (tonic-build)
+│   └── mnemo-server/     # HTTP/gRPC server, config, routes, dashboard
+├── config/               # Default configuration (TOML)
+├── deploy/               # Kubernetes (Helm), DigitalOcean, Linode
+├── sdk/
+│   ├── python/           # Python SDK (async + sync)
+│   └── typescript/       # TypeScript SDK (Vercel AI adapter)
+├── proto/                # Proto3 service definitions
+├── docs/                 # Architecture, PRDs, design docs
 └── docker-compose.yml    # Development stack
 ```
 
@@ -54,15 +65,21 @@ The dependency graph is deliberately clean:
 mnemo-server
 ├── mnemo-ingest
 │   ├── mnemo-core
-│   └── (uses traits from mnemo-core)
+│   └── mnemo-llm
 ├── mnemo-retrieval
 │   └── mnemo-core
 ├── mnemo-graph
 │   └── mnemo-core
+├── mnemo-gnn
+│   └── mnemo-core
 ├── mnemo-storage
 │   └── mnemo-core
-└── mnemo-llm
-    └── mnemo-core
+├── mnemo-llm
+│   └── mnemo-core
+├── mnemo-mcp
+│   └── mnemo-core
+└── mnemo-proto
+    └── (standalone, tonic-build)
 ```
 
 `mnemo-core` depends on nothing in-workspace. Everything else depends on `mnemo-core` for types and traits. The server crate pulls it all together.
@@ -154,18 +171,23 @@ test: add integration tests for Redis entity dedup
 
 These are the highest-impact areas for contributions right now:
 
-- **Benchmarks**: DMR and LongMemEval benchmark implementations
-- **Helm chart**: Kubernetes deployment (architecture is stateless — ready to scale)
 - **Documentation**: Tutorials, worked examples, domain-specific integration guides
-- **OpenTelemetry integration**: Wire up the `observability.otel_*` config to actual tracing export
+- **Benchmarks**: DMR benchmark implementation (LongMemEval shipped in v0.3.7)
+- **Multi-modal memory**: Text-only today — image/audio/video memory is a genuine gap
+- **Automatic re-encryption**: BYOK key rotation decrypts with old keys but has no bulk re-encrypt workflow
+- **CRDT sync**: Multi-node sync protocol is scaffolded but not battle-tested at scale
 
-Already shipped and no longer needed:
-- ~~RediSearch full-text search integration~~ — shipped in v0.2
+Already shipped:
+- ~~RediSearch full-text search~~ — shipped in v0.2
 - ~~Python SDK~~ — shipped in v0.3, full async + sync coverage
-- ~~LangChain and LlamaIndex adapters~~ — shipped in v0.3
-- ~~Integration tests with real Redis and Qdrant~~ — 118 tests in `tests/memory_api.rs`
 - ~~TypeScript SDK~~ — shipped in v0.3, with Vercel AI adapter
+- ~~LangChain and LlamaIndex adapters~~ — shipped in v0.3
+- ~~Integration tests~~ — 244 tests in `tests/memory_api.rs`
 - ~~Progressive summarization~~ — shipped, configurable via `MNEMO_SESSION_SUMMARY_THRESHOLD`
+- ~~Helm chart~~ — shipped in v0.7.0, with Redis/Qdrant subcharts and NetworkPolicy
+- ~~OpenTelemetry~~ — shipped in v0.7.0, with TLS and auth header support
+- ~~gRPC API~~ — shipped in v0.6.0, 3 services, 8 RPCs
+- ~~MCP server~~ — shipped in v0.6.0, stdio transport
 
 ---
 

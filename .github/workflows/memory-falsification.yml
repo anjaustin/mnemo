@@ -1,3 +1,6 @@
+# Focused CI gate for the memory API integration test suite (244 tests).
+# Validates endpoint behavior, RBAC, webhooks, guardrails, and red-team
+# hardening against real Redis and Qdrant instances.
 name: memory-falsification
 
 on:

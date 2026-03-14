@@ -75,6 +75,13 @@ poll_interval_ms = 500
 # After how many completed episodes per session to trigger progressive summarization.
 # Set to 0 to disable. The summary is stored in session.summary and updated in place.
 session_summary_threshold = 10
+# Enable background sleep-time compute (idle-triggered digest generation).
+# When enabled, the ingest worker generates memory digests after a user has been
+# idle for sleep_idle_window_seconds. Set via MNEMO_SLEEP_ENABLED.
+sleep_enabled = true
+# Seconds of user inactivity before triggering background digest generation.
+# Set via MNEMO_SLEEP_IDLE_WINDOW_SECONDS.
+sleep_idle_window_seconds = 300
 
 # Note: Graph features (community detection, summarization) are built into the
 # graph engine and always active. There is no separate [graph] config section.

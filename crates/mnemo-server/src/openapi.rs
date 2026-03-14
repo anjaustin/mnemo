@@ -369,11 +369,32 @@ mod tests {
             "spec must contain user paths"
         );
         assert!(json.contains("/health"), "spec must contain health path");
-        // Verify path count is reasonable (we registered 142 paths)
-        let path_count = json.matches("\"summary\"").count();
-        assert!(
-            path_count >= 100,
-            "expected at least 100 path summaries, got {path_count}"
+        // Parse the spec and count actual path operations (GET, POST, PUT, PATCH, DELETE).
+        // Must match the 142 registered #[utoipa::path] annotations.
+        // If this fails after adding/removing endpoints, update the expected count.
+        let spec: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let paths = spec["paths"].as_object().expect("paths must be an object");
+        let operation_count: usize = paths
+            .values()
+            .map(|methods| {
+                methods
+                    .as_object()
+                    .map(|m| {
+                        m.keys()
+                            .filter(|k| {
+                                matches!(
+                                    k.as_str(),
+                                    "get" | "post" | "put" | "patch" | "delete" | "head"
+                                )
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert_eq!(
+            operation_count, 142,
+            "expected exactly 142 path operations (one per #[utoipa::path]), got {operation_count}"
         );
     }
 

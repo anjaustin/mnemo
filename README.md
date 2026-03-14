@@ -380,7 +380,7 @@ For a Python-first flow, see [QUICKSTART.md](QUICKSTART.md).
 
 ## Usage
 
-All interaction is via REST API.
+Mnemo exposes a REST API, gRPC API (same port), MCP server (stdio transport), and Python/TypeScript SDKs. The examples below use the REST API.
 
 ### Start here: High-Level Memory API
 
@@ -764,6 +764,19 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_OTEL_TLS_ENABLED` | Enable TLS for OTLP gRPC connection | `false` |
 | `MNEMO_OTEL_TLS_CA_PATH` | Path to CA certificate (PEM) for verifying OTLP collector | (none) |
 | `MNEMO_OTEL_AUTH_HEADER` | Authorization header for OTLP collector (e.g. `Bearer <token>`) | (none) |
+| `MNEMO_EMBEDDING_COMPRESSION_ENABLED` | Enable temporal embedding compression (tiered storage) | `true` |
+| `MNEMO_COMPRESSION_TIER1_DAYS` | Days before embeddings move to Tier 1 (quantized) | `30` |
+| `MNEMO_COMPRESSION_TIER2_DAYS` | Days before embeddings move to Tier 2 (dimensionality-reduced) | `90` |
+| `MNEMO_COMPRESSION_TIER3_DAYS` | Days before embeddings move to Tier 3 (archived) | `365` |
+| `MNEMO_COMPRESSION_SWEEP_INTERVAL_SECS` | Background sweep interval for compression promotions | `3600` |
+| `MNEMO_HYPERBOLIC_GRAPH_ENABLED` | Enable hyperbolic geometry for graph embeddings | `false` |
+| `MNEMO_HYPERBOLIC_CURVATURE` | Poincare ball curvature parameter | `1.0` |
+| `MNEMO_HYPERBOLIC_ALPHA` | Mixing weight between Euclidean and hyperbolic distances | `0.3` |
+| `MNEMO_PIPELINE_RETRY_MAX` | Max retries for failed pipeline stages before dead-lettering | `3` |
+| `MNEMO_PIPELINE_DEAD_LETTER_ENABLED` | Enable dead-letter queue for unrecoverable pipeline failures | `true` |
+| `MNEMO_PIPELINE_DEAD_LETTER_MAX_SIZE` | Max items in the dead-letter queue before oldest are evicted | `1000` |
+| `MNEMO_SYNC_ENABLED` | Enable multi-node CRDT sync protocol | `false` |
+| `MNEMO_SYNC_NODE_ID` | Unique node identifier for CRDT sync (must differ per replica) | (auto-generated) |
 
 For cloud targets that do not have a managed embedding API available, Mnemo also supports a self-hosted embedding path:
 

@@ -1,3 +1,5 @@
+# Nightly flake detection: runs the full test suite 5x to surface
+# intermittent failures from timing, ordering, or resource contention.
 name: nightly-soak
 
 on:

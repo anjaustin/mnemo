@@ -1,3 +1,5 @@
+# Runs the LongMemEval benchmark suite to measure retrieval quality
+# (precision, recall, MRR) and prevent regressions in context assembly.
 name: benchmark-eval
 
 on:

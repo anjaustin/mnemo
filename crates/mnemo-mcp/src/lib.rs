@@ -43,7 +43,7 @@ impl McpConfig {
     pub fn from_env() -> Self {
         Self {
             mnemo_base_url: std::env::var("MNEMO_MCP_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:3000".to_string()),
+                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
             api_key: std::env::var("MNEMO_API_KEY").ok(),
             default_user: std::env::var("MNEMO_MCP_DEFAULT_USER").ok(),
         }

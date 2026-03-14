@@ -1,3 +1,5 @@
+# Builds and pushes the mnemo-server Docker image to GitHub Container
+# Registry (ghcr.io) on pushes to main and version tags.
 name: package-ghcr
 
 on:

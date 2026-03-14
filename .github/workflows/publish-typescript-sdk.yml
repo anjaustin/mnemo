@@ -1,3 +1,5 @@
+# Publishes the @mnemo/sdk TypeScript package to npm when a version tag (v*)
+# is pushed. Requires NPM_TOKEN secret.
 name: publish-typescript-sdk
 
 on:
