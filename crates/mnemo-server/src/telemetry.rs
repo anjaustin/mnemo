@@ -25,17 +25,31 @@ use crate::config::ObservabilitySection;
 /// Returns an optional `TracerProvider` that **must** be kept alive for the
 /// duration of the process. Dropping the provider triggers a graceful flush
 /// and shutdown of the OTLP exporter pipeline.
+///
+/// If OTel is enabled but the exporter fails to build (e.g. invalid endpoint),
+/// this logs a warning and falls back to fmt-only tracing instead of panicking.
 pub fn init_telemetry(obs: &ObservabilitySection) -> Option<TracerProvider> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&obs.log_level));
 
     if obs.otel_enabled && !obs.otel_endpoint.is_empty() {
         // Build OTLP span exporter via tonic gRPC
-        let exporter = opentelemetry_otlp::SpanExporter::builder()
+        let exporter = match opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
             .with_endpoint(&obs.otel_endpoint)
             .build()
-            .expect("failed to build OTLP span exporter");
+        {
+            Ok(e) => e,
+            Err(err) => {
+                // Fall back to fmt-only tracing — do not crash the server.
+                eprintln!(
+                    "WARNING: Failed to build OTLP exporter (endpoint={:?}): {err}. \
+                     Falling back to console-only tracing.",
+                    obs.otel_endpoint
+                );
+                return init_fmt_only(obs, env_filter);
+            }
+        };
 
         let resource = Resource::new(vec![
             KeyValue::new("service.name", obs.otel_service_name.clone()),
@@ -73,21 +87,25 @@ pub fn init_telemetry(obs: &ObservabilitySection) -> Option<TracerProvider> {
 
         Some(provider)
     } else {
-        // No OTel — plain fmt subscriber (original behaviour)
-        if obs.log_format == "json" {
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(tracing_subscriber::fmt::layer().json())
-                .init();
-        } else {
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(tracing_subscriber::fmt::layer())
-                .init();
-        }
-
-        None
+        init_fmt_only(obs, env_filter)
     }
+}
+
+/// Install a fmt-only subscriber (no OTel). Used as the default path and
+/// as the fallback when the OTLP exporter fails to build.
+fn init_fmt_only(obs: &ObservabilitySection, env_filter: EnvFilter) -> Option<TracerProvider> {
+    if obs.log_format == "json" {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
+    None
 }
 
 /// Gracefully shuts down the OpenTelemetry pipeline, flushing pending spans.

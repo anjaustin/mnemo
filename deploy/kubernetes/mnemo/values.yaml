@@ -20,7 +20,8 @@ fullnameOverride: ""
 # -- Service account configuration
 serviceAccount:
   create: true
-  automount: true
+  # -- Mnemo does not use the Kubernetes API; disable token automounting.
+  automount: false
   annotations: {}
   name: ""
 
@@ -41,6 +42,8 @@ podSecurityContext:
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
+  seccompProfile:
+    type: RuntimeDefault
   capabilities:
     drop:
       - ALL
@@ -210,7 +213,12 @@ redis:
   enabled: true
   architecture: standalone
   auth:
-    enabled: false
+    # -- Enable Redis authentication. Set redis.auth.password via --set or existingSecret.
+    enabled: true
+    # -- Redis password (set via --set-file or existingSecret in production)
+    password: ""
+    # -- Use an existing Secret for Redis password (key: redis-password)
+    existingSecret: ""
   master:
     persistence:
       enabled: true

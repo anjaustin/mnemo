@@ -92,11 +92,15 @@ impl EnvelopeEncryptor {
     }
 
     /// Create from a base64-encoded master key string.
+    ///
+    /// The intermediate byte vector is zeroized after copying into the
+    /// fixed-size KEK array to prevent key material lingering on the heap.
     pub fn from_base64(key_b64: &str, key_id: String) -> Result<Self, MnemoError> {
-        let bytes = BASE64
+        let mut bytes = BASE64
             .decode(key_b64)
             .map_err(|e| MnemoError::Config(format!("Invalid base64 master key: {e}")))?;
         if bytes.len() != 32 {
+            bytes.zeroize();
             return Err(MnemoError::Config(format!(
                 "Master key must be exactly 32 bytes (got {})",
                 bytes.len()
@@ -104,6 +108,7 @@ impl EnvelopeEncryptor {
         }
         let mut kek = [0u8; 32];
         kek.copy_from_slice(&bytes);
+        bytes.zeroize();
         Ok(Self { kek, key_id })
     }
 
@@ -228,9 +233,21 @@ impl EnvelopeEncryptor {
 }
 
 /// Check if a JSON string represents an encrypted envelope.
+///
+/// Uses a partial JSON parse to check for the `_encrypted: true` field at the
+/// top level, avoiding false positives from user content that happens to
+/// contain the marker strings as values.
 pub fn is_encrypted(json_str: &str) -> bool {
-    // Fast path: check for the marker field without full parse
-    json_str.contains(&format!("\"{}\"", ENCRYPTED_MARKER)) && json_str.contains("\"_ciphertext\"")
+    // Parse just enough to check top-level keys. serde_json::from_str is fast
+    // for small envelopes and correct for all inputs.
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+        val.get(ENCRYPTED_MARKER)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            && val.get("_ciphertext").is_some()
+    } else {
+        false
+    }
 }
 
 impl Drop for EnvelopeEncryptor {

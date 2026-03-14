@@ -38,7 +38,12 @@ Mnemo has been deployed to your Kubernetes cluster.
 {{- if not .Values.mnemo.existingSecret }}
 
 WARNING: No authentication keys configured!
-  Set mnemo.bootstrapKeys or mnemo.existingSecret for production use.
-  See: helm upgrade {{ .Release.Name }} mnemo --set mnemo.bootstrapKeys="your-secret-key"
+  Create a Kubernetes Secret and reference it via mnemo.existingSecret:
+
+    kubectl create secret generic mnemo-auth \
+      --from-literal=MNEMO_AUTH_BOOTSTRAP_KEYS="$(openssl rand -base64 32)"
+    helm upgrade {{ .Release.Name }} mnemo --set mnemo.existingSecret=mnemo-auth
+
+  SECURITY: Do NOT pass secrets via --set as they are stored in Helm release metadata.
 {{- end }}
 {{- end }}

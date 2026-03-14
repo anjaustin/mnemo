@@ -61,6 +61,8 @@ Create the name of the service account to use.
 
 {{/*
 Redis URL: use subchart or external.
+When redis.auth.enabled=true and using the subchart, the password is
+injected via the REDIS_PASSWORD env var from the Bitnami Secret.
 */}}
 {{- define "mnemo.redisUrl" -}}
 {{- if .Values.redis.enabled }}

@@ -89,15 +89,21 @@ impl RedisStateStore {
         format!("{}{}", self.prefix, parts.join(":"))
     }
 
+    /// Encrypt a JSON string if BYOK encryption is configured; otherwise return as-is.
+    /// Used by both `set_json` and pipeline-based methods that cannot call `set_json`.
+    fn maybe_encrypt(&self, json: String) -> StorageResult<String> {
+        if let Some(enc) = &self.encryptor {
+            Ok(enc.encrypt(&json)?)
+        } else {
+            Ok(json)
+        }
+    }
+
     async fn set_json<T: Serialize>(&self, key: &str, value: &T) -> StorageResult<()> {
         let json = serde_json::to_string(value)?;
 
         // If BYOK encryption is enabled, envelope-encrypt the JSON before storage.
-        let stored = if let Some(enc) = &self.encryptor {
-            enc.encrypt(&json)?
-        } else {
-            json
-        };
+        let stored = self.maybe_encrypt(json)?;
 
         let mut conn = self.conn.clone();
         // Use JSON.SET so that RediSearch ON JSON indexes can scan these documents.
@@ -1621,7 +1627,7 @@ impl DigestStore for RedisStateStore {
     async fn save_digest(&self, digest: &MemoryDigest) -> StorageResult<()> {
         let key = self.key(&["digest", &digest.user_id.to_string()]);
         let zset_key = self.key(&["digests"]);
-        let json = serde_json::to_string(digest)?;
+        let json = self.maybe_encrypt(serde_json::to_string(digest)?)?;
         let score = digest.generated_at.timestamp_millis() as f64;
         let member = digest.user_id.to_string();
 
@@ -1701,8 +1707,10 @@ impl SpanStore for RedisStateStore {
         let span_id = span.id.to_string();
         let key = self.key(&["span", &span_id]);
         let global_zset = self.key(&["spans"]);
-        let json =
-            serde_json::to_string(span).map_err(|e| MnemoError::Serialization(e.to_string()))?;
+        let json = self.maybe_encrypt(
+            serde_json::to_string(span)
+                .map_err(|e| MnemoError::Serialization(e.to_string()))?,
+        )?;
         let score = span.started_at.timestamp_millis() as f64;
 
         let mut conn = self.conn.clone();
@@ -2419,7 +2427,7 @@ impl GuardrailStore for RedisStateStore {
 impl RegionStore for RedisStateStore {
     async fn create_region(&self, region: &MemoryRegion) -> StorageResult<()> {
         let pk = self.key(&["region", &region.id.to_string()]);
-        let json = serde_json::to_string(region)?;
+        let json = self.maybe_encrypt(serde_json::to_string(region)?)?;
         let global_idx = self.key(&["regions"]);
         let user_idx = self.key(&["user_regions", &region.user_id.to_string()]);
         let owner_idx = self.key(&["agent_regions", &region.owner_agent_id]);
@@ -2581,7 +2589,7 @@ impl RegionStore for RedisStateStore {
             &acl.region_id.to_string(),
             &acl.agent_id,
         ]);
-        let json = serde_json::to_string(acl)?;
+        let json = self.maybe_encrypt(serde_json::to_string(acl)?)?;
         let acl_idx = self.key(&["region_acl", &acl.region_id.to_string()]);
         let agent_idx = self.key(&["agent_regions", &acl.agent_id]);
         let score = acl.granted_at.timestamp_millis() as f64;

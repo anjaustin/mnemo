@@ -309,7 +309,7 @@ impl Default for ObservabilitySection {
 }
 
 /// BYOK envelope encryption configuration.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct EncryptionSection {
     /// Enable envelope encryption for data at rest.
     #[serde(default)]
@@ -321,6 +321,16 @@ pub struct EncryptionSection {
     /// Key identifier for rotation tracking.
     #[serde(default = "default_encryption_key_id")]
     pub key_id: String,
+}
+
+impl std::fmt::Debug for EncryptionSection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptionSection")
+            .field("enabled", &self.enabled)
+            .field("master_key", &"[REDACTED]")
+            .field("key_id", &self.key_id)
+            .finish()
+    }
 }
 
 impl Default for EncryptionSection {

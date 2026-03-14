@@ -84,9 +84,11 @@ spec:
             {{- end }}
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 100Mi
         - name: fastembed-cache
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 2Gi
         {{- with .Values.mnemo.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

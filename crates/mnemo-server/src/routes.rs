@@ -1548,8 +1548,11 @@ mnemo_agent_promotion_proposals_total {}\n",
 
 async fn get_ops_summary(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Query(query): Query<OpsSummaryQuery>,
-) -> Json<OpsSummaryResponse> {
+) -> Result<Json<OpsSummaryResponse>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
     let window_seconds = query.window_seconds.unwrap_or(300).clamp(1, 86_400);
     let window_start = chrono::Utc::now() - chrono::Duration::seconds(window_seconds as i64);
 
@@ -1624,7 +1627,7 @@ async fn get_ops_summary(
             .sum()
     };
 
-    Json(OpsSummaryResponse {
+    Ok(Json(OpsSummaryResponse {
         window_seconds,
         http_requests_total,
         http_responses_2xx,
@@ -1644,30 +1647,50 @@ async fn get_ops_summary(
         pending_webhook_events,
         governance_audit_events_in_window,
         webhook_audit_events_in_window,
-    })
+    }))
 }
 
 // ─── Temporal Tensor Compression ───────────────────────────────────
 
-async fn get_ops_compression(State(state): State<AppState>) -> Json<serde_json::Value> {
-    Json(
+async fn get_ops_compression(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+    Ok(Json(
         state
             .compression_stats
             .to_json(&state.compression_config, state.embedding_dimensions),
-    )
+    ))
 }
 
-async fn get_ops_hyperbolic(State(state): State<AppState>) -> Json<serde_json::Value> {
-    Json(serde_json::to_value(state.hyperbolic_config.status()).unwrap_or_default())
+async fn get_ops_hyperbolic(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+    Ok(Json(serde_json::to_value(state.hyperbolic_config.status()).unwrap_or_default()))
 }
 
-async fn get_ops_pipeline(State(state): State<AppState>) -> Json<serde_json::Value> {
-    Json(serde_json::to_value(state.pipeline_metrics.status()).unwrap_or_default())
+async fn get_ops_pipeline(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+    Ok(Json(serde_json::to_value(state.pipeline_metrics.status()).unwrap_or_default()))
 }
 
-async fn get_ops_sync(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn get_ops_sync(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
     let status = state.sync_status.read().await;
-    Json(serde_json::to_value(&*status).unwrap_or_default())
+    Ok(Json(serde_json::to_value(&*status).unwrap_or_default()))
 }
 
 /// Run one compression sweep: iterate episode collection, quantize old vectors.
@@ -1768,8 +1791,11 @@ pub async fn run_compression_sweep(state: &AppState) -> Result<u64, MnemoError> 
 
 async fn get_ops_incidents(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Query(query): Query<OpsSummaryQuery>,
-) -> Json<OpsIncidentsResponse> {
+) -> Result<Json<OpsIncidentsResponse>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
     let window_seconds = query.window_seconds.unwrap_or(300).clamp(1, 86_400);
     let window_start = chrono::Utc::now() - chrono::Duration::seconds(window_seconds as i64);
 
@@ -1933,11 +1959,11 @@ async fn get_ops_incidents(
     incidents.extend(open_circuit_incidents);
     incidents.sort_by_key(|b| std::cmp::Reverse(incident_sort_key(b)));
 
-    Json(OpsIncidentsResponse {
+    Ok(Json(OpsIncidentsResponse {
         window_seconds,
         total_active: incidents.len(),
         incidents,
-    })
+    }))
 }
 
 fn summarize_governance_violation(row: &GovernanceAuditRecord) -> String {
@@ -2038,8 +2064,11 @@ struct AuditExportResponse {
 
 async fn audit_export(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Query(query): Query<AuditExportQuery>,
 ) -> Result<Response, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
     if query.to <= query.from {
         return Err(AppError(MnemoError::Validation(
             "'to' must be after 'from'".into(),
@@ -2153,9 +2182,12 @@ async fn audit_export(
 
 async fn get_trace_by_request_id(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(request_id): Path<String>,
     Query(query): Query<TraceLookupQuery>,
 ) -> Result<Json<TraceLookupResponse>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
     Ok(Json(
         lookup_trace_by_request_id(&state, request_id, query).await?,
     ))
@@ -6642,9 +6674,12 @@ async fn list_memory_webhook_audit(
 
 async fn export_webhook_evidence_bundle(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(id): Path<Uuid>,
     Query(query): Query<EvidenceExportQuery>,
 ) -> Result<Json<EvidenceBundleEnvelope<WebhookEvidenceBundlePayload>>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
     let focus = normalize_evidence_focus(query.focus);
     let source_path = default_evidence_source_path(
         query.source_path,
@@ -6717,9 +6752,12 @@ async fn export_webhook_evidence_bundle(
 
 async fn export_governance_evidence_bundle(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Query(query): Query<GovernanceEvidenceExportQuery>,
 ) -> Result<Json<EvidenceBundleEnvelope<GovernanceEvidenceBundlePayload>>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
     if query.violations_to <= query.violations_from {
         return Err(AppError(MnemoError::Validation(
             "'violations_to' must be after 'violations_from'".to_string(),
@@ -6773,9 +6811,12 @@ async fn export_governance_evidence_bundle(
 
 async fn export_trace_evidence_bundle(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(request_id): Path<String>,
     Query(query): Query<TraceLookupQueryWithEvidence>,
 ) -> Result<Json<EvidenceBundleEnvelope<TraceEvidenceBundlePayload>>, AppError> {
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
     let focus = normalize_evidence_focus(query.focus.clone());
     let trace_query = TraceLookupQuery {
         from: query.from,
