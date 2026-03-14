@@ -8,6 +8,10 @@ host = "0.0.0.0"
 port = 8080
 # Number of worker threads. 0 = number of CPU cores.
 workers = 0
+# Allowed CORS origins. ["*"] allows all origins (default).
+# Set to specific origins for production: ["https://app.example.com"]
+# Override via MNEMO_CORS_ALLOWED_ORIGINS env var (comma-separated).
+cors_allowed_origins = ["*"]
 
 [auth]
 enabled = false

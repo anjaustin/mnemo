@@ -203,7 +203,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Mnemo reranking caveat**: MMR uses score-proximity approximation rather than full embedding dot-product.
 - **Mnemo multi-modal**: Not supported. Text-only memory ingestion. This is a genuine gap.
 - **Mnemo managed cloud**: Not yet available. Mnemo is self-hosted only. This is a genuine gap for teams that prefer managed infrastructure.
-- **Mnemo CORS**: `CorsLayer::permissive()` in production. Intentional for development; needs environment-based origin configuration for production deployments.
+- **Mnemo CORS**: Configurable via `MNEMO_CORS_ALLOWED_ORIGINS` (comma-separated) or `cors_allowed_origins` in TOML. Defaults to `["*"]` for backward compatibility. Set specific origins for production.
 - **Mnemo auth-exempt routes**: Unauthenticated routes (health, swagger, dashboard) receive a synthetic admin `CallerContext`. Functionally safe but architecturally unsound — needs refactor to distinguish "no auth required" from "admin by default."
 - **Mnemo OpenAPI paths**: The OpenAPI 3.1 spec registers schemas but has zero `#[utoipa::path]` annotations on handlers, so the spec contains no endpoint documentation yet. Swagger UI loads but shows only models.
 - **Mnemo BYOK key rotation**: BYOK supports a single `key_id` but has no multi-key decryption or rotation workflow. Rotating keys currently requires re-encrypting all data. This is a genuine gap for compliance-sensitive deployments.
@@ -721,6 +721,7 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_LLM_MODEL` | Model for extraction | `claude-sonnet-4-20250514` \* |
 | `MNEMO_EMBEDDING_PROVIDER` | `openai`-compatible remote embeddings or `local` fastembed | `openai` |
 | `MNEMO_EMBEDDING_API_KEY` | Embedding API key | (none) |
+| `MNEMO_CORS_ALLOWED_ORIGINS` | Comma-separated allowed CORS origins (`*` = all) | `*` |
 | `MNEMO_AUTH_ENABLED` | Require API key auth (`true`/`false`) | `false` |
 | `MNEMO_AUTH_API_KEYS` | Comma-separated accepted API keys | (none) |
 | `MNEMO_REDIS_URL` | Redis connection | `redis://localhost:6379` |

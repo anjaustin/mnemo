@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use axum::middleware::from_fn_with_state;
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use mnemo_server::config::MnemoConfig;
@@ -520,7 +520,21 @@ async fn main() -> anyhow::Result<()> {
         ))
         .layer(AuthLayer::new((*auth_config).clone()))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive());
+        .layer({
+            let origins = &config.server.cors_allowed_origins;
+            if origins.len() == 1 && origins[0] == "*" {
+                CorsLayer::permissive()
+            } else {
+                let parsed: Vec<axum::http::HeaderValue> = origins
+                    .iter()
+                    .filter_map(|o| o.parse().ok())
+                    .collect();
+                CorsLayer::new()
+                    .allow_origin(AllowOrigin::list(parsed))
+                    .allow_methods(Any)
+                    .allow_headers(Any)
+            }
+        });
 
     // ─── OpenAPI spec + Swagger UI ────────────────────────────────
     use mnemo_server::openapi::MnemoApiDoc;

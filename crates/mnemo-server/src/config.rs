@@ -44,6 +44,16 @@ pub struct ServerConfig {
     /// Set via `MNEMO_AUDIT_SIGNING_SECRET`.
     #[serde(default)]
     pub audit_signing_secret: Option<String>,
+    /// Allowed CORS origins. Set to `["*"]` to allow all origins (default, for
+    /// backward compatibility). Set to specific origins (e.g.,
+    /// `["https://app.example.com"]`) to restrict.
+    /// Set via `MNEMO_CORS_ALLOWED_ORIGINS` as a comma-separated list.
+    #[serde(default = "default_cors_origins")]
+    pub cors_allowed_origins: Vec<String>,
+}
+
+fn default_cors_origins() -> Vec<String> {
+    vec!["*".to_string()]
 }
 
 impl Default for ServerConfig {
@@ -54,6 +64,7 @@ impl Default for ServerConfig {
             workers: 0,
             require_tls: false,
             audit_signing_secret: None,
+            cors_allowed_origins: default_cors_origins(),
         }
     }
 }
@@ -603,6 +614,12 @@ impl MnemoConfig {
             if !v.is_empty() {
                 config.server.audit_signing_secret = Some(v);
             }
+        }
+
+        // CORS overrides
+        if let Ok(v) = std::env::var("MNEMO_CORS_ALLOWED_ORIGINS") {
+            config.server.cors_allowed_origins =
+                v.split(',').map(|s| s.trim().to_string()).collect();
         }
 
         // OpenTelemetry overrides
@@ -1415,6 +1432,39 @@ api_keys = ["toml-key-1"]
         std::env::set_var("MNEMO_AUTH_ENABLED", "yes");
         let config = MnemoConfig::load(None).unwrap();
         assert!(!config.auth.enabled);
+
+        clear_mnemo_env();
+    }
+
+    #[test]
+    fn cfg_cors_default_is_wildcard() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_mnemo_env();
+
+        let config = MnemoConfig::load(None).unwrap();
+        assert_eq!(config.server.cors_allowed_origins, vec!["*".to_string()]);
+        clear_mnemo_env();
+    }
+
+    #[test]
+    fn cfg_cors_env_override_parses_csv() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_mnemo_env();
+
+        std::env::set_var(
+            "MNEMO_CORS_ALLOWED_ORIGINS",
+            "https://app.example.com, https://admin.example.com",
+        );
+        let config = MnemoConfig::load(None).unwrap();
+        assert_eq!(config.server.cors_allowed_origins.len(), 2);
+        assert_eq!(
+            config.server.cors_allowed_origins[0],
+            "https://app.example.com"
+        );
+        assert_eq!(
+            config.server.cors_allowed_origins[1],
+            "https://admin.example.com"
+        );
 
         clear_mnemo_env();
     }
