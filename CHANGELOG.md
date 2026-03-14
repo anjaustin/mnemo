@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-03-13
+
+### Added
+
+- **OpenAPI 3.1 spec + Swagger UI** (`mnemo-server`): Auto-generated OpenAPI 3.1 specification from Rust types via utoipa 5. 235 types annotated with `#[derive(utoipa::ToSchema)]` across `mnemo-core` and `mnemo-server`. `MnemoApiDoc` struct registers all schemas and 20 API tags. OpenAPI JSON served at `GET /api/v1/openapi.json`, interactive Swagger UI at `GET /swagger-ui` (CDN-based, no utoipa-swagger-ui due to axum 0.8 dependency conflict). Both endpoints auth-exempt.
+
+- **Production Helm chart** (`deploy/kubernetes/mnemo/`): Full Kubernetes deployment chart with Bitnami Redis and Qdrant subchart dependencies. Templates: Deployment, Service, ConfigMap, Secret, ServiceAccount, HPA (autoscaling/v2 with CPU 70% + memory 80% targets, 2-10 replicas), PDB (policy/v1, minAvailable: 1), Ingress (networking.k8s.io/v1, conditional). Security defaults: nonRoot UID 65532, read-only rootfs, drop all caps, no privilege escalation. Topology spread constraints for HA. `_helpers.tpl` auto-computes Redis/Qdrant URLs from subchart release names. ConfigMap checksum annotation triggers rolling restarts on config changes. NOTES.txt with post-install verification instructions. `docs/DEPLOY.md` with quick start, production, external deps, ingress, and upgrade examples.
+
+- **OpenTelemetry OTLP trace export** (`mnemo-server`): Distributed tracing via OpenTelemetry 0.27 + tracing-opentelemetry 0.28 (compatible with existing tonic 0.12 stack). New `telemetry` module with layered `tracing_subscriber::Registry` — fmt layer (human or JSON) + OTel layer when enabled. `SpanExporter::builder().with_tonic()` sends traces over gRPC to any OTLP-compatible collector (Jaeger, Tempo, Datadog, etc.). Resource attributes: `service.name`, `service.version`. Config: `MNEMO_OTEL_ENABLED`, `MNEMO_OTEL_ENDPOINT`, `MNEMO_OTEL_SERVICE_NAME` env vars with TOML config fallback. Graceful shutdown signal handler (SIGTERM + Ctrl+C) flushes pending spans before exit. Helm chart configmap updated.
+
+- **BYOK envelope encryption** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): AES-256-GCM envelope encryption for data at rest. Each Redis document gets a random 256-bit DEK (Data Encryption Key) encrypted with the operator's master KEK (Key Encryption Key). `EnvelopeEncryptor` in `mnemo-core::encryption` with `encrypt()`/`decrypt()` methods, base64 key parsing, tamper detection, and `zeroize` memory cleanup. Encrypted documents stored as JSON envelopes with `_key_id` field for key rotation tracking. `RedisStateStore.set_json()`/`get_json()` transparently encrypt/decrypt when `.with_encryption()` is configured. Auto-detects encrypted vs plaintext documents for backward compatibility. Config: `MNEMO_ENCRYPTION_ENABLED`, `MNEMO_ENCRYPTION_MASTER_KEY` (base64 32-byte), `MNEMO_ENCRYPTION_KEY_ID` env vars. 10 unit tests (roundtrip, wrong-key rejection, tamper detection, 1MB document, key ID propagation).
+
+### Changed
+
+- Workspace version: `0.6.0` -> `0.7.0`.
+- Total workspace test count: ~1,115 -> ~1,128 (+13 tests).
+- `tracing_subscriber` features now include `registry` for layered subscriber composition.
+- `MnemoConfig` struct now includes `encryption` section.
+- `ObservabilitySection` now includes `otel_enabled`, `otel_endpoint`, `otel_service_name` fields (previously in TOML but not parsed by the config struct).
+- `RedisStateStore` struct now includes optional `encryptor` field.
+- Python SDK version: `0.4.0` (init) / `0.5.0` (pyproject) -> `0.6.0` (aligned).
+- TypeScript SDK version: `0.5.0` -> `0.6.0`.
+- Server binary now handles SIGTERM/Ctrl+C for graceful shutdown (previously relied on OS signal defaults).
+
+### Security
+
+- BYOK encryption prevents plaintext PII exposure in Redis if database is compromised.
+- Master key material zeroized on `EnvelopeEncryptor` drop.
+- Debug impl redacts key material (`"[REDACTED]"`).
+- Helm chart Secret template stores bootstrap keys as Kubernetes Opaque secrets.
+
 ## [0.6.0] — 2026-03-13
 
 ### Added
