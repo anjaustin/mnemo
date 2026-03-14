@@ -66,7 +66,7 @@ WARNING: No authentication keys configured!
   Create a Kubernetes Secret and reference it via mnemo.existingSecret:
 
     kubectl create secret generic mnemo-auth \
-      --from-literal=MNEMO_AUTH_BOOTSTRAP_KEYS="$(openssl rand -base64 32)"
+      --from-literal=MNEMO_AUTH_API_KEYS="$(openssl rand -base64 32)"
     helm upgrade {{ .Release.Name }} mnemo --set mnemo.existingSecret=mnemo-auth
 
   SECURITY: Do NOT pass secrets via --set as they are stored in Helm release metadata.
@@ -88,7 +88,7 @@ NOTE: Qdrant is deployed without API key authentication.
         - name: MNEMO_QDRANT_API_KEY
           valueFrom:
             secretKeyRef:
-              name: {{ include "mnemo.fullname" . }}-qdrant-apikey
+              name: {{ .Release.Name }}-qdrant-apikey
               key: api-key
 
   Or use a NetworkPolicy to restrict access (--set networkPolicy.enabled=true).

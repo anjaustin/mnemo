@@ -5,8 +5,8 @@ metadata:
   labels:
     {{- include "mnemo.labels" . | nindent 4 }}
 data:
-  MNEMO_HOST: {{ .Values.mnemo.host | quote }}
-  MNEMO_PORT: {{ .Values.mnemo.port | quote }}
+  MNEMO_SERVER_HOST: {{ .Values.mnemo.host | quote }}
+  MNEMO_SERVER_PORT: {{ .Values.mnemo.port | quote }}
   MNEMO_AUTH_ENABLED: {{ .Values.mnemo.authEnabled | quote }}
   MNEMO_LLM_PROVIDER: {{ .Values.mnemo.llmProvider | quote }}
   MNEMO_LLM_MODEL: {{ .Values.mnemo.llmModel | quote }}

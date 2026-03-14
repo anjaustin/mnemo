@@ -51,17 +51,17 @@ spec:
             - name: MNEMO_QDRANT_URL
               value: {{ include "mnemo.qdrantUrl" . | quote }}
             {{- if .Values.mnemo.existingSecret }}
-            - name: MNEMO_AUTH_BOOTSTRAP_KEYS
+            - name: MNEMO_AUTH_API_KEYS
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.mnemo.existingSecret }}
-                  key: MNEMO_AUTH_BOOTSTRAP_KEYS
+                  key: MNEMO_AUTH_API_KEYS
             {{- else if .Values.mnemo.bootstrapKeys }}
-            - name: MNEMO_AUTH_BOOTSTRAP_KEYS
+            - name: MNEMO_AUTH_API_KEYS
               valueFrom:
                 secretKeyRef:
                   name: {{ include "mnemo.fullname" . }}-auth
-                  key: MNEMO_AUTH_BOOTSTRAP_KEYS
+                  key: MNEMO_AUTH_API_KEYS
             {{- end }}
             {{- with .Values.mnemo.extraEnv }}
             {{- toYaml . | nindent 12 }}

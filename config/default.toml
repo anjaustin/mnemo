@@ -22,7 +22,8 @@ api_keys = []
 url = "redis://localhost:6379"
 # Key prefix for multi-service Redis instances.
 prefix = "mnemo:"
-max_connections = 50
+# Note: max_connections is not yet configurable. The Redis client uses the
+# driver default connection pool size.
 
 [qdrant]
 url = "http://localhost:6334"
@@ -61,11 +62,8 @@ base_url = ""
 dimensions = 1536
 
 [extraction]
-# Extraction mode:
-# "llm"    - Use LLM for entity/relationship extraction (highest quality)
-# "rules"  - Rule-based extraction (no LLM dependency, lower quality)
-# "hybrid" - Rules first, LLM for refinement (balanced)
-mode = "llm"
+# Note: Extraction always uses LLM when an LLM provider is configured, and
+# falls back to a no-op when provider = "none". There is no configurable mode.
 # Number of episodes to process in parallel.
 batch_size = 10
 # Retry failed extractions this many times.
@@ -82,10 +80,8 @@ session_summary_threshold = 10
 # graph engine and always active. There is no separate [graph] config section.
 
 [retrieval]
-# Default context assembly strategy.
-# Combines results from multiple search types, sorted by relevance.
-default_max_tokens = 500
-default_min_relevance = 0.3
+# Note: max_tokens and min_relevance are set per-request in the ContextRequest body,
+# not via global config. The API defaults are defined in routes.rs.
 # Reranking strategy: "rrf" (Reciprocal Rank Fusion), "mmr" (Maximal Marginal Relevance)
 reranker = "rrf"
 # Enable app-level metadata prefilter planner for memory context.
@@ -117,8 +113,7 @@ persistence_prefix = "webhooks"
 log_level = "info"
 # Log format: "json" (production) or "pretty" (development)
 log_format = "pretty"
-# Enable Prometheus metrics endpoint at /metrics.
-metrics_enabled = true
+# Note: The Prometheus metrics endpoint at /metrics is always enabled.
 # Enable OpenTelemetry OTLP trace/metric export.
 otel_enabled = false
 # OTLP gRPC endpoint (e.g. "http://localhost:4317").

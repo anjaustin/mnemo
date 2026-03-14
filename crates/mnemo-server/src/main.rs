@@ -7,13 +7,13 @@
 //! # Environment Variables
 //!
 //! Core:
-//! - `MNEMO_HOST` / `MNEMO_PORT` — Bind address (default `0.0.0.0:8080`)
+//! - `MNEMO_SERVER_HOST` / `MNEMO_SERVER_PORT` — Bind address (default `0.0.0.0:8080`)
 //! - `MNEMO_REDIS_URL` — Redis connection string
 //! - `MNEMO_QDRANT_URL` — Qdrant gRPC endpoint
 //!
 //! Auth:
 //! - `MNEMO_AUTH_ENABLED` — Enable API key authentication (default `false`)
-//! - `MNEMO_AUTH_BOOTSTRAP_KEYS` — Comma-separated bootstrap API keys
+//! - `MNEMO_AUTH_API_KEYS` — Comma-separated bootstrap API keys
 //!
 //! LLM:
 //! - `MNEMO_LLM_PROVIDER` — `openai`, `anthropic`, or `ollama`
