@@ -5205,6 +5205,9 @@ async fn get_memory_context(
         min_relevance,
         agent_id: None,
         region_ids: vec![],
+        structured: false,
+        explain: false,
+        tiered_budget: false,
     };
 
     let mut context = state
@@ -5850,6 +5853,9 @@ async fn time_travel_trace(
         min_relevance,
         agent_id: None,
         region_ids: vec![],
+        structured: false,
+        explain: false,
+        tiered_budget: false,
     };
 
     let mut context_from = state
@@ -6299,6 +6305,9 @@ async fn time_travel_summary(
         min_relevance,
         agent_id: None,
         region_ids: vec![],
+        structured: false,
+        explain: false,
+        tiered_budget: false,
     };
 
     let mut context_from = state
@@ -6618,6 +6627,9 @@ async fn causal_recall_chains(
         temporal_weight: None,
         min_relevance: 0.3,
         agent_id: None,
+        structured: false,
+        explain: false,
+        tiered_budget: false,
         region_ids: vec![],
     };
 
@@ -8736,6 +8748,9 @@ async fn get_agent_context(
         min_relevance: req.min_relevance.unwrap_or(0.3),
         agent_id: None,
         region_ids: vec![],
+        structured: false,
+        explain: false,
+        tiered_budget: false,
     };
 
     let mut context = state
@@ -12139,6 +12154,9 @@ async fn counterfactual_context(
         min_relevance,
         agent_id: None,
         region_ids: vec![],
+        structured: false,
+        explain: false,
+        tiered_budget: false,
     };
 
     let mut context = state

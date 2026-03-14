@@ -4,6 +4,7 @@
 //! Results can be merged using either Reciprocal Rank Fusion (RRF) or
 //! Maximal Marginal Relevance (MMR).
 
+pub mod classifier;
 pub mod coherence;
 pub mod compression;
 pub mod hyperbolic;
@@ -19,6 +20,8 @@ use mnemo_core::models::context::*;
 use mnemo_core::traits::fulltext::FullTextStore;
 use mnemo_core::traits::llm::EmbeddingProvider;
 use mnemo_core::traits::storage::*;
+
+pub use classifier::{classify_query_intent, ClassificationSource, QueryClassification, QueryType};
 
 // Re-export GNN types for consumers
 pub use mnemo_gnn::{build_local_subgraph, GatWeights, LocalSubgraph, RerankedCandidate};
@@ -153,6 +156,14 @@ where
             return Ok(block);
         }
 
+        // ── D1: Query Intent Classification ───────────────────────
+        let query_classification = classifier::classify_query_intent(&query_text);
+        block.query_type = Some(format!("{:?}", query_classification.query_type).to_lowercase());
+
+        // D3: explanation collector — only allocated when explain=true
+        let mut collector: Option<ExplanationCollector> =
+            if request.explain { Some(ExplanationCollector::new()) } else { None };
+
         let temporal_intent = resolve_temporal_intent(request.time_intent, &query_text);
         let temporal_filter = request.as_of.or(request.temporal_filter);
 
@@ -278,6 +289,19 @@ where
                     .map(|e| e.name)
                     .unwrap_or_else(|_| "Unknown".to_string());
 
+                // D3: annotate with retrieval reason
+                if let Some(ref mut col) = collector {
+                    col.record(
+                        edge.id,
+                        RetrievalReason::SemanticMatch,
+                        format!(
+                            "Semantic/FT match for fact '{}' (score {:.3})",
+                            &edge.fact.chars().take(60).collect::<String>(),
+                            rrf_score
+                        ),
+                    );
+                }
+
                 block.facts.push(FactSummary {
                     id: edge.id,
                     source_entity: src_name,
@@ -320,6 +344,18 @@ where
                     .await
                     .map(|e| e.name)
                     .unwrap_or_else(|_| "Unknown".to_string());
+
+                // D3: annotate graph-traversal edges
+                if let Some(ref mut col) = collector {
+                    col.record(
+                        edge.id,
+                        RetrievalReason::GraphConnection,
+                        format!(
+                            "Connected to query entity '{}' via '{}' relationship (1 hop)",
+                            entity_summary.name, edge.label
+                        ),
+                    );
+                }
 
                 block.facts.push(FactSummary {
                     id: edge.id,
@@ -381,18 +417,58 @@ where
         }
 
         // ── Temporal reranking (semantic + time) ──────────────
+        // D1: For Temporal queries, amplify temporal weight so recent changes
+        //     rank higher. For Factual queries, reduce temporal weight so
+        //     exact matches are not penalised for being older.
+        let adjusted_temporal_weight = match query_classification.query_type {
+            QueryType::Temporal => {
+                Some(request.temporal_weight.unwrap_or(0.55_f32).max(0.55))
+            }
+            QueryType::Factual => {
+                Some(request.temporal_weight.unwrap_or(0.20_f32).min(0.20))
+            }
+            _ => request.temporal_weight,
+        };
+
         apply_temporal_scoring(
             &mut block,
             temporal_intent,
             temporal_filter,
-            request.temporal_weight,
+            adjusted_temporal_weight,
         );
         if !block.sources.contains(&RetrievalSource::TemporalScoring) {
             block.sources.push(RetrievalSource::TemporalScoring);
         }
 
-        // ── Assemble context string ────────────────────────────
-        block.assemble(request.max_tokens);
+        // D1: For Absent queries, check if any facts were found at all and
+        //     add an open_question signal (consumed by D2 build_structured).
+        let absent_signal = matches!(query_classification.query_type, QueryType::Absent)
+            && block.facts.is_empty();
+
+        // ── D2: Build structured context ──────────────────────
+        if request.structured {
+            let mut structured = block.build_structured();
+            if absent_signal {
+                structured
+                    .open_questions
+                    .push("No relevant facts found in memory for this query.".to_string());
+            }
+            block.structured = Some(structured);
+        }
+
+        // ── D3: Attach explanations ────────────────────────────
+        if let Some(col) = collector {
+            block.explanations = Some(col.finish());
+        }
+
+        // ── D4: Assemble context string (tiered or standard) ──
+        if request.tiered_budget {
+            let tier_config = TierConfig::from_env();
+            block.assemble_tiered(request.max_tokens, &tier_config, None);
+        } else {
+            block.assemble(request.max_tokens);
+        }
+
         block.latency_ms = start.elapsed().as_millis() as u64;
 
         tracing::debug!(
@@ -401,6 +477,7 @@ where
             facts = block.facts.len(),
             episodes = block.episodes.len(),
             tokens = block.token_count,
+            query_type = ?query_classification.query_type,
             latency_ms = block.latency_ms,
             "Context assembled"
         );

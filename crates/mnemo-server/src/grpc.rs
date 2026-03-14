@@ -427,6 +427,9 @@ impl MemoryService for GrpcState {
             min_relevance,
             agent_id: None,
             region_ids: vec![],
+            structured: false,
+            explain: false,
+            tiered_budget: false,
         };
 
         let reranker = reranker_for_state(&self.reranker);
