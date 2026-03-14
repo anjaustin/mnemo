@@ -175,6 +175,13 @@ mnemo:
   # -- Qdrant collection prefix
   qdrantPrefix: "mnemo"
 
+  # -- Enable OpenTelemetry OTLP trace export
+  otelEnabled: false
+  # -- OTLP gRPC endpoint (e.g. "http://otel-collector:4317")
+  otelEndpoint: ""
+  # -- OpenTelemetry service name
+  otelServiceName: "mnemo-server"
+
   # -- Additional environment variables
   extraEnv: []
   # - name: ANTHROPIC_API_KEY

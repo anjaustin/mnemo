@@ -44,7 +44,13 @@ ulid = { version = "1", features = ["serde"] }
 
 # Logging & tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
+
+# OpenTelemetry
+opentelemetry = { version = "0.27", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "trace", "metrics"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "metrics", "grpc-tonic"] }
+tracing-opentelemetry = { version = "0.28", features = ["metrics"] }
 
 # HTTP server
 axum = { version = "0.7", features = ["json", "query"] }

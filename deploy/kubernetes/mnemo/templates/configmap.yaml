@@ -14,3 +14,8 @@ data:
   MNEMO_EMBEDDING_MODEL: {{ .Values.mnemo.embeddingModel | quote }}
   MNEMO_EMBEDDING_DIMENSIONS: {{ .Values.mnemo.embeddingDimensions | quote }}
   MNEMO_QDRANT_PREFIX: {{ .Values.mnemo.qdrantPrefix | quote }}
+  MNEMO_OTEL_ENABLED: {{ .Values.mnemo.otelEnabled | quote }}
+  {{- if .Values.mnemo.otelEndpoint }}
+  MNEMO_OTEL_ENDPOINT: {{ .Values.mnemo.otelEndpoint | quote }}
+  {{- end }}
+  MNEMO_OTEL_SERVICE_NAME: {{ .Values.mnemo.otelServiceName | quote }}

@@ -21,6 +21,11 @@
 //! - `MNEMO_EMBEDDING_PROVIDER` — `openai`, `local`, or `ollama`
 //! - `MNEMO_EMBEDDING_MODEL` — Embedding model name
 //! - `MNEMO_EMBEDDING_DIMENSIONS` — Embedding vector dimensions
+//!
+//! OpenTelemetry:
+//! - `MNEMO_OTEL_ENABLED` — Enable OTLP trace export (default `false`)
+//! - `MNEMO_OTEL_ENDPOINT` — OTLP gRPC endpoint (e.g. `http://localhost:4317`)
+//! - `MNEMO_OTEL_SERVICE_NAME` — Service name for traces (default `mnemo-server`)
 
 use std::sync::Arc;
 
@@ -28,7 +33,6 @@ use axum::middleware::from_fn_with_state;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::EnvFilter;
 
 use mnemo_server::config::MnemoConfig;
 use mnemo_server::config::RerankerConfig;
@@ -58,17 +62,9 @@ async fn main() -> anyhow::Result<()> {
     let config_path = std::env::var("MNEMO_CONFIG").ok();
     let config = MnemoConfig::load(config_path.as_deref())?;
 
-    // Logging
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.observability.log_level));
-    if config.observability.log_format == "json" {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .json()
-            .init();
-    } else {
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    }
+    // Logging + OpenTelemetry
+    let _otel_provider =
+        mnemo_server::telemetry::init_telemetry(&config.observability);
 
     tracing::info!("Starting Mnemo v{}", env!("CARGO_PKG_VERSION"));
 
@@ -609,8 +605,38 @@ async fn main() -> anyhow::Result<()> {
         addr
     );
 
-    axum::serve(listener, app.into_make_service()).await?;
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    // Flush any pending OTel spans before exit
+    mnemo_server::telemetry::shutdown_telemetry(_otel_provider);
     Ok(())
+}
+
+/// Wait for SIGTERM or Ctrl+C to initiate graceful shutdown.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => { tracing::info!("Ctrl+C received, shutting down"); },
+        _ = terminate => { tracing::info!("SIGTERM received, shutting down"); },
+    }
 }
 
 /// Build a combined router that serves both REST and gRPC on the same port.

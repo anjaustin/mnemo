@@ -122,6 +122,9 @@ log_level = "info"
 log_format = "pretty"
 # Enable Prometheus metrics endpoint at /metrics.
 metrics_enabled = true
-# Enable OpenTelemetry tracing.
+# Enable OpenTelemetry OTLP trace/metric export.
 otel_enabled = false
+# OTLP gRPC endpoint (e.g. "http://localhost:4317").
 otel_endpoint = ""
+# OpenTelemetry service name.
+otel_service_name = "mnemo-server"

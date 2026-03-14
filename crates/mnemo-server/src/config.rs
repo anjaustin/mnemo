@@ -242,6 +242,15 @@ pub struct ObservabilitySection {
     pub log_level: String,
     #[serde(default = "default_log_format")]
     pub log_format: String,
+    /// Enable OpenTelemetry OTLP trace/metric export.
+    #[serde(default)]
+    pub otel_enabled: bool,
+    /// OTLP gRPC endpoint (e.g. `http://localhost:4317`).
+    #[serde(default)]
+    pub otel_endpoint: String,
+    /// OpenTelemetry service name (defaults to "mnemo-server").
+    #[serde(default = "default_otel_service_name")]
+    pub otel_service_name: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -290,6 +299,9 @@ impl Default for ObservabilitySection {
         Self {
             log_level: default_log_level(),
             log_format: default_log_format(),
+            otel_enabled: false,
+            otel_endpoint: String::new(),
+            otel_service_name: default_otel_service_name(),
         }
     }
 }
@@ -354,6 +366,9 @@ fn default_log_level() -> String {
 }
 fn default_log_format() -> String {
     "pretty".into()
+}
+fn default_otel_service_name() -> String {
+    "mnemo-server".into()
 }
 fn default_webhook_enabled() -> bool {
     true
@@ -542,6 +557,17 @@ impl MnemoConfig {
             }
         }
 
+        // OpenTelemetry overrides
+        if let Ok(v) = std::env::var("MNEMO_OTEL_ENABLED") {
+            config.observability.otel_enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_OTEL_ENDPOINT") {
+            config.observability.otel_endpoint = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_OTEL_SERVICE_NAME") {
+            config.observability.otel_service_name = v;
+        }
+
         Ok(config)
     }
 
@@ -677,6 +703,13 @@ mod tests {
         assert_eq!(config.webhooks.circuit_breaker_cooldown_ms, 60_000);
         assert!(config.webhooks.persistence_enabled);
         assert_eq!(config.webhooks.persistence_prefix, "webhooks");
+
+        // Observability / OpenTelemetry
+        assert_eq!(config.observability.log_level, "info");
+        assert_eq!(config.observability.log_format, "pretty");
+        assert!(!config.observability.otel_enabled);
+        assert!(config.observability.otel_endpoint.is_empty());
+        assert_eq!(config.observability.otel_service_name, "mnemo-server");
     }
 
     #[test]
@@ -839,6 +872,23 @@ mod tests {
         assert_eq!(config.webhooks.circuit_breaker_cooldown_ms, 120_000);
         assert!(!config.webhooks.persistence_enabled);
         assert_eq!(config.webhooks.persistence_prefix, "custom_wh");
+
+        clear_mnemo_env();
+    }
+
+    #[test]
+    fn cfg02_env_overrides_otel() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_mnemo_env();
+
+        std::env::set_var("MNEMO_OTEL_ENABLED", "true");
+        std::env::set_var("MNEMO_OTEL_ENDPOINT", "http://collector:4317");
+        std::env::set_var("MNEMO_OTEL_SERVICE_NAME", "my-mnemo");
+
+        let config = MnemoConfig::load(None).unwrap();
+        assert!(config.observability.otel_enabled);
+        assert_eq!(config.observability.otel_endpoint, "http://collector:4317");
+        assert_eq!(config.observability.otel_service_name, "my-mnemo");
 
         clear_mnemo_env();
     }
