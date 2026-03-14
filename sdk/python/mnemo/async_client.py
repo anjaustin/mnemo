@@ -496,6 +496,62 @@ class AsyncMnemo:
             request_id=rid,
         )
 
+    # ── Resource deletion ───────────────────────────────────────────
+
+    async def delete_user(
+        self,
+        user_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> DeleteResult:
+        """Delete a user and all associated data (sessions, episodes, vectors).
+
+        .. warning::
+
+           This is irreversible. All memory for the user will be permanently
+           removed.
+        """
+        body, rid = await self._req(
+            "DELETE", f"/api/v1/users/{user_id}", request_id=request_id
+        )
+        return DeleteResult(deleted=True, request_id=rid)
+
+    async def delete_session(
+        self,
+        session_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> DeleteResult:
+        """Delete a session and all its episodes."""
+        body, rid = await self._req(
+            "DELETE", f"/api/v1/sessions/{session_id}", request_id=request_id
+        )
+        return DeleteResult(deleted=True, request_id=rid)
+
+    async def delete_entity(
+        self,
+        entity_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> DeleteResult:
+        """Delete a graph entity by UUID."""
+        body, rid = await self._req(
+            "DELETE", f"/api/v1/entities/{entity_id}", request_id=request_id
+        )
+        return DeleteResult(deleted=True, request_id=rid)
+
+    async def delete_edge(
+        self,
+        edge_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> DeleteResult:
+        """Delete a graph edge (fact) by UUID."""
+        body, rid = await self._req(
+            "DELETE", f"/api/v1/edges/{edge_id}", request_id=request_id
+        )
+        return DeleteResult(deleted=True, request_id=rid)
+
     # ── Time-travel ─────────────────────────────────────────────────
 
     async def context_head(
