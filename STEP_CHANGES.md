@@ -201,3 +201,173 @@ multi-agent memory control plane). Phases 2 and 3 make it better at being that t
 - How does the MCP (Model Context Protocol) integration play into multi-agent
   topology? MCP is becoming a standard for tool/context wiring — Mnemo's MCP server
   (`mnemo-mcp`) could be the natural surface for agent-to-agent memory sharing.
+
+---
+
+## LMM Horizon Exploration (Lincoln Manifold Method Pass)
+
+> Full journal: `journal/horizons_raw.md`, `journal/horizons_nodes.md`,
+> `journal/horizons_reflect.md`, `journal/horizons_synth.md`
+
+The three candidates above came from inside-out thinking — what the codebase can do
+next. An LMM pass flipped the lens to ask what external forces are shaping the
+possibility space. The method surfaced a deeper structural question that reframes
+the entire analysis.
+
+### The Two-Game Insight
+
+The candidates above are all **Game A (Infrastructure)** moves: "what feature should
+we add to the database?" The LMM process revealed a second game:
+
+- **Game A — Infrastructure:** Be the best memory database for AI agents. Compete on
+  retrieval quality, storage efficiency, compliance, and raw capability. Win by being
+  technically superior.
+- **Game B — Platform:** Be the memory *layer* that agents connect through. Compete on
+  ecosystem placement, developer experience, and network effects. Win by being where
+  agents already are.
+
+**Mnemo has been playing Game A while building Game B primitives by accident.** The
+RBAC, agent scoping, MCP server, namespace prefixes, graph layer — these are platform
+primitives wired up as infrastructure features. The phase change isn't adding a
+capability. It's reframing what the existing capabilities mean.
+
+### The Protocol Thesis
+
+**Reframe Mnemo from a memory database to a memory protocol.** Agents don't call REST
+endpoints — they connect via MCP and interact through protocol verbs: `publish`
+(observations), `subscribe` (knowledge domains), `query` (retrieval), `delegate`
+(share memory scope with another agent).
+
+Three surfaces, one protocol:
+
+```
+┌──────────────────────────────────────────────────────┐
+│                    MNEMO PROTOCOL                     │
+├──────────────────────────────────────────────────────┤
+│                                                       │
+│  Agent Surface (MCP)        ← agents connect here    │
+│    publish / subscribe / query / delegate             │
+│                                                       │
+│  Management Surface (REST)  ← operators/devs here    │
+│    CRUD / RBAC / audit / compliance / dashboard       │
+│                                                       │
+│  Intelligence Layer (GNN)   ← protocol brain          │
+│    contradiction detection / clustering /              │
+│    predictive retrieval / conflict resolution          │
+│                                                       │
+├──────────────────────────────────────────────────────┤
+│  Storage Plane (Redis + Qdrant)  ← commodity          │
+│    episodes / entities / relations / embeddings       │
+└──────────────────────────────────────────────────────┘
+```
+
+### Why Protocol > Database
+
+- **Provider absorption defense.** If Mnemo is a database, OpenAI/Anthropic/Google
+  can build one. If Mnemo is a protocol, providers become *clients* of it. Providers
+  adopt protocols; they don't build them.
+- **MCP as distribution.** Being the canonical MCP memory provider places Mnemo where
+  agents already connect. Distribution beats capability.
+- **Network effects.** A protocol creates network effects (more agents = more valuable
+  graph). A database creates switching costs. Different defensibility models.
+- **GNN finds its purpose.** Protocol intelligence — contradiction detection,
+  clustering, predictive retrieval over the live memory graph — is a graph inference
+  problem. The `mnemo-gnn` investment stops being speculative scaffolding.
+- **Embedding treadmill escape.** If retrieval quality comes from graph intelligence
+  over topology (structural) rather than vector similarity (parametric), Mnemo's
+  advantage is architectural, not tied to which embedding model is fastest this month.
+
+### Additional Horizon Ideas (from LMM exploration)
+
+Beyond the three candidates above, the LMM pass surfaced six additional possibilities:
+
+#### 4. Memory-as-Protocol (Pub/Sub for Agent Knowledge)
+
+Agents publish observations and subscribe to knowledge domains. Mnemo brokers conflict
+resolution, deduplication, and temporal ordering. Not CRUD for agent data — pub/sub
+for agent knowledge. This is the identity-level reframe described above.
+
+#### 5. Evaluation as Category Definition
+
+The AI memory space has no agreed-upon benchmarks. Mnemo's LongMemEval and temporal
+eval suites are ahead of competitors. Publishing the canonical benchmark suite as a
+standalone, open framework could simultaneously define the evaluation standard and
+position Mnemo favorably. Risk: looks self-serving if benchmarks only measure what
+Mnemo does well. Must be genuinely useful to be credible.
+
+#### 6. Streaming/Real-Time Memory
+
+WebSocket/SSE channel for live memory events. Agents subscribe to real-time updates
+as other agents publish observations. Not batch "ingest then retrieve" but continuous
+"publish and subscribe." Essential for long-running agent systems (support bots,
+research assistants, coding agents). In the protocol model, this is the protocol in
+motion — the live channel through which agents coordinate.
+
+#### 7. Procedural and Working Memory
+
+Current data model handles episodic and declarative memory. Unexplored: procedural
+memory (learned sequences of actions, tool-use patterns) and working memory (transient
+context relevant to the current task). In a protocol model, these become new
+observation types that agents publish, not new schema that Mnemo enforces. The data
+model becomes extensible by convention.
+
+#### 8. The "Supabase for AI Memory" DX Play
+
+Wrap the protocol in exceptional developer experience: hosted offering, one-click MCP
+integration, dashboard showing what agents remember, usage analytics, playground for
+testing retrieval. The protocol is the engine; the DX is the product. This is the
+adoption accelerant that turns technical capability into actual usage.
+
+#### 9. Memory Provenance and Audit Chains
+
+Every memory carries provenance: which agent contributed it, when, from what context,
+how confident. Audit chains trace how knowledge flowed through the agent topology.
+This is compliance infrastructure that also enables debugging ("why does agent B
+believe X?" — trace the provenance chain). Unique to a protocol model where multiple
+agents contribute to a shared knowledge graph.
+
+### Revised Recommendation
+
+The original recommendation (lead with multi-agent topology) still holds, but the
+LMM pass elevates it: **topology is not a feature to add — it's the reason the
+protocol exists.** The revised sequencing:
+
+```
+Phase 1 (v0.8.0):  Protocol foundation
+  - MCP protocol verbs (publish, subscribe, query, delegate)
+  - Memory scoping (agent-level visibility rules)
+  - Developer docs reframed around protocol identity
+
+Phase 2 (v0.9.0):  Topology and intelligence
+  - Delegation with inheritance (hierarchical scoping)
+  - Cross-agent conflict resolution (contradiction detection via mnemo-gnn)
+  - Streaming channel (WebSocket/SSE) for real-time memory events
+  - Benchmark suite published as standalone eval framework
+
+Phase 3 (v1.0.0):  Platform and DX
+  - Hosted offering (the "Supabase play")
+  - Provenance explorer and topology visualization in dashboard
+  - Procedural and working memory as observation types
+  - Enterprise tier: compliance controls, data residency, SLA
+```
+
+### Open-Core Model
+
+The protocol framing clarifies the business model:
+- **Free:** Protocol (MCP integration, basic memory operations, pub/sub)
+- **Paid:** Coordination (RBAC, encryption, audit trails, topology management,
+  compliance, data residency)
+
+Developer adoption through the free protocol; enterprise monetization through the
+coordination layer.
+
+### Tensions Resolved by the Protocol Framing
+
+| Tension | Resolution |
+|---------|------------|
+| Provider absorption vs. independence | Providers adopt protocols, they don't build them |
+| GNN investment vs. concrete use case | GNN = protocol intelligence (contradiction detection, clustering) |
+| 142 endpoints vs. PMF discovery | REST becomes management plane; MCP becomes the simple entry point |
+| Enterprise compliance vs. developer adoption | Free protocol for adoption; paid compliance for enterprise |
+| Streaming ambition vs. premature complexity | Streaming is the protocol in motion, not a bolted-on feature |
+| Data model assumptions vs. market definition | Protocol model makes the data model extensible by convention |
