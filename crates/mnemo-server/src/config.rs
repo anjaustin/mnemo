@@ -269,6 +269,15 @@ pub struct ObservabilitySection {
     /// OpenTelemetry service name (defaults to "mnemo-server").
     #[serde(default = "default_otel_service_name")]
     pub otel_service_name: String,
+    /// Enable TLS for the OTLP gRPC connection.
+    #[serde(default)]
+    pub otel_tls_enabled: bool,
+    /// Path to CA certificate for verifying the OTLP collector (PEM).
+    #[serde(default)]
+    pub otel_tls_ca_path: Option<String>,
+    /// Authorization header value for the OTLP collector (e.g. "Bearer <token>").
+    #[serde(default)]
+    pub otel_auth_header: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -320,6 +329,9 @@ impl Default for ObservabilitySection {
             otel_enabled: false,
             otel_endpoint: String::new(),
             otel_service_name: default_otel_service_name(),
+            otel_tls_enabled: false,
+            otel_tls_ca_path: None,
+            otel_auth_header: None,
         }
     }
 }
@@ -631,6 +643,15 @@ impl MnemoConfig {
         }
         if let Ok(v) = std::env::var("MNEMO_OTEL_SERVICE_NAME") {
             config.observability.otel_service_name = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_OTEL_TLS_ENABLED") {
+            config.observability.otel_tls_enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_OTEL_TLS_CA_PATH") {
+            config.observability.otel_tls_ca_path = Some(v);
+        }
+        if let Ok(v) = std::env::var("MNEMO_OTEL_AUTH_HEADER") {
+            config.observability.otel_auth_header = Some(v);
         }
 
         // Encryption overrides

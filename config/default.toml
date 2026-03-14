@@ -125,6 +125,12 @@ otel_enabled = false
 otel_endpoint = ""
 # OpenTelemetry service name.
 otel_service_name = "mnemo-server"
+# Enable TLS for the OTLP gRPC connection.
+otel_tls_enabled = false
+# Path to CA certificate (PEM) for verifying the OTLP collector.
+# otel_tls_ca_path = "/etc/ssl/certs/otel-ca.pem"
+# Authorization header for the OTLP collector (e.g. "Bearer <token>").
+# otel_auth_header = ""
 
 [encryption]
 # Enable BYOK envelope encryption for data at rest.

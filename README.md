@@ -207,7 +207,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Mnemo auth-exempt routes**: Unauthenticated routes (health, swagger, dashboard) receive a read-only `CallerContext::anonymous()`. Auth-disabled mode still grants admin via `CallerContext::admin_bootstrap()`.
 - **Mnemo OpenAPI paths**: The OpenAPI 3.1 spec registers schemas but has zero `#[utoipa::path]` annotations on handlers, so the spec contains no endpoint documentation yet. Swagger UI loads but shows only models.
 - **Mnemo BYOK key rotation**: BYOK supports a single `key_id` but has no multi-key decryption or rotation workflow. Rotating keys currently requires re-encrypting all data. This is a genuine gap for compliance-sensitive deployments.
-- **Mnemo OTLP security**: The OpenTelemetry exporter connects to the collector over plaintext gRPC. No TLS or bearer token auth configuration is available yet.
+- **Mnemo OTLP security**: The OpenTelemetry exporter supports TLS (`MNEMO_OTEL_TLS_ENABLED`, `MNEMO_OTEL_TLS_CA_PATH`) and auth headers (`MNEMO_OTEL_AUTH_HEADER`). Defaults to plaintext for local collectors.
 - **Mnemo internal types in OpenAPI**: `utoipa` derives on internal structs (e.g., `GraphNode`, `RedisEdge`) expose implementation details in the schema. Needs a DTO separation layer.
 - **Mnemo Helm Qdrant auth**: Qdrant API key auth is supported via `qdrant.apiKey` in Helm values and `MNEMO_QDRANT_API_KEY` env var. Disabled by default; NOTES.txt warns and provides configuration guidance when auth is off.
 - **Mnemo Helm Ingress TLS**: Ingress template supports TLS but defaults to disabled. NOTES.txt warns when ingress is enabled without TLS. Operators must configure cert-manager or bring their own TLS secret.
@@ -760,6 +760,9 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_OTEL_ENABLED` | Enable OpenTelemetry OTLP trace export | `false` |
 | `MNEMO_OTEL_ENDPOINT` | OTLP gRPC collector endpoint | `http://localhost:4317` |
 | `MNEMO_OTEL_SERVICE_NAME` | Service name reported in traces | `mnemo` |
+| `MNEMO_OTEL_TLS_ENABLED` | Enable TLS for OTLP gRPC connection | `false` |
+| `MNEMO_OTEL_TLS_CA_PATH` | Path to CA certificate (PEM) for verifying OTLP collector | (none) |
+| `MNEMO_OTEL_AUTH_HEADER` | Authorization header for OTLP collector (e.g. `Bearer <token>`) | (none) |
 
 For cloud targets that do not have a managed embedding API available, Mnemo also supports a self-hosted embedding path:
 

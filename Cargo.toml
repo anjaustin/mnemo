@@ -49,7 +49,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "regis
 # OpenTelemetry
 opentelemetry = { version = "0.27", features = ["trace", "metrics"] }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "trace", "metrics"] }
-opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "metrics", "grpc-tonic"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "metrics", "grpc-tonic", "tls"] }
 tracing-opentelemetry = { version = "0.28", features = ["metrics"] }
 
 # HTTP server

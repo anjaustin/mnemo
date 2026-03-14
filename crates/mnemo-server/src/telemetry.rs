@@ -12,8 +12,10 @@
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
+use tonic::metadata::MetadataMap;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -34,11 +36,41 @@ pub fn init_telemetry(obs: &ObservabilitySection) -> Option<TracerProvider> {
 
     if obs.otel_enabled && !obs.otel_endpoint.is_empty() {
         // Build OTLP span exporter via tonic gRPC
-        let exporter = match opentelemetry_otlp::SpanExporter::builder()
+        let mut tonic_builder = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
-            .with_endpoint(&obs.otel_endpoint)
-            .build()
-        {
+            .with_endpoint(&obs.otel_endpoint);
+
+        // TLS configuration
+        if obs.otel_tls_enabled {
+            let mut tls_config = tonic::transport::ClientTlsConfig::new();
+            if let Some(ref ca_path) = obs.otel_tls_ca_path {
+                match std::fs::read(ca_path) {
+                    Ok(pem) => {
+                        tls_config =
+                            tls_config.ca_certificate(tonic::transport::Certificate::from_pem(pem));
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "WARNING: Failed to read OTLP TLS CA certificate at {ca_path:?}: {err}. \
+                             Falling back to console-only tracing."
+                        );
+                        return init_fmt_only(obs, env_filter);
+                    }
+                }
+            }
+            tonic_builder = tonic_builder.with_tls_config(tls_config);
+        }
+
+        // Auth header (e.g., "Bearer <token>" or raw API key)
+        if let Some(ref auth_header) = obs.otel_auth_header {
+            let mut metadata = MetadataMap::new();
+            if let Ok(val) = auth_header.parse() {
+                metadata.insert("authorization", val);
+            }
+            tonic_builder = tonic_builder.with_metadata(metadata);
+        }
+
+        let exporter = match tonic_builder.build() {
             Ok(e) => e,
             Err(err) => {
                 // Fall back to fmt-only tracing — do not crash the server.
