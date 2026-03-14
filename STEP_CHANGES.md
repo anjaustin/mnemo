@@ -183,18 +183,43 @@ A hosted offering is a business milestone, not a technical one. It requires the
 product to be good enough that people want to pay for managed infrastructure. Get DX
 and topology right first; the hosted play follows naturally.
 
-### GNN as "Protocol Intelligence" — prove it or park it
+### GNN as "Protocol Intelligence" — **PARKED** (v0.9.0 gate executed)
 
 The `mnemo-gnn` crate exists as scaffolding. The promise — contradiction detection,
 predictive retrieval, conflict resolution over the memory graph — sounds compelling.
 But it's the same promise it had before, just in different framing.
 
-**Concrete gate:** benchmark GNN-based contradiction detection against simple
-heuristics (e.g., cosine similarity between entity facts with opposite sentiment).
-If GNN outperforms meaningfully, invest. If it doesn't, the crate is premature and
-should be parked until the graph is large enough for structural intelligence to matter.
+**Gate result (executed 2026-03-14):** `crates/mnemo-gnn/src/benchmark.rs`
 
-Do not invest further in GNN without this validation.
+| Approach          | Acc@1 |  P@3  | NDCG@5 | Lat (µs) |
+|-------------------|------:|------:|-------:|---------:|
+| cosine_heuristic  | 0.000 | 0.333 |  0.631 |    235   |
+| gnn_untrained     | 0.250 | 0.306 |  0.663 |   9597   |
+| gnn_trained       | 0.250 | 0.306 |  0.663 |   9125   |
+
+24 queries × 6 candidates, 1 contradiction per query (1/6 = 0.167 random baseline).
+
+**Finding:** The cosine heuristic (`1 − cosine`) fails at Acc@1 because contradictions
+share 2/3 of their embedding dimensions with the query (subject + predicate subspace).
+Raw cosine ranks contradictions as *more* similar than unrelated facts — the heuristic
+is structurally blind to the distinction between "corroborates" and "contradicts."
+
+The GNN reaches Acc@1 = 0.250 (beats random and beats heuristic) using explicit
+graph-structural edges (subject+predicate identity → edge weight 1.0). But 0.250 is
+only marginally above the 0.167 random baseline, and the GNN is **40× slower** than
+the heuristic (9ms vs 235µs per query) with no improvement after online training.
+
+**Verdict: PARK.** The current GAT architecture does not meaningfully outperform the
+cosine heuristic (>5% threshold not met on Acc@1 + P@3 jointly). The online training
+loop (output-projection-only gradient updates) is insufficient to learn the object-dim
+distinction from the graph structure alone.
+
+**Revisit conditions:**
+- Graph has 1000+ entities per user (structural signals dominate noisy embeddings)
+- Full backprop training on labeled real-world contradiction pairs is available
+- Embedding model separates subject/predicate/object into distinct subspaces natively
+
+Do not invest further in GNN until at least one revisit condition is met.
 
 ---
 
@@ -245,7 +270,7 @@ v0.9.0 — Topology + Retrieval Quality
   - Belief-change detection (temporal reasoning, selective)
   - Token-budget context assembly
   - Query-type-adaptive retrieval
-  - GNN validation benchmark (prove it or park it)
+  - GNN validation benchmark (**DONE — parked**, see benchmark results above)
   - Eval framework published as standalone tool
 
 v1.0.0 — Production Hardening for Multi-Agent

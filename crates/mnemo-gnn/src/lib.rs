@@ -11,6 +11,8 @@
 //! - Learns from feedback: which retrieved items the agent actually used
 //! - Weights persist in Redis via JSON serialization
 
+pub mod benchmark;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
