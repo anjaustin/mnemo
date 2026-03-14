@@ -1701,11 +1701,10 @@ async fn get_ops_compression(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let caller = caller_from_extension(caller);
     caller.require_role(ApiKeyRole::Admin)?;
-    Ok(Json(
-        state
-            .compression_stats
-            .to_json(&state.compression_config, state.embedding_dimensions),
-    ))
+    Ok(Json(state.compression_stats.to_json(
+        &state.compression_config,
+        state.embedding_dimensions,
+    )))
 }
 
 #[utoipa::path(
@@ -1725,7 +1724,9 @@ async fn get_ops_hyperbolic(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let caller = caller_from_extension(caller);
     caller.require_role(ApiKeyRole::Admin)?;
-    Ok(Json(serde_json::to_value(state.hyperbolic_config.status()).unwrap_or_default()))
+    Ok(Json(
+        serde_json::to_value(state.hyperbolic_config.status()).unwrap_or_default(),
+    ))
 }
 
 #[utoipa::path(
@@ -1745,7 +1746,9 @@ async fn get_ops_pipeline(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let caller = caller_from_extension(caller);
     caller.require_role(ApiKeyRole::Admin)?;
-    Ok(Json(serde_json::to_value(state.pipeline_metrics.status()).unwrap_or_default()))
+    Ok(Json(
+        serde_json::to_value(state.pipeline_metrics.status()).unwrap_or_default(),
+    ))
 }
 
 #[utoipa::path(

@@ -549,10 +549,8 @@ async fn main() -> anyhow::Result<()> {
             if origins.len() == 1 && origins[0] == "*" {
                 CorsLayer::permissive()
             } else {
-                let parsed: Vec<axum::http::HeaderValue> = origins
-                    .iter()
-                    .filter_map(|o| o.parse().ok())
-                    .collect();
+                let parsed: Vec<axum::http::HeaderValue> =
+                    origins.iter().filter_map(|o| o.parse().ok()).collect();
                 CorsLayer::new()
                     .allow_origin(AllowOrigin::list(parsed))
                     .allow_methods(Any)

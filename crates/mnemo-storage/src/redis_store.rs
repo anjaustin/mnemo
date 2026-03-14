@@ -1708,8 +1708,7 @@ impl SpanStore for RedisStateStore {
         let key = self.key(&["span", &span_id]);
         let global_zset = self.key(&["spans"]);
         let json = self.maybe_encrypt(
-            serde_json::to_string(span)
-                .map_err(|e| MnemoError::Serialization(e.to_string()))?,
+            serde_json::to_string(span).map_err(|e| MnemoError::Serialization(e.to_string()))?,
         )?;
         let score = span.started_at.timestamp_millis() as f64;
 
