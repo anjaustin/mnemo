@@ -10887,11 +10887,11 @@ async fn refresh_narrative(
 // ─── API Key Management (RBAC) ─────────────────────────────────────
 
 /// Extract the CallerContext injected by the auth middleware.
-/// Falls back to admin bootstrap if not present (auth disabled mode).
+/// Falls back to anonymous (read-only) if not present.
 fn caller_from_extension(caller: Option<Extension<CallerContext>>) -> CallerContext {
     caller
         .map(|Extension(c)| c)
-        .unwrap_or_else(CallerContext::admin_bootstrap)
+        .unwrap_or_else(CallerContext::anonymous)
 }
 
 async fn create_api_key(

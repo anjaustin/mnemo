@@ -213,12 +213,24 @@ pub struct CallerContext {
 }
 
 impl CallerContext {
-    /// Convenience: returns an admin context (for bootstrap key or auth-disabled mode).
+    /// Convenience: returns an admin context (for auth-disabled mode where the
+    /// operator explicitly opted out of authentication).
     pub fn admin_bootstrap() -> Self {
         Self {
             key_id: Uuid::nil(),
             key_name: "bootstrap".to_string(),
             role: ApiKeyRole::Admin,
+            scope: None,
+        }
+    }
+
+    /// Returns a minimal context for auth-exempt routes (health, swagger, dashboard).
+    /// Has Read-only role so it cannot escalate to protected endpoints.
+    pub fn anonymous() -> Self {
+        Self {
+            key_id: Uuid::nil(),
+            key_name: "anonymous".to_string(),
+            role: ApiKeyRole::Read,
             scope: None,
         }
     }
@@ -478,5 +490,27 @@ mod tests {
         assert_eq!(json, "\"confidential\"");
         let parsed: Classification = serde_json::from_str("\"public\"").unwrap();
         assert_eq!(parsed, Classification::Public);
+    }
+
+    #[test]
+    fn anonymous_context_is_read_only() {
+        let ctx = CallerContext::anonymous();
+        assert_eq!(ctx.role, ApiKeyRole::Read);
+        assert_eq!(ctx.key_name, "anonymous");
+        assert!(ctx.key_id.is_nil());
+        // anonymous cannot access admin or write endpoints
+        assert!(ctx.require_role(ApiKeyRole::Admin).is_err());
+        assert!(ctx.require_role(ApiKeyRole::Write).is_err());
+        assert!(ctx.require_role(ApiKeyRole::Read).is_ok());
+    }
+
+    #[test]
+    fn admin_bootstrap_context_is_admin() {
+        let ctx = CallerContext::admin_bootstrap();
+        assert_eq!(ctx.role, ApiKeyRole::Admin);
+        assert_eq!(ctx.key_name, "bootstrap");
+        assert!(ctx.require_role(ApiKeyRole::Admin).is_ok());
+        assert!(ctx.require_role(ApiKeyRole::Write).is_ok());
+        assert!(ctx.require_role(ApiKeyRole::Read).is_ok());
     }
 }

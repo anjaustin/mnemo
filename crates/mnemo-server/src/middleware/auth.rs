@@ -125,7 +125,7 @@ where
             return Box::pin(async move { inner.call(req).await });
         }
 
-        // ── Exempt paths ────────────────────────────────────────
+        // ── Exempt paths (anonymous / read-only context) ────────
         let path = req.uri().path();
         if path == "/health"
             || path == "/healthz"
@@ -135,8 +135,7 @@ where
             || path == "/api/v1/openapi.json"
             || path.starts_with("/swagger-ui")
         {
-            req.extensions_mut()
-                .insert(CallerContext::admin_bootstrap());
+            req.extensions_mut().insert(CallerContext::anonymous());
             let mut inner = self.inner.clone();
             return Box::pin(async move { inner.call(req).await });
         }
