@@ -43,6 +43,7 @@ import type {
   GraphEdgesResult,
   GraphEntitiesOptions,
   GraphEntitiesResult,
+  GraphEntityDetail,
   GraphNeighborsOptions,
   GraphNeighborsResult,
   GraphPathOptions,
@@ -89,6 +90,20 @@ export class MnemoError extends Error {
   ) {
     super(message);
     this.name = 'MnemoError';
+  }
+}
+
+export class MnemoConnectionError extends MnemoError {
+  constructor(message: string) {
+    super(message, undefined, 'connection_error');
+    this.name = 'MnemoConnectionError';
+  }
+}
+
+export class MnemoTimeoutError extends MnemoConnectionError {
+  constructor(message: string = 'Request timed out') {
+    super(message);
+    this.name = 'MnemoTimeoutError';
   }
 }
 
@@ -187,7 +202,16 @@ export class MnemoClient {
           const retryMs = (errBody['error'] as Record<string, unknown> | undefined)?.[
             'retry_after_ms'
           ] as number | undefined;
-          throw new MnemoRateLimitError(errMsg, retryMs);
+          // Parse Retry-After header (seconds) as fallback
+          const retryAfterHeader = res.headers.get('retry-after');
+          const retryAfterMs = retryMs ?? (retryAfterHeader ? parseFloat(retryAfterHeader) * 1000 : undefined);
+          if (attempt < this.maxRetries) {
+            const backoff = retryAfterMs ?? this.retryBackoffMs * Math.pow(2, attempt);
+            lastError = new MnemoRateLimitError(errMsg, retryAfterMs);
+            await sleep(backoff);
+            continue;
+          }
+          throw new MnemoRateLimitError(errMsg, retryAfterMs);
         }
         if (res.status >= 500 && attempt < this.maxRetries) {
           lastError = new MnemoError(errMsg, res.status, code);
@@ -198,10 +222,12 @@ export class MnemoClient {
         clearTimeout(timer);
         if (err instanceof MnemoError) throw err;
         if (err instanceof Error && err.name === 'AbortError') {
-          throw new MnemoError('Request timed out', undefined, 'timeout');
+          throw new MnemoTimeoutError('Request timed out');
         }
         lastError = err;
-        if (attempt >= this.maxRetries) throw err;
+        if (attempt >= this.maxRetries) {
+          throw new MnemoConnectionError(err instanceof Error ? err.message : String(err));
+        }
       }
     }
     throw lastError;
@@ -263,6 +289,18 @@ export class MnemoClient {
       requestId: options.requestId,
     });
     return { ...body, request_id: rid };
+  }
+
+  /**
+   * Retrieve only the most recent session head (fast path).
+   * Convenience wrapper for `context()` with `mode: 'head'`.
+   */
+  async contextHead(
+    user: string,
+    query: string,
+    options: Omit<ContextOptions, 'mode'> = {},
+  ): Promise<ContextResult> {
+    return this.context(user, query, { ...options, mode: 'head' });
   }
 
   // ─── Time Travel ─────────────────────────────────────────────────
@@ -376,13 +414,13 @@ export class MnemoClient {
     user: string,
     entityId: string,
     requestId?: string,
-  ): Promise<Record<string, unknown>> {
-    const [body] = await this.request<Record<string, unknown>>({
+  ): Promise<GraphEntityDetail> {
+    const [body, rid] = await this.request<GraphEntityDetail>({
       method: 'GET',
-      path: `/api/v1/graph/${encodeURIComponent(user)}/entities/${entityId}`,
+      path: `/api/v1/graph/${encodeURIComponent(user)}/entities/${encodeURIComponent(entityId)}`,
       requestId,
     });
-    return body;
+    return { ...body, request_id: rid };
   }
 
   /** List edges in the user's knowledge graph. */
@@ -565,6 +603,23 @@ export class MnemoClient {
       requestId: options.requestId,
     });
     return body.audit ?? [];
+  }
+
+  /** List governance policy violations for a user within an optional time range. */
+  async getPolicyViolations(
+    user: string,
+    options: { fromDt?: string; toDt?: string; limit?: number; requestId?: string } = {},
+  ): Promise<AuditRecord[]> {
+    const limit = options.limit ?? 50;
+    let path = `/api/v1/policies/${encodeURIComponent(user)}/violations?limit=${limit}`;
+    if (options.fromDt) path += `&from=${encodeURIComponent(options.fromDt)}`;
+    if (options.toDt) path += `&to=${encodeURIComponent(options.toDt)}`;
+    const [body] = await this.request<{ violations: AuditRecord[] }>({
+      method: 'GET',
+      path,
+      requestId: options.requestId,
+    });
+    return body.violations ?? [];
   }
 
   // ─── Webhooks ────────────────────────────────────────────────────

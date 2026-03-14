@@ -15,10 +15,14 @@
 export { MnemoClient } from './client.js';
 export {
   MnemoError,
+  MnemoConnectionError,
+  MnemoTimeoutError,
   MnemoNotFoundError,
   MnemoRateLimitError,
   MnemoValidationError,
 } from './client.js';
+
+export { WebhookEventType } from './types.js';
 
 export type {
   // Client options
@@ -40,6 +44,8 @@ export type {
   // Knowledge Graph
   GraphEntity,
   GraphEdge,
+  AdjacencyEdge,
+  GraphEntityDetail,
   GraphEntitiesResult,
   GraphEdgesResult,
   GraphNeighborNode,
@@ -64,6 +70,7 @@ export type {
   // Webhooks
   WebhookResult,
   WebhookEvent,
+  WebhookEventTypeValue,
   WebhookStats,
   ReplayResult,
   RetryResult,

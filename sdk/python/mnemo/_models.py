@@ -3,7 +3,40 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
+
+
+# ─── Webhook event types ──────────────────────────────────────────
+
+
+class WebhookEventType(str, Enum):
+    """All supported webhook event types.
+
+    Use these constants when creating or updating webhook subscriptions
+    instead of raw strings to avoid typos::
+
+        from mnemo import WebhookEventType
+        client.create_webhook(
+            user="alice",
+            target_url="https://example.com/hook",
+            events=[WebhookEventType.FACT_ADDED, WebhookEventType.FACT_SUPERSEDED],
+        )
+    """
+
+    FACT_ADDED = "fact_added"
+    FACT_SUPERSEDED = "fact_superseded"
+    HEAD_ADVANCED = "head_advanced"
+    CONFLICT_DETECTED = "conflict_detected"
+    REVALIDATION_NEEDED = "revalidation_needed"
+    CLARIFICATION_GENERATED = "clarification_generated"
+    CLARIFICATION_RESOLVED = "clarification_resolved"
+    NARRATIVE_REFRESHED = "narrative_refreshed"
+    PROMOTION_PROPOSED = "promotion_proposed"
+    PROMOTION_APPROVED = "promotion_approved"
+    PROMOTION_REJECTED = "promotion_rejected"
+    PROMOTION_EXPIRED = "promotion_expired"
+    PROMOTION_CONFLICT_DETECTED = "promotion_conflict_detected"
 
 
 # ─── High-level memory ─────────────────────────────────────────────

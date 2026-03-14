@@ -10,6 +10,7 @@ from ._errors import (
     MnemoValidationError,
 )
 from ._models import (
+    WebhookEventType,
     AgentContextResult,
     AgentIdentityAuditResult,
     AgentIdentityResult,
@@ -112,4 +113,6 @@ __all__ = [
     "ExperienceEventResult",
     "PromotionProposalResult",
     "AgentContextResult",
+    # Webhook event types
+    "WebhookEventType",
 ]

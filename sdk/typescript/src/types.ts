@@ -88,6 +88,33 @@ export interface GraphEdgesResult {
   request_id?: string;
 }
 
+export interface AdjacencyEdge {
+  id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  label: string;
+  fact: string;
+  confidence: number;
+  valid: boolean;
+  valid_at: string;
+  invalid_at?: string;
+}
+
+export interface GraphEntityDetail {
+  id: string;
+  name: string;
+  entity_type: string;
+  user_id: string;
+  summary?: string;
+  mention_count: number;
+  community_id?: string;
+  created_at: string;
+  updated_at: string;
+  outgoing_edges: AdjacencyEdge[];
+  incoming_edges: AdjacencyEdge[];
+  request_id?: string;
+}
+
 export interface GraphNeighborNode {
   id: string;
   name: string;
@@ -231,6 +258,32 @@ export interface PolicyResult {
   updated_at: string;
   request_id?: string;
 }
+
+// ─── Webhook Event Types ───────────────────────────────────────────
+
+/**
+ * All supported webhook event types.
+ *
+ * Use these constants when creating or updating webhook subscriptions
+ * instead of raw strings to avoid typos.
+ */
+export const WebhookEventType = {
+  FactAdded: 'fact_added',
+  FactSuperseded: 'fact_superseded',
+  HeadAdvanced: 'head_advanced',
+  ConflictDetected: 'conflict_detected',
+  RevalidationNeeded: 'revalidation_needed',
+  ClarificationGenerated: 'clarification_generated',
+  ClarificationResolved: 'clarification_resolved',
+  NarrativeRefreshed: 'narrative_refreshed',
+  PromotionProposed: 'promotion_proposed',
+  PromotionApproved: 'promotion_approved',
+  PromotionRejected: 'promotion_rejected',
+  PromotionExpired: 'promotion_expired',
+  PromotionConflictDetected: 'promotion_conflict_detected',
+} as const;
+
+export type WebhookEventTypeValue = typeof WebhookEventType[keyof typeof WebhookEventType];
 
 // ─── Webhooks ──────────────────────────────────────────────────────
 
