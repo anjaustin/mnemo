@@ -245,7 +245,12 @@ where
 
         for (edge_id, rrf_score) in edge_ids.iter().take(15) {
             if let Ok(edge) = self.state_store.get_edge(*edge_id).await {
-                // Agent-scoped retrieval: skip edges not from the requested agent
+                // Agent-scoped retrieval: skip edges not owned by the requested agent.
+                // NOTE: Legacy edges ingested before Spec 02 (agent provenance) have
+                // `source_agent_id = None`. When `request.agent_id` is set these edges
+                // are intentionally excluded — they carry no provenance and cannot be
+                // attributed to any specific agent. If cross-agent or legacy access is
+                // needed, callers should omit `agent_id` from the context request.
                 if let Some(ref req_agent) = request.agent_id {
                     if edge.source_agent_id.as_deref() != Some(req_agent.as_str()) {
                         continue;
@@ -300,6 +305,13 @@ where
                 }
                 if block.facts.iter().any(|f| f.id == edge.id) {
                     continue;
+                }
+                // Agent-scoped retrieval: graph traversal must also respect the filter.
+                // Same legacy-edge exclusion semantics apply here — see comment above.
+                if let Some(ref req_agent) = request.agent_id {
+                    if edge.source_agent_id.as_deref() != Some(req_agent.as_str()) {
+                        continue;
+                    }
                 }
 
                 let tgt_name = self

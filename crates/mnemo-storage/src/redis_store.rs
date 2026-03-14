@@ -440,6 +440,13 @@ impl SessionStore for RedisStateStore {
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
+        // Clean up agent_sessions index if session was agent-scoped
+        if let Some(ref aid) = session.agent_id {
+            let agent_sess_key = self.key(&["agent_sessions", aid]);
+            // Best-effort; ignore error if key doesn't exist
+            let _: redis::RedisResult<()> = conn.zrem(&agent_sess_key, id.to_string()).await;
+        }
+
         Ok(())
     }
 
@@ -893,9 +900,9 @@ impl AgentStore for RedisStateStore {
         &self,
         agent_id: &str,
         description: Option<String>,
-    ) -> StorageResult<AgentIdentityProfile> {
+    ) -> StorageResult<(bool, AgentIdentityProfile)> {
         let key = self.key(&["agent_identity", agent_id]);
-        let identity = match self.get_json::<AgentIdentityProfile>(&key).await? {
+        let (is_new, identity) = match self.get_json::<AgentIdentityProfile>(&key).await? {
             Some(mut existing) => {
                 // Update description in core if provided
                 if let Some(desc) = description {
@@ -908,7 +915,7 @@ impl AgentStore for RedisStateStore {
                     existing.updated_at = chrono::Utc::now();
                     self.set_json(&key, &existing).await?;
                 }
-                existing
+                (false, existing)
             }
             None => {
                 let mut identity = AgentIdentityProfile::new(agent_id.to_string());
@@ -925,10 +932,10 @@ impl AgentStore for RedisStateStore {
                     None,
                 )
                 .await?;
-                identity
+                (true, identity)
             }
         };
-        // Index in global agent registry
+        // Index in global agent registry (score = updated_at millis for stable cursor pagination)
         let agents_key = self.key(&["agents"]);
         let mut conn = self.conn.clone();
         conn.zadd::<_, _, _, ()>(
@@ -938,16 +945,36 @@ impl AgentStore for RedisStateStore {
         )
         .await
         .map_err(|e| MnemoError::Redis(e.to_string()))?;
-        Ok(identity)
+        Ok((is_new, identity))
     }
 
-    async fn list_agents(&self, limit: u32) -> StorageResult<Vec<AgentIdentityProfile>> {
+    async fn list_agents(
+        &self,
+        limit: u32,
+        after: Option<&str>,
+    ) -> StorageResult<Vec<AgentIdentityProfile>> {
         let agents_key = self.key(&["agents"]);
         let mut conn = self.conn.clone();
-        let agent_ids: Vec<String> = conn
-            .zrange(&agents_key, 0, limit as isize - 1)
+        // Guard: limit=0 would produce zrangebyscore -inf +inf with no limit — treat as 1
+        let effective_limit = limit.max(1) as isize;
+        let agent_ids: Vec<String> = if let Some(cursor) = after {
+            // cursor is the score (updated_at millis) of the last seen item;
+            // use ZRANGEBYSCORE with exclusive lower bound to page forward.
+            let min = format!("({}", cursor);
+            conn.zrangebyscore_limit(&agents_key, min, "+inf", 0, effective_limit)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?
+        } else {
+            conn.zrangebyscore_limit::<_, _, _, Vec<String>>(
+                &agents_key,
+                "-inf",
+                "+inf",
+                0,
+                effective_limit,
+            )
             .await
-            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+            .map_err(|e| MnemoError::Redis(e.to_string()))?
+        };
         let mut profiles = Vec::with_capacity(agent_ids.len());
         for id in agent_ids {
             if let Ok(profile) = self.get_agent_identity(&id).await {
@@ -970,12 +997,17 @@ impl AgentStore for RedisStateStore {
         .await?;
         // Delete identity
         self.del(&key).await?;
-        // Remove from global index
+        // Remove from global index and secondary indexes
         let agents_key = self.key(&["agents"]);
+        let agent_ep_key = self.key(&["agent_episodes", agent_id]);
+        let agent_sess_key = self.key(&["agent_sessions", agent_id]);
         let mut conn = self.conn.clone();
         conn.zrem::<_, _, ()>(&agents_key, agent_id)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        // Best-effort cleanup of episode/session indexes; ignore errors (may not exist)
+        let _: redis::RedisResult<()> = conn.del(&agent_ep_key).await;
+        let _: redis::RedisResult<()> = conn.del(&agent_sess_key).await;
         Ok(())
     }
 
@@ -995,9 +1027,34 @@ impl AgentStore for RedisStateStore {
                     None,
                 )
                 .await?;
+                // Index in global agent registry so list_agents can discover it
+                let agents_key = self.key(&["agents"]);
+                let mut conn = self.conn.clone();
+                conn.zadd::<_, _, _, ()>(
+                    &agents_key,
+                    agent_id,
+                    identity.updated_at.timestamp_millis() as f64,
+                )
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
                 Ok(identity)
             }
         }
+    }
+
+    async fn get_agent_identity_strict(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<AgentIdentityProfile> {
+        let key = self.key(&["agent_identity", agent_id]);
+        self.get_json_required::<AgentIdentityProfile>(
+            &key,
+            MnemoError::NotFound {
+                resource_type: "agent".to_string(),
+                id: agent_id.to_string(),
+            },
+        )
+        .await
     }
 
     async fn update_agent_identity(
@@ -2463,8 +2520,15 @@ impl GuardrailStore for RedisStateStore {
         Ok(rules)
     }
 
-    async fn list_guardrails_for_user(&self, user_id: Uuid) -> StorageResult<Vec<GuardrailRule>> {
-        // Load all rules and filter to global + matching user scope
+    async fn list_guardrails_for_user(
+        &self,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) -> StorageResult<Vec<GuardrailRule>> {
+        // Load all rules and filter to:
+        // - Global rules (always)
+        // - User-scoped rules matching this user
+        // - Agent-scoped rules ONLY when agent_id matches exactly (never leak other agents' rules)
         let all = self.list_guardrails().await?;
         let mut applicable: Vec<GuardrailRule> = all
             .into_iter()
@@ -2473,7 +2537,9 @@ impl GuardrailStore for RedisStateStore {
                 mnemo_core::models::guardrail::GuardrailScope::User { user_id: uid } => {
                     *uid == user_id
                 }
-                mnemo_core::models::guardrail::GuardrailScope::Agent { .. } => true,
+                mnemo_core::models::guardrail::GuardrailScope::Agent {
+                    agent_id: rule_agent,
+                } => agent_id == Some(rule_agent.as_str()),
             })
             .collect();
         applicable.sort_by_key(|r| r.priority);

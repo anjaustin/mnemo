@@ -93,12 +93,20 @@ impl From<MnemoError> for AppError {
 struct ListResponse<T: Serialize> {
     data: Vec<T>,
     count: usize,
+    /// Opaque cursor for fetching the next page. Absent when there are no more results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
 }
 
 impl<T: Serialize> ListResponse<T> {
     fn new(data: Vec<T>) -> Self {
         let count = data.len();
-        Self { data, count }
+        Self { data, count, next_cursor: None }
+    }
+
+    fn with_cursor(data: Vec<T>, next_cursor: Option<String>) -> Self {
+        let count = data.len();
+        Self { data, count, next_cursor }
     }
 }
 
@@ -114,6 +122,15 @@ pub struct PaginationParams {
     #[serde(default = "default_limit")]
     limit: u32,
     after: Option<Uuid>,
+}
+
+/// Pagination params for the agents list endpoint.
+/// `after` is an opaque string cursor (timestamp millis) from a previous `next_cursor` field.
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
+pub struct AgentPaginationParams {
+    #[serde(default = "default_limit")]
+    limit: u32,
+    after: Option<String>,
 }
 
 fn default_limit() -> u32 {
@@ -2965,7 +2982,7 @@ async fn add_episode(
     // ─── Write-path guardrails ──────────────────────────────────
     let guardrail_rules = state
         .state_store
-        .list_guardrails_for_user(session.user_id)
+        .list_guardrails_for_user(session.user_id, agent_id.as_deref())
         .await
         .unwrap_or_default();
     if !guardrail_rules.is_empty() {
@@ -3030,17 +3047,23 @@ async fn add_episode(
 async fn add_episodes_batch(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     headers: axum::http::HeaderMap,
     Path(session_id): Path<Uuid>,
     Json(req): Json<BatchCreateEpisodesRequest>,
 ) -> Result<(StatusCode, Json<ListResponse<Episode>>), AppError> {
     let request_id = request_id_from_extension(ctx);
-    // Batch-level agent_id from header (individual episode agent_id takes precedence per-episode)
-    let batch_agent_id = headers
+    let caller = caller_from_extension(caller);
+    // Batch-level agent_id fallback from header; per-episode agent_id field takes precedence
+    let header_agent_id = headers
         .get("x-agent-id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    // Authorize: if a batch-level agent_id is present (header), check access once
+    if let Some(ref aid) = header_agent_id {
+        caller.require_agent_access(aid).map_err(AppError)?;
+    }
     let session = state.state_store.get_session(session_id).await?;
     let policy =
         get_or_create_user_policy(&state, session.user_id, session.user_id.to_string()).await;
@@ -3051,18 +3074,30 @@ async fn add_episodes_batch(
                 idx, err.0
             ))));
         }
+        // Per-episode agent_id auth: if the episode overrides with its own agent_id, check that too
+        if let Some(ref ep_aid) = ep.agent_id {
+            if header_agent_id.as_deref() != Some(ep_aid.as_str()) {
+                caller.require_agent_access(ep_aid).map_err(AppError)?;
+            }
+        }
     }
     let episodes_req: Vec<CreateEpisodeRequest> = req
         .episodes
         .into_iter()
-        .map(|ep| CreateEpisodeRequest {
-            metadata: metadata_with_request_id(ep.metadata, request_id.as_deref()),
-            ..ep
+        .map(|ep| {
+            // Per-episode agent_id takes precedence; fall back to header
+            let resolved_agent_id = ep.agent_id.clone().or_else(|| header_agent_id.clone());
+            CreateEpisodeRequest {
+                metadata: metadata_with_request_id(ep.metadata.clone(), request_id.as_deref()),
+                agent_id: resolved_agent_id,
+                ..ep
+            }
         })
         .collect();
+    // Pass None as the storage-level agent_id since each episode already has it resolved
     let episodes = state
         .state_store
-        .create_episodes_batch(episodes_req, session_id, session.user_id, batch_agent_id)
+        .create_episodes_batch(episodes_req, session_id, session.user_id, None)
         .await?;
 
     if let Some(last) = episodes.last() {
@@ -5272,7 +5307,7 @@ async fn get_memory_context(
     // Actions: Redact (remove), Reclassify (upgrade classification), Warn, AuditOnly.
     let guardrail_rules = state
         .state_store
-        .list_guardrails_for_user(user.id)
+        .list_guardrails_for_user(user.id, None)
         .await
         .unwrap_or_default();
     let mut guardrail_warnings: Vec<String> = Vec::new();
@@ -7629,7 +7664,8 @@ struct RegisterAgentRequest {
     description = "Register or upsert an agent. Returns the agent identity profile.",
     request_body = RegisterAgentRequest,
     responses(
-        (status = 201, description = "Agent registered", body = AgentIdentityProfile),
+        (status = 201, description = "Agent created", body = AgentIdentityProfile),
+        (status = 200, description = "Agent updated", body = AgentIdentityProfile),
     ),
     security(("bearer" = []), ("api_key" = [])),
 )]
@@ -7638,11 +7674,12 @@ async fn register_agent(
     Json(req): Json<RegisterAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentIdentityProfile>), AppError> {
     let agent_id = normalize_agent_id(&req.agent_id)?;
-    let profile = state
+    let (is_new, profile) = state
         .state_store
         .register_agent(&agent_id, req.description)
         .await?;
-    Ok((StatusCode::CREATED, Json(profile)))
+    let status = if is_new { StatusCode::CREATED } else { StatusCode::OK };
+    Ok((status, Json(profile)))
 }
 
 #[utoipa::path(
@@ -7657,11 +7694,23 @@ async fn register_agent(
 )]
 async fn list_agents_handler(
     State(state): State<AppState>,
-    Query(params): Query<PaginationParams>,
+    Query(params): Query<AgentPaginationParams>,
 ) -> Result<Json<ListResponse<AgentIdentityProfile>>, AppError> {
     let limit = params.limit.min(500);
-    let agents = state.state_store.list_agents(limit).await?;
-    Ok(Json(ListResponse::new(agents)))
+    let agents = state
+        .state_store
+        .list_agents(limit, params.after.as_deref())
+        .await?;
+    // Produce a next_cursor from the updated_at millis of the last returned profile.
+    // The cursor is only present when a full page was returned (indicating more may exist).
+    let next_cursor = if agents.len() == limit as usize {
+        agents
+            .last()
+            .map(|p| p.updated_at.timestamp_millis().to_string())
+    } else {
+        None
+    };
+    Ok(Json(ListResponse::with_cursor(agents, next_cursor)))
 }
 
 #[utoipa::path(
@@ -7680,7 +7729,11 @@ async fn get_agent_handler(
     Path(agent_id): Path<String>,
 ) -> Result<Json<AgentIdentityProfile>, AppError> {
     let agent_id = normalize_agent_id(&agent_id)?;
-    let profile = state.state_store.get_agent_identity(&agent_id).await?;
+    // Use strict variant — GET must not create agents (404 for unregistered agents)
+    let profile = state
+        .state_store
+        .get_agent_identity_strict(&agent_id)
+        .await?;
     Ok(Json(profile))
 }
 
@@ -13055,7 +13108,7 @@ async fn evaluate_guardrails(
     caller.require_role(ApiKeyRole::Read)?;
 
     let rules = match body.user_id {
-        Some(uid) => state.state_store.list_guardrails_for_user(uid).await?,
+        Some(uid) => state.state_store.list_guardrails_for_user(uid, None).await?,
         None => state.state_store.list_guardrails().await?,
     };
 

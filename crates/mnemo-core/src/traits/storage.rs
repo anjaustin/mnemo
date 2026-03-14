@@ -27,17 +27,33 @@ use crate::models::{
 /// promotion proposals, approval policies, and witness chain audit events.
 #[allow(async_fn_in_trait)]
 pub trait AgentStore: Send + Sync {
-    /// Register or get an agent. Creates the identity if it doesn't exist.
+    /// Register or update an agent. Returns `(is_new, profile)` where `is_new` is `true`
+    /// when the agent was created for the first time (callers should respond with 201),
+    /// and `false` when an existing agent was updated (callers should respond with 200).
     async fn register_agent(
         &self,
         agent_id: &str,
         description: Option<String>,
-    ) -> StorageResult<AgentIdentityProfile>;
-    /// List all registered agents (ordered by registration time).
-    async fn list_agents(&self, limit: u32) -> StorageResult<Vec<AgentIdentityProfile>>;
+    ) -> StorageResult<(bool, AgentIdentityProfile)>;
+    /// List all registered agents ordered by registration/update time.
+    /// `after` is an opaque cursor (the `updated_at` timestamp in milliseconds as a string)
+    /// returned in the `next_cursor` field of a previous response; pass `None` for the first page.
+    /// `limit` must be >= 1; passing 0 is treated as 1.
+    async fn list_agents(
+        &self,
+        limit: u32,
+        after: Option<&str>,
+    ) -> StorageResult<Vec<AgentIdentityProfile>>;
     /// Delete an agent and all associated identity data.
     async fn delete_agent(&self, agent_id: &str) -> StorageResult<()>;
+    /// Get an agent identity profile. Auto-creates the profile if it does not exist.
     async fn get_agent_identity(&self, agent_id: &str) -> StorageResult<AgentIdentityProfile>;
+    /// Get an agent identity profile. Returns `NotFound` (404) if the agent has not been
+    /// explicitly registered — does NOT auto-create.
+    async fn get_agent_identity_strict(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<AgentIdentityProfile>;
     async fn update_agent_identity(
         &self,
         agent_id: &str,
@@ -589,7 +605,14 @@ pub trait GuardrailStore: Send + Sync {
     async fn list_guardrails(&self) -> StorageResult<Vec<GuardrailRule>>;
 
     /// List rules for a specific user (user-scoped + global), ordered by priority.
-    async fn list_guardrails_for_user(&self, user_id: Uuid) -> StorageResult<Vec<GuardrailRule>>;
+    /// Return guardrail rules applicable for a given user and optional agent context.
+    /// Global rules are always included. User-scoped rules are included for the matching user.
+    /// Agent-scoped rules are ONLY included when `agent_id` matches — never for other agents.
+    async fn list_guardrails_for_user(
+        &self,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) -> StorageResult<Vec<GuardrailRule>>;
 
     /// Update a rule.
     async fn update_guardrail(&self, rule: &GuardrailRule) -> StorageResult<()>;
