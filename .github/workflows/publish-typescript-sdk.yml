@@ -32,7 +32,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: sdk/typescript
-        run: npm ci --ignore-scripts
+        run: npm install --ignore-scripts
 
       - name: Build
         working-directory: sdk/typescript

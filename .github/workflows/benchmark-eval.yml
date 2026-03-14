@@ -82,6 +82,15 @@ jobs:
 
       - name: Run Mnemo benchmark (default)
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.benchmark_target == 'mnemo' || github.event.inputs.benchmark_target == 'both'
+        env:
+          MNEMO_SERVER_HOST: "127.0.0.1"
+          MNEMO_SERVER_PORT: "8080"
+          MNEMO_REDIS_URL: "redis://localhost:6379"
+          MNEMO_QDRANT_URL: "http://localhost:6334"
+          MNEMO_QDRANT_PREFIX: "mnemo_"
+          MNEMO_EMBEDDING_PROVIDER: "local"
+          MNEMO_EMBEDDING_MODEL: "AllMiniLML6V2"
+          MNEMO_EMBEDDING_DIMENSIONS: "384"
         run: |
           target/debug/mnemo-server >/tmp/mnemo_eval.log 2>&1 &
           SERVER_PID=$!
@@ -95,6 +104,15 @@ jobs:
 
       - name: Run LongMemEval benchmark (Mnemo)
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.benchmark_target == 'mnemo' || github.event.inputs.benchmark_target == 'both'
+        env:
+          MNEMO_SERVER_HOST: "127.0.0.1"
+          MNEMO_SERVER_PORT: "8080"
+          MNEMO_REDIS_URL: "redis://localhost:6379"
+          MNEMO_QDRANT_URL: "http://localhost:6334"
+          MNEMO_QDRANT_PREFIX: "mnemo_"
+          MNEMO_EMBEDDING_PROVIDER: "local"
+          MNEMO_EMBEDDING_MODEL: "AllMiniLML6V2"
+          MNEMO_EMBEDDING_DIMENSIONS: "384"
         run: |
           target/debug/mnemo-server >/tmp/mnemo_longmem.log 2>&1 &
           SERVER_PID=$!
@@ -109,6 +127,14 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && (github.event.inputs.benchmark_target == 'zep' || github.event.inputs.benchmark_target == 'both')
         env:
           ZEP_API_KEY: ${{ secrets.ZEP_API_KEY }}
+          MNEMO_SERVER_HOST: "127.0.0.1"
+          MNEMO_SERVER_PORT: "8080"
+          MNEMO_REDIS_URL: "redis://localhost:6379"
+          MNEMO_QDRANT_URL: "http://localhost:6334"
+          MNEMO_QDRANT_PREFIX: "mnemo_"
+          MNEMO_EMBEDDING_PROVIDER: "local"
+          MNEMO_EMBEDDING_MODEL: "AllMiniLML6V2"
+          MNEMO_EMBEDDING_DIMENSIONS: "384"
         run: |
           if [ -z "$ZEP_API_KEY" ]; then
             echo "Missing required secret: ZEP_API_KEY"
