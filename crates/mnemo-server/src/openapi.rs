@@ -152,8 +152,201 @@ use crate::state::{
         (name = "import", description = "Chat history import"),
         (name = "vectors", description = "Raw vector API for direct Qdrant access"),
     ),
+    paths(
+        // ── health ───────────────────────────────────────────────────
+        crate::routes::health,
+        crate::routes::metrics,
+        // ── ops ──────────────────────────────────────────────────────
+        crate::routes::get_ops_summary,
+        crate::routes::get_ops_compression,
+        crate::routes::get_ops_hyperbolic,
+        crate::routes::get_ops_pipeline,
+        crate::routes::get_ops_sync,
+        crate::routes::get_ops_incidents,
+        crate::routes::get_trace_by_request_id,
+        crate::routes::export_webhook_evidence_bundle,
+        crate::routes::export_governance_evidence_bundle,
+        crate::routes::export_trace_evidence_bundle,
+        crate::routes::audit_export,
+        // ── keys ─────────────────────────────────────────────────────
+        crate::routes::create_api_key,
+        crate::routes::list_api_keys,
+        crate::routes::revoke_api_key,
+        crate::routes::rotate_api_key,
+        // ── import ───────────────────────────────────────────────────
+        crate::routes::import_chat_history,
+        crate::routes::get_import_job,
+        // ── users ────────────────────────────────────────────────────
+        crate::routes::create_user,
+        crate::routes::get_user,
+        crate::routes::get_user_by_external_id,
+        crate::routes::update_user,
+        crate::routes::delete_user,
+        crate::routes::list_users,
+        // ── sessions ─────────────────────────────────────────────────
+        crate::routes::create_session,
+        crate::routes::get_session,
+        crate::routes::update_session,
+        crate::routes::delete_session,
+        crate::routes::list_user_sessions,
+        // ── episodes ─────────────────────────────────────────────────
+        crate::routes::add_episode,
+        crate::routes::add_episodes_batch,
+        crate::routes::get_episode,
+        crate::routes::list_episodes,
+        crate::routes::get_session_messages,
+        crate::routes::delete_session_messages,
+        crate::routes::delete_session_message_by_idx,
+        // ── memory ───────────────────────────────────────────────────
+        crate::routes::get_context,
+        crate::routes::remember_memory,
+        crate::routes::extract_memory,
+        crate::routes::get_memory_context,
+        crate::routes::memory_changes_since,
+        crate::routes::time_travel_trace,
+        crate::routes::time_travel_summary,
+        crate::routes::conflict_radar,
+        crate::routes::causal_recall_chains,
+        crate::routes::memory_retrieval_feedback,
+        crate::routes::get_memory_digest,
+        crate::routes::refresh_memory_digest,
+        crate::routes::get_user_coherence,
+        crate::routes::get_stale_facts,
+        crate::routes::revalidate_fact,
+        crate::routes::counterfactual_context,
+        // ── entities ─────────────────────────────────────────────────
+        crate::routes::list_entities,
+        crate::routes::get_entity,
+        crate::routes::delete_entity,
+        crate::routes::patch_entity_classification,
+        // ── edges ────────────────────────────────────────────────────
+        crate::routes::query_edges,
+        crate::routes::get_edge,
+        crate::routes::delete_edge,
+        crate::routes::patch_edge_classification,
+        // ── graph ────────────────────────────────────────────────────
+        crate::routes::get_subgraph,
+        crate::routes::graph_list_entities,
+        crate::routes::graph_get_entity,
+        crate::routes::graph_list_edges,
+        crate::routes::graph_neighbors,
+        crate::routes::graph_community,
+        crate::routes::graph_shortest_path,
+        // ── spans ────────────────────────────────────────────────────
+        crate::routes::list_spans_by_request,
+        crate::routes::list_spans_by_user,
+        // ── agents ───────────────────────────────────────────────────
+        crate::routes::get_agent_identity,
+        crate::routes::update_agent_identity,
+        crate::routes::list_agent_identity_versions,
+        crate::routes::list_agent_identity_audit,
+        crate::routes::verify_agent_audit_chain,
+        crate::routes::rollback_agent_identity,
+        crate::routes::verified_identity_update,
+        crate::routes::add_agent_experience,
+        crate::routes::list_experience_importance,
+        crate::routes::create_promotion_proposal,
+        crate::routes::list_promotion_proposals,
+        crate::routes::approve_promotion_proposal,
+        crate::routes::reject_promotion_proposal,
+        crate::routes::get_promotion_conflicts,
+        crate::routes::set_agent_approval_policy,
+        crate::routes::get_agent_approval_policy,
+        crate::routes::create_agent_branch,
+        crate::routes::fork_agent,
+        crate::routes::list_agent_branches,
+        crate::routes::get_agent_branch,
+        crate::routes::update_agent_branch,
+        crate::routes::merge_agent_branch,
+        crate::routes::delete_agent_branch,
+        crate::routes::get_agent_context,
+        // ── views ────────────────────────────────────────────────────
+        crate::routes::create_view,
+        crate::routes::list_views,
+        crate::routes::get_view,
+        crate::routes::update_view,
+        crate::routes::delete_view,
+        // ── guardrails ───────────────────────────────────────────────
+        crate::routes::create_guardrail,
+        crate::routes::list_guardrails,
+        crate::routes::get_guardrail,
+        crate::routes::update_guardrail,
+        crate::routes::delete_guardrail,
+        crate::routes::evaluate_guardrails,
+        // ── regions ──────────────────────────────────────────────────
+        crate::routes::create_region,
+        crate::routes::list_regions,
+        crate::routes::get_region,
+        crate::routes::update_region,
+        crate::routes::delete_region,
+        crate::routes::grant_region_access,
+        crate::routes::list_region_acls,
+        crate::routes::revoke_region_access,
+        // ── webhooks ─────────────────────────────────────────────────
+        crate::routes::register_memory_webhook,
+        crate::routes::list_memory_webhooks,
+        crate::routes::get_memory_webhook,
+        crate::routes::update_memory_webhook,
+        crate::routes::delete_memory_webhook,
+        crate::routes::list_memory_webhook_events,
+        crate::routes::replay_memory_webhook_events,
+        crate::routes::retry_memory_webhook_event,
+        crate::routes::list_memory_webhook_dead_letters,
+        crate::routes::get_memory_webhook_stats,
+        crate::routes::list_memory_webhook_audit,
+        // ── goals ────────────────────────────────────────────────────
+        crate::routes::list_goal_profiles,
+        crate::routes::create_goal_profile,
+        crate::routes::get_goal_profile,
+        crate::routes::update_goal_profile,
+        crate::routes::delete_goal_profile,
+        // ── narrative ────────────────────────────────────────────────
+        crate::routes::get_narrative,
+        crate::routes::delete_narrative,
+        crate::routes::refresh_narrative,
+        // ── clarifications ───────────────────────────────────────────
+        crate::routes::list_clarifications,
+        crate::routes::generate_clarifications,
+        crate::routes::resolve_clarification,
+        crate::routes::dismiss_clarification,
+        // ── vectors ──────────────────────────────────────────────────
+        crate::routes::vectors_upsert,
+        crate::routes::vectors_query,
+        crate::routes::vectors_delete_ids,
+        crate::routes::vectors_delete_namespace,
+        crate::routes::vectors_count,
+        crate::routes::vectors_exists,
+    ),
+    modifiers(&SecurityAddon),
 )]
 pub struct MnemoApiDoc;
+
+/// Adds Bearer and API-key security schemes to the OpenAPI spec.
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "bearer",
+            utoipa::openapi::security::SecurityScheme::Http(
+                utoipa::openapi::security::HttpBuilder::new()
+                    .scheme(utoipa::openapi::security::HttpAuthScheme::Bearer)
+                    .bearer_format("Mnemo API Key")
+                    .description(Some("Pass API key via `Authorization: Bearer <key>`"))
+                    .build(),
+            ),
+        );
+        components.add_security_scheme(
+            "api_key",
+            utoipa::openapi::security::SecurityScheme::ApiKey(
+                utoipa::openapi::security::ApiKey::Header(
+                    utoipa::openapi::security::ApiKeyValue::new("X-Api-Key"),
+                ),
+            ),
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {

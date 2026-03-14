@@ -103,7 +103,7 @@ pub struct ExtractedRelationship {
 }
 
 /// Query parameters for filtering edges.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct EdgeFilter {
     /// Filter by source entity.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -333,7 +333,7 @@ pub struct RevalidateFactResult {
 }
 
 /// Query parameters for the stale facts endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct StaleFactsQuery {
     /// Revalidation threshold (default: 0.3). Facts below this effective
     /// confidence are considered stale.

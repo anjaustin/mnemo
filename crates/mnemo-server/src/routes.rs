@@ -15,7 +15,9 @@ use sha2::Sha256;
 use tracing::warn;
 
 use mnemo_core::error::{ApiErrorResponse, MnemoError};
-use mnemo_core::models::api_key::{ApiKeyRole, CallerContext, CreateApiKeyRequest};
+use mnemo_core::models::api_key::{
+    ApiKeyRole, CallerContext, CreateApiKeyRequest, CreateApiKeyResponse,
+};
 use mnemo_core::models::classification::Classification;
 use mnemo_core::models::guardrail::{
     evaluate_rules, validate_condition_regexes, validate_guardrail_name, CreateGuardrailRequest,
@@ -107,7 +109,7 @@ struct DeleteResponse {
 
 // ─── Pagination query params ───────────────────────────────────────
 
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct PaginationParams {
     #[serde(default = "default_limit")]
     limit: u32,
@@ -1390,6 +1392,15 @@ struct HealthResponse {
     version: String,
 }
 
+#[utoipa::path(
+    get, path = "/health",
+    tag = "health",
+    summary = "Liveness probe",
+    description = "Returns 200 with version info. Also available at /healthz.",
+    responses(
+        (status = 200, description = "Service is healthy", body = HealthResponse),
+    ),
+)]
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".into(),
@@ -1397,6 +1408,15 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
+#[utoipa::path(
+    get, path = "/metrics",
+    tag = "health",
+    summary = "Prometheus metrics",
+    description = "Returns Prometheus text-format metrics for scraping.",
+    responses(
+        (status = 200, description = "Prometheus metrics", content_type = "text/plain"),
+    ),
+)]
 async fn metrics(
     State(state): State<AppState>,
 ) -> (StatusCode, [(&'static str, &'static str); 1], String) {
@@ -1546,6 +1566,18 @@ mnemo_agent_promotion_proposals_total {}\n",
     )
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/ops/summary",
+    tag = "ops",
+    summary = "Operator dashboard summary",
+    description = "Returns aggregate counters for HTTP, webhooks, governance, and agent operations within a time window.",
+    params(OpsSummaryQuery),
+    responses(
+        (status = 200, description = "Summary counters", body = OpsSummaryResponse),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_ops_summary(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -1652,6 +1684,17 @@ async fn get_ops_summary(
 
 // ─── Temporal Tensor Compression ───────────────────────────────────
 
+#[utoipa::path(
+    get, path = "/api/v1/ops/compression",
+    tag = "ops",
+    summary = "Temporal tensor compression stats",
+    description = "Returns compression tier counts, quantization metrics, and configuration.",
+    responses(
+        (status = 200, description = "Compression stats", body = Object),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_ops_compression(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -1665,6 +1708,17 @@ async fn get_ops_compression(
     ))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/ops/hyperbolic",
+    tag = "ops",
+    summary = "Hyperbolic embedding status",
+    description = "Returns the status and configuration of the hyperbolic embedding subsystem.",
+    responses(
+        (status = 200, description = "Hyperbolic status", body = Object),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_ops_hyperbolic(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -1674,6 +1728,17 @@ async fn get_ops_hyperbolic(
     Ok(Json(serde_json::to_value(state.hyperbolic_config.status()).unwrap_or_default()))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/ops/pipeline",
+    tag = "ops",
+    summary = "Ingest pipeline status",
+    description = "Returns the status and throughput metrics of the ingest pipeline.",
+    responses(
+        (status = 200, description = "Pipeline status", body = Object),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_ops_pipeline(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -1683,6 +1748,17 @@ async fn get_ops_pipeline(
     Ok(Json(serde_json::to_value(state.pipeline_metrics.status()).unwrap_or_default()))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/ops/sync",
+    tag = "ops",
+    summary = "Redis–Qdrant sync status",
+    description = "Returns the synchronization status between Redis and Qdrant stores.",
+    responses(
+        (status = 200, description = "Sync status", body = Object),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_ops_sync(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -1789,6 +1865,18 @@ pub async fn run_compression_sweep(state: &AppState) -> Result<u64, MnemoError> 
     Ok(compressed_count)
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/ops/incidents",
+    tag = "ops",
+    summary = "Active incidents",
+    description = "Returns active incidents (dead letters, governance violations, circuit breakers, etc.) within a time window.",
+    params(OpsSummaryQuery),
+    responses(
+        (status = 200, description = "Incident list", body = OpsIncidentsResponse),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_ops_incidents(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -2021,7 +2109,7 @@ fn default_true_audit() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct AuditExportQuery {
     #[serde(default = "default_audit_export_from")]
     from: chrono::DateTime<chrono::Utc>,
@@ -2062,6 +2150,19 @@ struct AuditExportResponse {
     records: Vec<AuditExportRecord>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/audit/export",
+    tag = "ops",
+    summary = "Export audit trail",
+    description = "Returns governance and webhook audit records for a time window. Optionally HMAC-signed for SOC 2 tamper evidence.",
+    params(AuditExportQuery),
+    responses(
+        (status = 200, description = "Audit records", body = AuditExportResponse),
+        (status = 400, description = "Invalid time range"),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn audit_export(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -2180,6 +2281,22 @@ async fn audit_export(
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/traces/{request_id}",
+    tag = "ops",
+    summary = "Trace lookup by request ID",
+    description = "Joins episodes, webhook events, webhook audit, and governance audit for a given request ID.",
+    params(
+        ("request_id" = String, Path, description = "The request ID to trace"),
+        TraceLookupQuery,
+    ),
+    responses(
+        (status = 200, description = "Trace results", body = TraceLookupResponse),
+        (status = 400, description = "Invalid time window"),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_trace_by_request_id(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -2371,6 +2488,17 @@ async fn lookup_trace_by_request_id(
 
 // ─── User routes ───────────────────────────────────────────────────
 
+#[utoipa::path(
+    post, path = "/api/v1/users",
+    tag = "users",
+    summary = "Create user",
+    request_body = CreateUserRequest,
+    responses(
+        (status = 201, description = "User created", body = User),
+        (status = 400, description = "Validation error"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
@@ -2379,6 +2507,17 @@ async fn create_user(
     Ok((StatusCode::CREATED, Json(user)))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/users/{id}",
+    tag = "users",
+    summary = "Get user by ID",
+    params(("id" = Uuid, Path, description = "User ID")),
+    responses(
+        (status = 200, description = "User found", body = User),
+        (status = 404, description = "User not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -2387,6 +2526,17 @@ async fn get_user(
     Ok(Json(user))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/users/external/{external_id}",
+    tag = "users",
+    summary = "Get user by external ID",
+    params(("external_id" = String, Path, description = "External identifier")),
+    responses(
+        (status = 200, description = "User found", body = User),
+        (status = 404, description = "User not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_user_by_external_id(
     State(state): State<AppState>,
     Path(external_id): Path<String>,
@@ -2398,6 +2548,18 @@ async fn get_user_by_external_id(
     Ok(Json(user))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/users/{id}",
+    tag = "users",
+    summary = "Update user",
+    params(("id" = Uuid, Path, description = "User ID")),
+    request_body = UpdateUserRequest,
+    responses(
+        (status = 200, description = "User updated", body = User),
+        (status = 404, description = "User not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -2571,6 +2733,18 @@ async fn list_user_policy_violations(
     }))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/users/{id}",
+    tag = "users",
+    summary = "Delete user",
+    description = "Deletes user and associated vectors (GDPR compliance). Also removes user policy.",
+    params(("id" = Uuid, Path, description = "User ID")),
+    responses(
+        (status = 200, description = "User deleted", body = DeleteResponse),
+        (status = 404, description = "User not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_user(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -2596,6 +2770,16 @@ async fn delete_user(
     Ok(Json(DeleteResponse { deleted: true }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/users",
+    tag = "users",
+    summary = "List users",
+    params(PaginationParams),
+    responses(
+        (status = 200, description = "User list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_users(
     State(state): State<AppState>,
     Query(params): Query<PaginationParams>,
@@ -2609,6 +2793,16 @@ async fn list_users(
 
 // ─── Session routes ────────────────────────────────────────────────
 
+#[utoipa::path(
+    post, path = "/api/v1/sessions",
+    tag = "sessions",
+    summary = "Create session",
+    request_body = CreateSessionRequest,
+    responses(
+        (status = 201, description = "Session created", body = Session),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_session(
     State(state): State<AppState>,
     Json(req): Json<CreateSessionRequest>,
@@ -2617,6 +2811,17 @@ async fn create_session(
     Ok((StatusCode::CREATED, Json(session)))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/sessions/{id}",
+    tag = "sessions",
+    summary = "Get session",
+    params(("id" = Uuid, Path, description = "Session ID")),
+    responses(
+        (status = 200, description = "Session found", body = Session),
+        (status = 404, description = "Session not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -2624,6 +2829,18 @@ async fn get_session(
     Ok(Json(state.state_store.get_session(id).await?))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/sessions/{id}",
+    tag = "sessions",
+    summary = "Update session",
+    params(("id" = Uuid, Path, description = "Session ID")),
+    request_body = UpdateSessionRequest,
+    responses(
+        (status = 200, description = "Session updated", body = Session),
+        (status = 404, description = "Session not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_session(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -2632,6 +2849,17 @@ async fn update_session(
     Ok(Json(state.state_store.update_session(id, req).await?))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/sessions/{id}",
+    tag = "sessions",
+    summary = "Delete session",
+    params(("id" = Uuid, Path, description = "Session ID")),
+    responses(
+        (status = 200, description = "Session deleted", body = DeleteResponse),
+        (status = 404, description = "Session not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_session(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -2651,6 +2879,19 @@ async fn delete_session(
     Ok(Json(DeleteResponse { deleted: true }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/users/{user_id}/sessions",
+    tag = "sessions",
+    summary = "List user sessions",
+    params(
+        ("user_id" = Uuid, Path, description = "User ID"),
+        PaginationParams,
+    ),
+    responses(
+        (status = 200, description = "Session list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_user_sessions(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
@@ -2670,6 +2911,20 @@ async fn list_user_sessions(
 
 // ─── Episode routes ────────────────────────────────────────────────
 
+#[utoipa::path(
+    post, path = "/api/v1/sessions/{session_id}/episodes",
+    tag = "episodes",
+    summary = "Add episode",
+    description = "Ingests a single episode (message) into a session. Runs write-path guardrails and triggers webhooks.",
+    params(("session_id" = Uuid, Path, description = "Session ID")),
+    request_body = CreateEpisodeRequest,
+    responses(
+        (status = 201, description = "Episode created", body = Episode),
+        (status = 400, description = "Validation or guardrail rejection"),
+        (status = 404, description = "Session not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn add_episode(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -2734,6 +2989,20 @@ async fn add_episode(
     Ok((StatusCode::CREATED, Json(episode)))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/sessions/{session_id}/episodes/batch",
+    tag = "episodes",
+    summary = "Add episodes (batch)",
+    description = "Ingests multiple episodes in a single request. Validates retention per-episode.",
+    params(("session_id" = Uuid, Path, description = "Session ID")),
+    request_body = BatchCreateEpisodesRequest,
+    responses(
+        (status = 201, description = "Episodes created", body = Object),
+        (status = 400, description = "Validation error"),
+        (status = 404, description = "Session not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn add_episodes_batch(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -2784,6 +3053,17 @@ async fn add_episodes_batch(
     Ok((StatusCode::CREATED, Json(ListResponse::new(episodes))))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/episodes/{id}",
+    tag = "episodes",
+    summary = "Get episode by ID",
+    params(("id" = Uuid, Path, description = "Episode ID")),
+    responses(
+        (status = 200, description = "Episode found", body = Episode),
+        (status = 404, description = "Episode not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_episode(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -2791,6 +3071,19 @@ async fn get_episode(
     Ok(Json(state.state_store.get_episode(id).await?))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/sessions/{session_id}/episodes",
+    tag = "episodes",
+    summary = "List episodes in session",
+    params(
+        ("session_id" = Uuid, Path, description = "Session ID"),
+        PaginationParams,
+    ),
+    responses(
+        (status = 200, description = "Episode list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_episodes(
     State(state): State<AppState>,
     Path(session_id): Path<Uuid>,
@@ -2842,6 +3135,21 @@ struct ClearMessagesResponse {
 /// Return messages for a session in chronological order.
 /// Returns a flat message-shaped projection over episodes.
 /// Query params: `limit` (default 100), `after` (cursor UUID).
+#[utoipa::path(
+    get, path = "/api/v1/sessions/{session_id}/messages",
+    tag = "episodes",
+    summary = "Get session messages",
+    description = "Returns episodes projected as messages in chronological order. Compatible with LangChain/LlamaIndex chat stores.",
+    params(
+        ("session_id" = Uuid, Path, description = "Session ID"),
+        PaginationParams,
+    ),
+    responses(
+        (status = 200, description = "Message list", body = MessagesResponse),
+        (status = 404, description = "Session not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_session_messages(
     State(state): State<AppState>,
     Path(session_id): Path<Uuid>,
@@ -2890,6 +3198,18 @@ async fn get_session_messages(
 ///
 /// Clear all episodes/messages for a session without deleting the session.
 /// Used by LangChain `clear()` and LlamaIndex `delete_messages()`.
+#[utoipa::path(
+    delete, path = "/api/v1/sessions/{session_id}/messages",
+    tag = "episodes",
+    summary = "Clear session messages",
+    description = "Deletes all episodes/messages for a session without deleting the session itself.",
+    params(("session_id" = Uuid, Path, description = "Session ID")),
+    responses(
+        (status = 200, description = "Messages cleared", body = ClearMessagesResponse),
+        (status = 404, description = "Session not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_session_messages(
     State(state): State<AppState>,
     Path(session_id): Path<Uuid>,
@@ -2912,6 +3232,21 @@ async fn delete_session_messages(
 ///
 /// Delete a specific message by 0-based ordinal index within the session.
 /// Used by LlamaIndex `delete_message(key, idx)`.
+#[utoipa::path(
+    delete, path = "/api/v1/sessions/{session_id}/messages/{idx}",
+    tag = "episodes",
+    summary = "Delete message by index",
+    description = "Deletes a single message by 0-based chronological index within the session.",
+    params(
+        ("session_id" = Uuid, Path, description = "Session ID"),
+        ("idx" = usize, Path, description = "0-based message index"),
+    ),
+    responses(
+        (status = 200, description = "Message deleted", body = DeleteResponse),
+        (status = 404, description = "Session or message not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_session_message_by_idx(
     State(state): State<AppState>,
     Path((session_id, idx)): Path<(Uuid, usize)>,
@@ -2945,7 +3280,7 @@ async fn delete_session_message_by_idx(
 
 // ─── Entity routes ─────────────────────────────────────────────────
 
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct ListEntitiesParams {
     #[serde(default = "default_entity_limit")]
     limit: u32,
@@ -2958,6 +3293,16 @@ fn default_entity_limit() -> u32 {
     20
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/users/{user_id}/entities",
+    tag = "entities",
+    summary = "List entities for user",
+    params(("user_id" = Uuid, Path, description = "User ID"), ListEntitiesParams),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_entities(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
@@ -2980,6 +3325,16 @@ async fn list_entities(
     Ok(Json(ListResponse::new(entities)))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/entities/{id}",
+    tag = "entities",
+    summary = "Get entity by ID",
+    params(("id" = Uuid, Path, description = "Entity ID")),
+    responses(
+        (status = 200, description = "Success", body = Entity),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_entity(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -2987,6 +3342,16 @@ async fn get_entity(
     Ok(Json(state.state_store.get_entity(id).await?))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/entities/{id}",
+    tag = "entities",
+    summary = "Delete entity by ID",
+    params(("id" = Uuid, Path, description = "Entity ID")),
+    responses(
+        (status = 200, description = "Success", body = DeleteResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_entity(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -3008,6 +3373,16 @@ async fn delete_entity(
 
 // ─── Edge routes ───────────────────────────────────────────────────
 
+#[utoipa::path(
+    get, path = "/api/v1/users/{user_id}/edges",
+    tag = "edges",
+    summary = "Query edges for user",
+    params(("user_id" = Uuid, Path, description = "User ID"), EdgeFilter),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn query_edges(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
@@ -3018,6 +3393,16 @@ async fn query_edges(
     Ok(Json(ListResponse::new(edges)))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/edges/{id}",
+    tag = "edges",
+    summary = "Get edge by ID",
+    params(("id" = Uuid, Path, description = "Edge ID")),
+    responses(
+        (status = 200, description = "Success", body = Edge),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_edge(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -3025,6 +3410,16 @@ async fn get_edge(
     Ok(Json(state.state_store.get_edge(id).await?))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/edges/{id}",
+    tag = "edges",
+    summary = "Delete edge by ID",
+    params(("id" = Uuid, Path, description = "Edge ID")),
+    responses(
+        (status = 200, description = "Success", body = DeleteResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_edge(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -3051,6 +3446,17 @@ struct ClassificationPatch {
     classification: Classification,
 }
 
+#[utoipa::path(
+    patch, path = "/api/v1/entities/{id}/classification",
+    tag = "entities",
+    summary = "Patch entity classification level",
+    params(("id" = Uuid, Path, description = "Entity ID")),
+    request_body = ClassificationPatch,
+    responses(
+        (status = 200, description = "Success", body = Entity),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn patch_entity_classification(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -3067,6 +3473,17 @@ async fn patch_entity_classification(
     Ok(Json(entity))
 }
 
+#[utoipa::path(
+    patch, path = "/api/v1/edges/{id}/classification",
+    tag = "edges",
+    summary = "Patch edge classification level",
+    params(("id" = Uuid, Path, description = "Edge ID")),
+    request_body = ClassificationPatch,
+    responses(
+        (status = 200, description = "Success", body = Edge),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn patch_edge_classification(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -3085,6 +3502,17 @@ async fn patch_edge_classification(
 
 // ─── Context route ─────────────────────────────────────────────────
 
+#[utoipa::path(
+    post, path = "/api/v1/users/{user_id}/context",
+    tag = "memory",
+    summary = "Retrieve user context",
+    params(("user_id" = Uuid, Path, description = "User identifier")),
+    request_body = ContextRequest,
+    responses(
+        (status = 200, description = "Success", body = ContextBlock),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_context(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
@@ -3206,7 +3634,7 @@ struct DeleteMemoryWebhookResponse {
     deleted: bool,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct ListWebhookEventsQuery {
     #[serde(default)]
     limit: Option<u32>,
@@ -3221,7 +3649,7 @@ struct ListWebhookEventsResponse {
     events: Vec<MemoryWebhookEventRecord>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct ReplayWebhookEventsQuery {
     #[serde(default)]
     after_event_id: Option<Uuid>,
@@ -3258,7 +3686,7 @@ struct RetryWebhookEventResponse {
     event: Option<MemoryWebhookEventRecord>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct WebhookAuditQuery {
     #[serde(default)]
     limit: Option<u32>,
@@ -3396,7 +3824,7 @@ struct TimeTravelSummaryResponse {
     summary: String,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct OpsSummaryQuery {
     #[serde(default)]
     window_seconds: Option<u64>,
@@ -3461,7 +3889,7 @@ struct TraceLookupResponse {
     summary: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct TraceLookupQuery {
     #[serde(default = "default_trace_lookup_from")]
     from: chrono::DateTime<chrono::Utc>,
@@ -3481,7 +3909,7 @@ struct TraceLookupQuery {
     user: Option<String>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct TraceLookupQueryWithEvidence {
     #[serde(default = "default_trace_lookup_from")]
     from: chrono::DateTime<chrono::Utc>,
@@ -3505,7 +3933,7 @@ struct TraceLookupQueryWithEvidence {
     source_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct EvidenceExportQuery {
     #[serde(default)]
     focus: Option<String>,
@@ -3513,7 +3941,7 @@ struct EvidenceExportQuery {
     source_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct GovernanceEvidenceExportQuery {
     #[serde(default)]
     focus: Option<String>,
@@ -3676,7 +4104,7 @@ struct TraceEpisodeRef {
     preview: String,
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct WebhookStatsQuery {
     #[serde(default)]
     window_seconds: Option<u64>,
@@ -4114,6 +4542,16 @@ struct RejectPromotionRequest {
     reason: Option<String>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory",
+    tag = "memory",
+    summary = "Remember a memory",
+    request_body = RememberMemoryRequest,
+    responses(
+        (status = 200, description = "Success", body = RememberMemoryResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn remember_memory(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -4232,6 +4670,16 @@ struct ExtractMemoryResponse {
     provider: Option<String>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/extract",
+    tag = "memory",
+    summary = "Extract memory from text",
+    request_body = ExtractMemoryRequest,
+    responses(
+        (status = 200, description = "Success", body = ExtractMemoryResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn extract_memory(
     State(state): State<AppState>,
     Json(req): Json<ExtractMemoryRequest>,
@@ -4329,6 +4777,19 @@ async fn extract_memory(
     }))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/import/chat-history",
+    tag = "import",
+    summary = "Import chat history",
+    description = "Imports chat history from NDJSON, ChatGPT export, or Gemini export format. Supports idempotency keys and dry-run mode.",
+    request_body = ImportChatHistoryRequest,
+    responses(
+        (status = 202, description = "Import job accepted", body = ImportChatHistoryResponse),
+        (status = 200, description = "Idempotent duplicate — returns existing job", body = ImportChatHistoryResponse),
+        (status = 400, description = "Validation error"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn import_chat_history(
     State(state): State<AppState>,
     Json(req): Json<ImportChatHistoryRequest>,
@@ -4427,6 +4888,18 @@ async fn import_chat_history(
     ))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/import/jobs/{job_id}",
+    tag = "import",
+    summary = "Get import job status",
+    description = "Returns the current status and progress of an import job.",
+    params(("job_id" = Uuid, Path, description = "Import job ID")),
+    responses(
+        (status = 200, description = "Job record", body = ImportJobRecord),
+        (status = 404, description = "Job not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_import_job(
     State(state): State<AppState>,
     Path(job_id): Path<Uuid>,
@@ -4441,6 +4914,17 @@ async fn get_import_job(
     Ok(Json(record))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/context",
+    tag = "memory",
+    summary = "Get memory context",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = MemoryContextRequest,
+    responses(
+        (status = 200, description = "Success", body = MemoryContextResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_memory_context(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -4907,6 +5391,17 @@ async fn get_memory_context(
     }))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/changes_since",
+    tag = "memory",
+    summary = "Memory changes since timestamp",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = MemoryChangesSinceRequest,
+    responses(
+        (status = 200, description = "Success", body = MemoryChangesSinceResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn memory_changes_since(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -5165,6 +5660,17 @@ async fn memory_changes_since(
     }))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/time_travel/trace",
+    tag = "memory",
+    summary = "Time travel trace",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = TimeTravelTraceRequest,
+    responses(
+        (status = 200, description = "Success", body = TimeTravelTraceResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn time_travel_trace(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -5603,6 +6109,17 @@ async fn time_travel_trace(
     }))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/time_travel/summary",
+    tag = "memory",
+    summary = "Time travel summary",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = TimeTravelSummaryRequest,
+    responses(
+        (status = 200, description = "Success", body = TimeTravelSummaryResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn time_travel_summary(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -5790,6 +6307,17 @@ async fn time_travel_summary(
     }))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/conflict_radar",
+    tag = "memory",
+    summary = "Detect memory conflicts",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = ConflictRadarRequest,
+    responses(
+        (status = 200, description = "Success", body = ConflictRadarResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn conflict_radar(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -5944,6 +6472,17 @@ async fn conflict_radar(
     }))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/causal_recall",
+    tag = "memory",
+    summary = "Causal recall chains",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = CausalRecallRequest,
+    responses(
+        (status = 200, description = "Success", body = CausalRecallResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn causal_recall_chains(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -6145,6 +6684,16 @@ async fn causal_recall_chains(
     }))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/webhooks",
+    tag = "webhooks",
+    summary = "Register memory webhook",
+    request_body = RegisterMemoryWebhookRequest,
+    responses(
+        (status = 201, description = "Webhook registered", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn register_memory_webhook(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -6239,6 +6788,15 @@ async fn register_memory_webhook(
     ))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/memory/webhooks",
+    tag = "webhooks",
+    summary = "List memory webhooks",
+    responses(
+        (status = 200, description = "Webhook list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_memory_webhooks(
     State(state): State<AppState>,
 ) -> Json<ListResponse<MemoryWebhookSubscription>> {
@@ -6248,6 +6806,16 @@ async fn list_memory_webhooks(
     Json(ListResponse::new(webhooks))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/memory/webhooks/{id}",
+    tag = "webhooks",
+    summary = "Get memory webhook",
+    params(("id" = Uuid, Path, description = "Webhook ID")),
+    responses(
+        (status = 200, description = "Webhook found", body = MemoryWebhookSubscription),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_memory_webhook(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -6262,6 +6830,17 @@ async fn get_memory_webhook(
     Ok(Json(webhook))
 }
 
+#[utoipa::path(
+    patch, path = "/api/v1/memory/webhooks/{id}",
+    tag = "webhooks",
+    summary = "Update memory webhook",
+    params(("id" = Uuid, Path, description = "Webhook ID")),
+    request_body = UpdateMemoryWebhookRequest,
+    responses(
+        (status = 200, description = "Webhook updated", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_memory_webhook(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -6375,6 +6954,16 @@ async fn update_memory_webhook(
     Ok(Json(UpdateMemoryWebhookResponse { ok: true, webhook }))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/memory/webhooks/{id}",
+    tag = "webhooks",
+    summary = "Delete memory webhook",
+    params(("id" = Uuid, Path, description = "Webhook ID")),
+    responses(
+        (status = 200, description = "Webhook deleted", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_memory_webhook(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -6399,6 +6988,19 @@ async fn delete_memory_webhook(
     Ok(Json(DeleteMemoryWebhookResponse { deleted: removed }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/memory/webhooks/{id}/events",
+    tag = "webhooks",
+    summary = "List webhook events",
+    params(
+        ("id" = Uuid, Path, description = "Webhook ID"),
+        ListWebhookEventsQuery,
+    ),
+    responses(
+        (status = 200, description = "Event list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_memory_webhook_events(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -6433,6 +7035,19 @@ async fn list_memory_webhook_events(
     }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/memory/webhooks/{id}/events/replay",
+    tag = "webhooks",
+    summary = "Replay webhook events",
+    params(
+        ("id" = Uuid, Path, description = "Webhook ID"),
+        ReplayWebhookEventsQuery,
+    ),
+    responses(
+        (status = 200, description = "Replay page", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn replay_memory_webhook_events(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -6505,6 +7120,20 @@ async fn replay_memory_webhook_events(
     }))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/webhooks/{id}/events/{event_id}/retry",
+    tag = "webhooks",
+    summary = "Retry webhook event delivery",
+    params(
+        ("id" = Uuid, Path, description = "Webhook ID"),
+        ("event_id" = Uuid, Path, description = "Event ID"),
+    ),
+    request_body = RetryWebhookEventRequest,
+    responses(
+        (status = 200, description = "Retry result", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn retry_memory_webhook_event(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
@@ -6599,6 +7228,19 @@ async fn retry_memory_webhook_event(
     }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/memory/webhooks/{id}/events/dead-letter",
+    tag = "webhooks",
+    summary = "List dead-letter events",
+    params(
+        ("id" = Uuid, Path, description = "Webhook ID"),
+        ListWebhookEventsQuery,
+    ),
+    responses(
+        (status = 200, description = "Dead-letter list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_memory_webhook_dead_letters(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -6634,6 +7276,19 @@ async fn list_memory_webhook_dead_letters(
     }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/memory/webhooks/{id}/stats",
+    tag = "webhooks",
+    summary = "Get webhook delivery stats",
+    params(
+        ("id" = Uuid, Path, description = "Webhook ID"),
+        WebhookStatsQuery,
+    ),
+    responses(
+        (status = 200, description = "Webhook stats", body = WebhookStatsResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_memory_webhook_stats(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -6642,6 +7297,19 @@ async fn get_memory_webhook_stats(
     Ok(Json(build_webhook_stats_response(&state, id, query).await?))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/memory/webhooks/{id}/audit",
+    tag = "webhooks",
+    summary = "List webhook audit trail",
+    params(
+        ("id" = Uuid, Path, description = "Webhook ID"),
+        WebhookAuditQuery,
+    ),
+    responses(
+        (status = 200, description = "Audit trail", body = WebhookAuditResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_memory_webhook_audit(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -6672,6 +7340,22 @@ async fn list_memory_webhook_audit(
     }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/evidence/webhooks/{id}/export",
+    tag = "ops",
+    summary = "Export webhook evidence bundle",
+    description = "Returns a self-contained evidence bundle for a webhook: subscription, stats, dead letters, and audit trail.",
+    params(
+        ("id" = Uuid, Path, description = "Webhook subscription ID"),
+        EvidenceExportQuery,
+    ),
+    responses(
+        (status = 200, description = "Evidence bundle", body = Object),
+        (status = 403, description = "Forbidden — requires admin role"),
+        (status = 404, description = "Webhook not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn export_webhook_evidence_bundle(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -6750,6 +7434,21 @@ async fn export_webhook_evidence_bundle(
     }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/evidence/governance/{user}/export",
+    tag = "ops",
+    summary = "Export governance evidence bundle",
+    description = "Returns a self-contained evidence bundle for a user: policy, violations, and governance audit trail.",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        GovernanceEvidenceExportQuery,
+    ),
+    responses(
+        (status = 200, description = "Evidence bundle", body = Object),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn export_governance_evidence_bundle(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -6809,6 +7508,21 @@ async fn export_governance_evidence_bundle(
     }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/evidence/traces/{request_id}/export",
+    tag = "ops",
+    summary = "Export trace evidence bundle",
+    description = "Returns a self-contained evidence bundle for a request ID: matched episodes, webhooks, and governance records.",
+    params(
+        ("request_id" = String, Path, description = "The request ID to export"),
+        TraceLookupQueryWithEvidence,
+    ),
+    responses(
+        (status = 200, description = "Evidence bundle", body = Object),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn export_trace_evidence_bundle(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -6853,6 +7567,16 @@ async fn export_trace_evidence_bundle(
     }))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/identity",
+    tag = "agents",
+    summary = "Get agent identity",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Agent identity profile", body = AgentIdentityProfile),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_agent_identity(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -6866,6 +7590,17 @@ async fn get_agent_identity(
     Ok(Json(identity))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/agents/{agent_id}/identity",
+    tag = "agents",
+    summary = "Update agent identity",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    request_body = UpdateAgentIdentityRequest,
+    responses(
+        (status = 200, description = "Identity updated", body = AgentIdentityProfile),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_agent_identity(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -6884,6 +7619,16 @@ async fn update_agent_identity(
     Ok(Json(identity))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/identity/versions",
+    tag = "agents",
+    summary = "List identity versions",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Version list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_agent_identity_versions(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -6898,6 +7643,16 @@ async fn list_agent_identity_versions(
     Ok(Json(versions))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/identity/audit",
+    tag = "agents",
+    summary = "List identity audit events",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Audit event list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_agent_identity_audit(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -6915,6 +7670,16 @@ async fn list_agent_identity_audit(
 /// `GET /api/v1/agents/:agent_id/identity/audit/verify`
 ///
 /// Walk the full witness chain and verify hash integrity.
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/identity/audit/verify",
+    tag = "agents",
+    summary = "Verify agent audit chain",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Chain verification result", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn verify_agent_audit_chain(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -6927,6 +7692,17 @@ async fn verify_agent_audit_chain(
     Ok(Json(verification))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/identity/rollback",
+    tag = "agents",
+    summary = "Rollback agent identity",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    request_body = IdentityRollbackRequest,
+    responses(
+        (status = 200, description = "Identity rolled back", body = AgentIdentityProfile),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn rollback_agent_identity(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -6951,6 +7727,17 @@ async fn rollback_agent_identity(
 /// every top-level key in `core` is a member of the canonical identity allowlist.
 /// The server verifies the proof (cheap) and applies the update only if
 /// verification passes. The proof is stored in the audit trail for auditability.
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/identity/verified",
+    tag = "agents",
+    summary = "Verified identity update",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    request_body = mnemo_core::models::agent::VerifiedIdentityUpdateRequest,
+    responses(
+        (status = 200, description = "Verified update result", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn verified_identity_update(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -6999,6 +7786,17 @@ async fn verified_identity_update(
     })))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/experience",
+    tag = "agents",
+    summary = "Add agent experience",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    request_body = CreateExperienceRequest,
+    responses(
+        (status = 201, description = "Experience event created", body = ExperienceEvent),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn add_agent_experience(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -7044,6 +7842,16 @@ async fn add_agent_experience(
 
 /// Returns experience events ranked by Fisher importance (EWC++).
 /// High-importance events are structurally load-bearing for the agent's identity.
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/experience/importance",
+    tag = "agents",
+    summary = "List experience importance",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Ranked experience events", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_experience_importance(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -7082,6 +7890,17 @@ async fn list_experience_importance(
     Ok(Json(ranked))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/promotions",
+    tag = "agents",
+    summary = "Create promotion proposal",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    request_body = CreatePromotionProposalRequest,
+    responses(
+        (status = 201, description = "Proposal created", body = PromotionProposal),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_promotion_proposal(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -7149,6 +7968,16 @@ async fn create_promotion_proposal(
     Ok((StatusCode::CREATED, Json(proposal)))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/promotions",
+    tag = "agents",
+    summary = "List promotion proposals",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Proposal list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_promotion_proposals(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -7163,6 +7992,19 @@ async fn list_promotion_proposals(
     Ok(Json(proposals))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/promotions/{proposal_id}/approve",
+    tag = "agents",
+    summary = "Approve promotion proposal",
+    params(
+        ("agent_id" = String, Path, description = "Agent ID"),
+        ("proposal_id" = Uuid, Path, description = "Proposal ID"),
+    ),
+    responses(
+        (status = 200, description = "Proposal approved", body = PromotionProposal),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn approve_promotion_proposal(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -7288,6 +8130,19 @@ async fn approve_promotion_proposal(
     Ok(Json(proposal))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/promotions/{proposal_id}/reject",
+    tag = "agents",
+    summary = "Reject promotion proposal",
+    params(
+        ("agent_id" = String, Path, description = "Agent ID"),
+        ("proposal_id" = Uuid, Path, description = "Proposal ID"),
+    ),
+    responses(
+        (status = 200, description = "Proposal rejected", body = PromotionProposal),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn reject_promotion_proposal(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -7338,6 +8193,19 @@ async fn reject_promotion_proposal(
 
 // ─── Conflict Analysis endpoint ───────────────────────────────────
 
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/promotions/{proposal_id}/conflicts",
+    tag = "agents",
+    summary = "Get promotion conflicts",
+    params(
+        ("agent_id" = String, Path, description = "Agent ID"),
+        ("proposal_id" = Uuid, Path, description = "Proposal ID"),
+    ),
+    responses(
+        (status = 200, description = "Conflict analysis", body = ConflictAnalysis),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_promotion_conflicts(
     State(state): State<AppState>,
     Path((agent_id, proposal_id)): Path<(String, Uuid)>,
@@ -7360,6 +8228,17 @@ async fn get_promotion_conflicts(
 
 // ─── Approval Policy CRUD ─────────────────────────────────────────
 
+#[utoipa::path(
+    put, path = "/api/v1/agents/{agent_id}/approval-policy",
+    tag = "agents",
+    summary = "Set approval policy",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    request_body = SetApprovalPolicyRequest,
+    responses(
+        (status = 200, description = "Policy set", body = ApprovalPolicy),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn set_agent_approval_policy(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -7397,6 +8276,16 @@ async fn set_agent_approval_policy(
     Ok(Json(policy))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/approval-policy",
+    tag = "agents",
+    summary = "Get approval policy",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Approval policy", body = ApprovalPolicy),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_agent_approval_policy(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -7412,6 +8301,17 @@ async fn get_agent_approval_policy(
 
 // ─── COW Branching endpoints ──────────────────────────────────────
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/branches",
+    tag = "agents",
+    summary = "Create agent branch",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    request_body = mnemo_core::models::agent::CreateBranchRequest,
+    responses(
+        (status = 200, description = "Branch created", body = mnemo_core::models::agent::BranchInfo),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_agent_branch(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -7425,6 +8325,17 @@ async fn create_agent_branch(
     Ok(Json(info))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/fork",
+    tag = "agents",
+    summary = "Fork agent identity",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    request_body = mnemo_core::models::agent::ForkAgentRequest,
+    responses(
+        (status = 200, description = "Fork result", body = mnemo_core::models::agent::ForkResult),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn fork_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -7435,6 +8346,16 @@ async fn fork_agent(
     Ok(Json(result))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/branches",
+    tag = "agents",
+    summary = "List agent branches",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Branch list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_agent_branches(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -7444,6 +8365,19 @@ async fn list_agent_branches(
     Ok(Json(branches))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/agents/{agent_id}/branches/{branch_name}",
+    tag = "agents",
+    summary = "Get agent branch",
+    params(
+        ("agent_id" = String, Path, description = "Agent ID"),
+        ("branch_name" = String, Path, description = "Branch name"),
+    ),
+    responses(
+        (status = 200, description = "Branch info", body = mnemo_core::models::agent::BranchInfo),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_agent_branch(
     State(state): State<AppState>,
     Path((agent_id, branch_name)): Path<(String, String)>,
@@ -7456,6 +8390,20 @@ async fn get_agent_branch(
     Ok(Json(info))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/agents/{agent_id}/branches/{branch_name}/identity",
+    tag = "agents",
+    summary = "Update branch identity",
+    params(
+        ("agent_id" = String, Path, description = "Agent ID"),
+        ("branch_name" = String, Path, description = "Branch name"),
+    ),
+    request_body = UpdateAgentIdentityRequest,
+    responses(
+        (status = 200, description = "Branch identity updated", body = AgentIdentityProfile),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_agent_branch(
     State(state): State<AppState>,
     Path((agent_id, branch_name)): Path<(String, String)>,
@@ -7469,6 +8417,19 @@ async fn update_agent_branch(
     Ok(Json(identity))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/branches/{branch_name}/merge",
+    tag = "agents",
+    summary = "Merge agent branch",
+    params(
+        ("agent_id" = String, Path, description = "Agent ID"),
+        ("branch_name" = String, Path, description = "Branch name"),
+    ),
+    responses(
+        (status = 200, description = "Merge result", body = mnemo_core::models::agent::MergeResult),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn merge_agent_branch(
     State(state): State<AppState>,
     Path((agent_id, branch_name)): Path<(String, String)>,
@@ -7481,6 +8442,19 @@ async fn merge_agent_branch(
     Ok(Json(result))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/agents/{agent_id}/branches/{branch_name}",
+    tag = "agents",
+    summary = "Delete agent branch",
+    params(
+        ("agent_id" = String, Path, description = "Agent ID"),
+        ("branch_name" = String, Path, description = "Branch name"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_agent_branch(
     State(state): State<AppState>,
     Path((agent_id, branch_name)): Path<(String, String)>,
@@ -7493,6 +8467,16 @@ async fn delete_agent_branch(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/agents/{agent_id}/context",
+    tag = "agents",
+    summary = "Get agent context",
+    params(("agent_id" = String, Path, description = "Agent ID")),
+    responses(
+        (status = 200, description = "Agent context", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_agent_context(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -7633,6 +8617,16 @@ struct RetrievalFeedbackRequest {
     all_entity_ids: Vec<Uuid>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/memory/feedback",
+    tag = "memory",
+    summary = "Submit retrieval feedback",
+    request_body = RetrievalFeedbackRequest,
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn memory_retrieval_feedback(
     State(state): State<AppState>,
     Json(req): Json<RetrievalFeedbackRequest>,
@@ -8885,7 +9879,7 @@ fn is_session_not_found(err: &MnemoError) -> bool {
 
 // ─── Graph route ───────────────────────────────────────────────────
 
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct SubgraphParams {
     #[serde(default = "default_depth")]
     depth: u32,
@@ -8900,6 +9894,16 @@ fn default_max_nodes() -> usize {
     50
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/entities/{id}/subgraph",
+    tag = "graph",
+    summary = "Get entity subgraph",
+    params(("id" = Uuid, Path, description = "Entity ID"), SubgraphParams),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_subgraph(
     State(state): State<AppState>,
     Path(entity_id): Path<Uuid>,
@@ -8954,6 +9958,16 @@ async fn get_subgraph(
 
 // ─── Memory Regions (Multi-Agent Shared Memory) ───────────────────
 
+#[utoipa::path(
+    post, path = "/api/v1/regions",
+    tag = "regions",
+    summary = "Create memory region",
+    request_body = CreateRegionRequest,
+    responses(
+        (status = 201, description = "Region created", body = MemoryRegion),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_region(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -9010,6 +10024,15 @@ struct ListRegionsQuery {
     user_id: Option<Uuid>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/regions",
+    tag = "regions",
+    summary = "List memory regions",
+    responses(
+        (status = 200, description = "Region list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_regions(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -9025,6 +10048,16 @@ async fn list_regions(
     Ok(Json(regions))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/regions/{region_id}",
+    tag = "regions",
+    summary = "Get region by ID",
+    params(("region_id" = Uuid, Path, description = "Region ID")),
+    responses(
+        (status = 200, description = "Region found", body = MemoryRegion),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_region(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -9046,6 +10079,17 @@ async fn get_region(
     Ok(Json(region))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/regions/{region_id}",
+    tag = "regions",
+    summary = "Update memory region",
+    params(("region_id" = Uuid, Path, description = "Region ID")),
+    request_body = UpdateRegionRequest,
+    responses(
+        (status = 200, description = "Region updated", body = MemoryRegion),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_region(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -9088,6 +10132,16 @@ async fn update_region(
     Ok(Json(region))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/regions/{region_id}",
+    tag = "regions",
+    summary = "Delete memory region",
+    params(("region_id" = Uuid, Path, description = "Region ID")),
+    responses(
+        (status = 204, description = "Deleted"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_region(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -9112,6 +10166,17 @@ async fn delete_region(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/regions/{region_id}/acl",
+    tag = "regions",
+    summary = "Grant region access",
+    params(("region_id" = Uuid, Path, description = "Region ID")),
+    request_body = GrantRegionAccessRequest,
+    responses(
+        (status = 201, description = "Access granted", body = MemoryRegionAcl),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn grant_region_access(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -9177,6 +10242,16 @@ async fn grant_region_access(
     Ok((StatusCode::CREATED, Json(acl)))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/regions/{region_id}/acl",
+    tag = "regions",
+    summary = "List region ACLs",
+    params(("region_id" = Uuid, Path, description = "Region ID")),
+    responses(
+        (status = 200, description = "ACL list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_region_acls(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -9203,6 +10278,19 @@ async fn list_region_acls(
     Ok(Json(active))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/regions/{region_id}/acl/{agent_id}",
+    tag = "regions",
+    summary = "Revoke region access",
+    params(
+        ("region_id" = Uuid, Path, description = "Region ID"),
+        ("agent_id" = String, Path, description = "Agent ID"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn revoke_region_access(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -9292,6 +10380,17 @@ struct VectorsDeleteIdsRequest {
 /// `POST /api/v1/vectors/:namespace`
 ///
 /// Upsert vectors into a namespace. Creates the namespace if it doesn't exist.
+#[utoipa::path(
+    post, path = "/api/v1/vectors/{namespace}",
+    tag = "vectors",
+    summary = "Upsert vectors",
+    params(("namespace" = String, Path, description = "Vector namespace")),
+    request_body = VectorsUpsertRequest,
+    responses(
+        (status = 200, description = "Vectors upserted", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn vectors_upsert(
     State(state): State<AppState>,
     Path(namespace): Path<String>,
@@ -9323,6 +10422,17 @@ async fn vectors_upsert(
 /// `POST /api/v1/vectors/:namespace/query`
 ///
 /// Search vectors by similarity in a namespace.
+#[utoipa::path(
+    post, path = "/api/v1/vectors/{namespace}/query",
+    tag = "vectors",
+    summary = "Query vectors by similarity",
+    params(("namespace" = String, Path, description = "Vector namespace")),
+    request_body = VectorsQueryRequest,
+    responses(
+        (status = 200, description = "Query results", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn vectors_query(
     State(state): State<AppState>,
     Path(namespace): Path<String>,
@@ -9351,6 +10461,17 @@ async fn vectors_query(
 /// `POST /api/v1/vectors/:namespace/delete`
 ///
 /// Delete specific vectors by ID from a namespace.
+#[utoipa::path(
+    post, path = "/api/v1/vectors/{namespace}/delete",
+    tag = "vectors",
+    summary = "Delete vectors by ID",
+    params(("namespace" = String, Path, description = "Vector namespace")),
+    request_body = VectorsDeleteIdsRequest,
+    responses(
+        (status = 200, description = "Vectors deleted", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn vectors_delete_ids(
     State(state): State<AppState>,
     Path(namespace): Path<String>,
@@ -9386,6 +10507,16 @@ async fn vectors_delete_ids(
 /// `DELETE /api/v1/vectors/:namespace`
 ///
 /// Delete an entire namespace and all its vectors.
+#[utoipa::path(
+    delete, path = "/api/v1/vectors/{namespace}",
+    tag = "vectors",
+    summary = "Delete vector namespace",
+    params(("namespace" = String, Path, description = "Vector namespace")),
+    responses(
+        (status = 200, description = "Namespace deleted", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn vectors_delete_namespace(
     State(state): State<AppState>,
     Path(namespace): Path<String>,
@@ -9402,6 +10533,16 @@ async fn vectors_delete_namespace(
 /// `GET /api/v1/vectors/:namespace/count`
 ///
 /// Count total vectors in a namespace.
+#[utoipa::path(
+    get, path = "/api/v1/vectors/{namespace}/count",
+    tag = "vectors",
+    summary = "Count vectors in namespace",
+    params(("namespace" = String, Path, description = "Vector namespace")),
+    responses(
+        (status = 200, description = "Vector count", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn vectors_count(
     State(state): State<AppState>,
     Path(namespace): Path<String>,
@@ -9426,6 +10567,16 @@ async fn vectors_count(
 /// `GET /api/v1/vectors/:namespace/exists`
 ///
 /// Check whether a namespace exists.
+#[utoipa::path(
+    get, path = "/api/v1/vectors/{namespace}/exists",
+    tag = "vectors",
+    summary = "Check namespace exists",
+    params(("namespace" = String, Path, description = "Vector namespace")),
+    responses(
+        (status = 200, description = "Existence check", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn vectors_exists(
     State(state): State<AppState>,
     Path(namespace): Path<String>,
@@ -9441,7 +10592,7 @@ async fn vectors_exists(
 // ─── Knowledge Graph API ───────────────────────────────────────────────────
 
 /// Query parameters for entity listing with optional type/name filters.
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct GraphEntitiesParams {
     #[serde(default = "default_limit")]
     limit: u32,
@@ -9456,6 +10607,16 @@ struct GraphEntitiesParams {
 ///
 /// List all entities for a user in a graph-API response envelope.
 /// Supports optional `entity_type` and `name` query parameters for filtering.
+#[utoipa::path(
+    get, path = "/api/v1/graph/{user}/entities",
+    tag = "graph",
+    summary = "List entities in user graph",
+    params(("user" = String, Path, description = "User identifier"), GraphEntitiesParams),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn graph_list_entities(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -9527,6 +10688,16 @@ async fn graph_list_entities(
 /// `GET /api/v1/graph/:user/entities/:entity_id`
 ///
 /// Get a single entity with its adjacency.
+#[utoipa::path(
+    get, path = "/api/v1/graph/{user}/entities/{entity_id}",
+    tag = "graph",
+    summary = "Get entity with adjacency",
+    params(("user" = String, Path, description = "User identifier"), ("entity_id" = Uuid, Path, description = "Entity ID")),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn graph_get_entity(
     State(state): State<AppState>,
     Path((user, entity_id)): Path<(String, Uuid)>,
@@ -9579,7 +10750,7 @@ async fn graph_get_entity(
 /// `GET /api/v1/graph/:user/edges`
 ///
 /// List edges for a user with optional label, source, and target filters.
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct GraphEdgesParams {
     #[serde(default = "default_limit")]
     limit: u32,
@@ -9591,6 +10762,16 @@ struct GraphEdgesParams {
     target_entity_id: Option<Uuid>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/graph/{user}/edges",
+    tag = "graph",
+    summary = "List edges for user graph",
+    params(("user" = String, Path, description = "User identifier"), GraphEdgesParams),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn graph_list_edges(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -9634,7 +10815,7 @@ async fn graph_list_edges(
 /// `GET /api/v1/graph/:user/neighbors/:entity_id`
 ///
 /// Return 1-hop neighbors of an entity.
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct NeighborsParams {
     #[serde(default = "default_neighbor_depth")]
     depth: u32,
@@ -9651,6 +10832,16 @@ fn default_neighbor_max() -> usize {
     50
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/graph/{user}/neighbors/{entity_id}",
+    tag = "graph",
+    summary = "Get entity neighbors",
+    params(("user" = String, Path, description = "User identifier"), ("entity_id" = Uuid, Path, description = "Entity ID"), NeighborsParams),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn graph_neighbors(
     State(state): State<AppState>,
     Path((user, entity_id)): Path<(String, Uuid)>,
@@ -9713,7 +10904,7 @@ async fn graph_neighbors(
 /// `GET /api/v1/graph/:user/community`
 ///
 /// Run community detection and return entity→community assignments.
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct CommunityParams {
     #[serde(default = "default_community_iterations")]
     max_iterations: u32,
@@ -9723,6 +10914,16 @@ fn default_community_iterations() -> u32 {
     20
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/graph/{user}/community",
+    tag = "graph",
+    summary = "Detect communities in user graph",
+    params(("user" = String, Path, description = "User identifier"), CommunityParams),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn graph_community(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -9766,7 +10967,7 @@ async fn graph_community(
 /// `GET /api/v1/graph/:user/path`
 ///
 /// Find the shortest path between two entities in the user's knowledge graph.
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct GraphPathParams {
     /// Source entity ID.
     from: Uuid,
@@ -9784,6 +10985,16 @@ fn default_path_max_depth() -> u32 {
     10
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/graph/{user}/path",
+    tag = "graph",
+    summary = "Find shortest path between entities",
+    params(("user" = String, Path, description = "User identifier"), GraphPathParams),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn graph_shortest_path(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -9879,6 +11090,16 @@ async fn record_llm_span(state: &AppState, span: LlmSpan) {
 /// Return all LLM call spans associated with a specific request ID.
 /// Reads from Redis first; falls back to the in-memory ring buffer if Redis
 /// returns no results (e.g. spans were created before persistence was enabled).
+#[utoipa::path(
+    get, path = "/api/v1/spans/request/{request_id}",
+    tag = "ops",
+    summary = "List spans by request",
+    params(("request_id" = String, Path, description = "Request ID")),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_spans_by_request(
     State(state): State<AppState>,
     Path(request_id): Path<String>,
@@ -9910,7 +11131,7 @@ async fn list_spans_by_request(
 /// Return recent LLM spans for a given user ID.
 /// Reads from Redis first; falls back to the in-memory ring buffer if Redis
 /// returns no results.
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct SpansUserParams {
     #[serde(default = "default_spans_limit")]
     limit: usize,
@@ -9920,6 +11141,16 @@ fn default_spans_limit() -> usize {
     100
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/spans/user/{user_id}",
+    tag = "ops",
+    summary = "List spans by user",
+    params(("user_id" = Uuid, Path, description = "User ID"), SpansUserParams),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_spans_by_user(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
@@ -9961,6 +11192,16 @@ async fn list_spans_by_user(
 /// Return the memory digest for a user. Reads from the in-memory cache first;
 /// on cache miss, falls through to Redis (read-through) and populates the cache.
 /// Returns 404 if no digest has been generated.
+#[utoipa::path(
+    get, path = "/api/v1/memory/{user}/digest",
+    tag = "memory",
+    summary = "Get memory digest",
+    params(("user" = String, Path, description = "User identifier")),
+    responses(
+        (status = 200, description = "Success", body = MemoryDigest),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_memory_digest(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -9997,6 +11238,16 @@ async fn get_memory_digest(
 ///
 /// Trigger a fresh memory digest generation using the LLM.
 /// The digest summarises the user's entity graph into a compact prose form.
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/digest",
+    tag = "memory",
+    summary = "Refresh memory digest",
+    params(("user" = String, Path, description = "User identifier")),
+    responses(
+        (status = 200, description = "Success", body = MemoryDigest),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn refresh_memory_digest(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -10133,6 +11384,16 @@ async fn refresh_memory_digest(
 /// Returns a coherence report for a user's knowledge graph, measuring
 /// internal consistency across four dimensions: entity coherence, fact
 /// coherence, temporal coherence, and structural coherence.
+#[utoipa::path(
+    get, path = "/api/v1/users/{user}/coherence",
+    tag = "memory",
+    summary = "Get user coherence report",
+    params(("user" = String, Path, description = "User identifier")),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_user_coherence(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10177,6 +11438,16 @@ async fn get_user_coherence(
 ///
 /// Returns facts whose effective confidence has decayed below the revalidation
 /// threshold, ranked by Fisher importance (most important stale facts first).
+#[utoipa::path(
+    get, path = "/api/v1/memory/{user}/stale",
+    tag = "memory",
+    summary = "Get stale facts",
+    params(("user" = String, Path, description = "User identifier"), mnemo_core::models::edge::StaleFactsQuery),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_stale_facts(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10260,6 +11531,17 @@ async fn get_stale_facts(
 ///
 /// Revalidate a stale fact by updating its confidence and resetting the decay clock.
 /// The edge's `updated_at` is reset to now, effectively resetting the age for decay purposes.
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/revalidate",
+    tag = "memory",
+    summary = "Revalidate a stale fact",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = mnemo_core::models::edge::RevalidateFactRequest,
+    responses(
+        (status = 200, description = "Success", body = mnemo_core::models::edge::RevalidateFactResult),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn revalidate_fact(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10317,6 +11599,19 @@ async fn revalidate_fact(
 ///
 /// List clarification requests for a user. Returns pending clarifications by
 /// default; set `?all=true` to include resolved/expired/dismissed.
+#[utoipa::path(
+    get, path = "/api/v1/memory/{user}/clarifications",
+    tag = "clarifications",
+    summary = "List user clarifications",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        ListClarificationsParams,
+    ),
+    responses(
+        (status = 200, description = "Clarification list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_clarifications(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10339,7 +11634,7 @@ async fn list_clarifications(
     })))
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct ListClarificationsParams {
     all: Option<bool>,
     limit: Option<u32>,
@@ -10350,6 +11645,17 @@ struct ListClarificationsParams {
 /// Generate clarification requests from detected conflicts. Runs the conflict
 /// radar, identifies conflicts above the severity threshold, and generates
 /// targeted clarification questions.
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/clarifications",
+    tag = "clarifications",
+    summary = "Generate clarification requests",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = mnemo_core::models::clarification::GenerateClarificationsRequest,
+    responses(
+        (status = 201, description = "Clarifications generated", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn generate_clarifications(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10447,6 +11753,20 @@ async fn generate_clarifications(
 /// `POST /api/v1/memory/:user/clarifications/:id/resolve`
 ///
 /// Manually resolve a pending clarification with an answer.
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/clarifications/{id}/resolve",
+    tag = "clarifications",
+    summary = "Resolve a clarification",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        ("id" = Uuid, Path, description = "Clarification ID"),
+    ),
+    request_body = mnemo_core::models::clarification::ResolveClarificationRequest,
+    responses(
+        (status = 200, description = "Clarification resolved", body = mnemo_core::models::clarification::ClarificationRequest),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn resolve_clarification(
     State(state): State<AppState>,
     Path((user_identifier, clarification_id)): Path<(String, Uuid)>,
@@ -10505,6 +11825,19 @@ async fn resolve_clarification(
 /// `POST /api/v1/memory/:user/clarifications/:id/dismiss`
 ///
 /// Dismiss a clarification without resolving it.
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/clarifications/{id}/dismiss",
+    tag = "clarifications",
+    summary = "Dismiss a clarification",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        ("id" = Uuid, Path, description = "Clarification ID"),
+    ),
+    responses(
+        (status = 200, description = "Clarification dismissed", body = mnemo_core::models::clarification::ClarificationRequest),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn dismiss_clarification(
     State(state): State<AppState>,
     Path((user_identifier, clarification_id)): Path<(String, Uuid)>,
@@ -10539,6 +11872,17 @@ async fn dismiss_clarification(
 /// Simulate retrieval context under hypothetical assumptions. Returns a full
 /// context block as if certain facts were different — without modifying actual
 /// memory state. Read-only operation.
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/counterfactual",
+    tag = "memory",
+    summary = "Counterfactual context simulation",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = mnemo_core::models::counterfactual::CounterfactualRequest,
+    responses(
+        (status = 200, description = "Success", body = mnemo_core::models::counterfactual::CounterfactualResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn counterfactual_context(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10630,6 +11974,19 @@ async fn counterfactual_context(
 /// `GET /api/v1/memory/:user/goals`
 ///
 /// List goal profiles for a user (includes both user-specific and global profiles).
+#[utoipa::path(
+    get, path = "/api/v1/memory/{user}/goals",
+    tag = "goals",
+    summary = "List goal profiles",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        GoalListParams,
+    ),
+    responses(
+        (status = 200, description = "Goal profile list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_goal_profiles(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10647,7 +12004,7 @@ async fn list_goal_profiles(
     })))
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct GoalListParams {
     limit: Option<u32>,
 }
@@ -10655,6 +12012,17 @@ struct GoalListParams {
 /// `POST /api/v1/memory/:user/goals`
 ///
 /// Create a new goal profile for a user.
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/goals",
+    tag = "goals",
+    summary = "Create goal profile",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = mnemo_core::models::goal::CreateGoalProfileRequest,
+    responses(
+        (status = 201, description = "Goal profile created", body = mnemo_core::models::goal::GoalProfile),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_goal_profile(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10699,6 +12067,19 @@ async fn create_goal_profile(
 /// `GET /api/v1/memory/:user/goals/:id`
 ///
 /// Get a specific goal profile by ID.
+#[utoipa::path(
+    get, path = "/api/v1/memory/{user}/goals/{id}",
+    tag = "goals",
+    summary = "Get goal profile",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        ("id" = Uuid, Path, description = "Goal profile ID"),
+    ),
+    responses(
+        (status = 200, description = "Goal profile found", body = mnemo_core::models::goal::GoalProfile),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_goal_profile(
     State(state): State<AppState>,
     Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
@@ -10718,6 +12099,20 @@ async fn get_goal_profile(
 /// `PUT /api/v1/memory/:user/goals/:id`
 ///
 /// Update an existing goal profile.
+#[utoipa::path(
+    put, path = "/api/v1/memory/{user}/goals/{id}",
+    tag = "goals",
+    summary = "Update goal profile",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        ("id" = Uuid, Path, description = "Goal profile ID"),
+    ),
+    request_body = mnemo_core::models::goal::UpdateGoalProfileRequest,
+    responses(
+        (status = 200, description = "Goal profile updated", body = mnemo_core::models::goal::GoalProfile),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_goal_profile(
     State(state): State<AppState>,
     Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
@@ -10741,6 +12136,19 @@ async fn update_goal_profile(
 /// `DELETE /api/v1/memory/:user/goals/:id`
 ///
 /// Delete a goal profile.
+#[utoipa::path(
+    delete, path = "/api/v1/memory/{user}/goals/{id}",
+    tag = "goals",
+    summary = "Delete goal profile",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        ("id" = Uuid, Path, description = "Goal profile ID"),
+    ),
+    responses(
+        (status = 204, description = "Goal profile deleted"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_goal_profile(
     State(state): State<AppState>,
     Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
@@ -10755,6 +12163,16 @@ async fn delete_goal_profile(
 ///
 /// Get the current narrative summary for a user. Returns 404 if no narrative
 /// has been generated yet.
+#[utoipa::path(
+    get, path = "/api/v1/memory/{user}/narrative",
+    tag = "narrative",
+    summary = "Get user narrative",
+    params(("user" = String, Path, description = "User identifier")),
+    responses(
+        (status = 200, description = "Narrative found", body = mnemo_core::models::narrative::UserNarrative),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_narrative(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10776,6 +12194,16 @@ async fn get_narrative(
 /// `DELETE /api/v1/memory/:user/narrative`
 ///
 /// Delete a user's narrative summary.
+#[utoipa::path(
+    delete, path = "/api/v1/memory/{user}/narrative",
+    tag = "narrative",
+    summary = "Delete user narrative",
+    params(("user" = String, Path, description = "User identifier")),
+    responses(
+        (status = 204, description = "Narrative deleted"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_narrative(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10793,6 +12221,17 @@ async fn delete_narrative(
 /// If the user already has a narrative, this performs an incremental update
 /// (unless `full_rebuild: true` is specified). If no narrative exists, a fresh
 /// one is generated.
+#[utoipa::path(
+    post, path = "/api/v1/memory/{user}/narrative/refresh",
+    tag = "narrative",
+    summary = "Refresh user narrative",
+    params(("user" = String, Path, description = "User identifier")),
+    request_body = mnemo_core::models::narrative::RefreshNarrativeRequest,
+    responses(
+        (status = 200, description = "Narrative refreshed", body = mnemo_core::models::narrative::UserNarrative),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn refresh_narrative(
     State(state): State<AppState>,
     Path(user_identifier): Path<String>,
@@ -10894,6 +12333,18 @@ fn caller_from_extension(caller: Option<Extension<CallerContext>>) -> CallerCont
         .unwrap_or_else(CallerContext::anonymous)
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/keys",
+    tag = "keys",
+    summary = "Create API key",
+    description = "Creates a new API key with the specified role and scopes. Returns the raw key (shown only once).",
+    request_body = CreateApiKeyRequest,
+    responses(
+        (status = 201, description = "Key created", body = CreateApiKeyResponse),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_api_key(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -10940,7 +12391,7 @@ async fn create_api_key(
     ))
 }
 
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 struct ListApiKeysParams {
     #[serde(default = "default_api_key_limit")]
     limit: usize,
@@ -10950,6 +12401,18 @@ fn default_api_key_limit() -> usize {
     50
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/keys",
+    tag = "keys",
+    summary = "List API keys",
+    description = "Lists all API keys (key hashes are redacted). Supports pagination via limit param.",
+    params(ListApiKeysParams),
+    responses(
+        (status = 200, description = "Key list", body = Object),
+        (status = 403, description = "Forbidden — requires admin role"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_api_keys(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -10983,6 +12446,19 @@ async fn list_api_keys(
     Ok(Json(serde_json::json!({ "keys": sanitized })))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/keys/{key_id}",
+    tag = "keys",
+    summary = "Revoke API key",
+    description = "Permanently revokes an API key. The key can no longer be used for authentication.",
+    params(("key_id" = Uuid, Path, description = "Key ID to revoke")),
+    responses(
+        (status = 204, description = "Key revoked"),
+        (status = 403, description = "Forbidden — requires admin role"),
+        (status = 404, description = "Key not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn revoke_api_key(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11004,6 +12480,19 @@ async fn revoke_api_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/keys/{key_id}/rotate",
+    tag = "keys",
+    summary = "Rotate API key",
+    description = "Revokes an existing key and creates a replacement with the same role and scopes. Returns the new raw key.",
+    params(("key_id" = Uuid, Path, description = "Key ID to rotate")),
+    responses(
+        (status = 201, description = "New key created", body = CreateApiKeyResponse),
+        (status = 403, description = "Forbidden — requires admin role"),
+        (status = 404, description = "Key not found"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn rotate_api_key(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11055,6 +12544,16 @@ async fn rotate_api_key(
 
 // ─── Memory View CRUD ──────────────────────────────────────────────
 
+#[utoipa::path(
+    post, path = "/api/v1/views",
+    tag = "views",
+    summary = "Create memory view",
+    request_body = CreateViewRequest,
+    responses(
+        (status = 201, description = "View created", body = mnemo_core::models::view::MemoryView),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_view(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11097,6 +12596,15 @@ async fn create_view(
     Ok((StatusCode::CREATED, Json(view)))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/views",
+    tag = "views",
+    summary = "List memory views",
+    responses(
+        (status = 200, description = "View list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_views(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11108,6 +12616,16 @@ async fn list_views(
     Ok(Json(serde_json::json!({ "views": views })))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/views/{name}",
+    tag = "views",
+    summary = "Get view by name",
+    params(("name" = String, Path, description = "View name")),
+    responses(
+        (status = 200, description = "View found", body = mnemo_core::models::view::MemoryView),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_view(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11125,6 +12643,17 @@ async fn get_view(
     Ok(Json(view))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/views/{name}",
+    tag = "views",
+    summary = "Update memory view",
+    params(("name" = String, Path, description = "View name")),
+    request_body = CreateViewRequest,
+    responses(
+        (status = 200, description = "View updated", body = mnemo_core::models::view::MemoryView),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_view(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11154,6 +12683,16 @@ async fn update_view(
     Ok(Json(view))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/views/{name}",
+    tag = "views",
+    summary = "Delete memory view",
+    params(("name" = String, Path, description = "View name")),
+    responses(
+        (status = 204, description = "Deleted"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_view(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11176,6 +12715,16 @@ async fn delete_view(
 
 // ─── Guardrail CRUD ────────────────────────────────────────────────
 
+#[utoipa::path(
+    post, path = "/api/v1/guardrails",
+    tag = "guardrails",
+    summary = "Create guardrail rule",
+    request_body = CreateGuardrailRequest,
+    responses(
+        (status = 201, description = "Guardrail created", body = GuardrailRule),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn create_guardrail(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11218,6 +12767,15 @@ async fn create_guardrail(
     Ok((StatusCode::CREATED, Json(rule)))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/guardrails",
+    tag = "guardrails",
+    summary = "List guardrail rules",
+    responses(
+        (status = 200, description = "Guardrail list", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn list_guardrails(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11229,6 +12787,16 @@ async fn list_guardrails(
     Ok(Json(serde_json::json!({ "guardrails": rules })))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/guardrails/{id}",
+    tag = "guardrails",
+    summary = "Get guardrail by ID",
+    params(("id" = Uuid, Path, description = "Guardrail ID")),
+    responses(
+        (status = 200, description = "Guardrail found", body = GuardrailRule),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn get_guardrail(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11246,6 +12814,17 @@ async fn get_guardrail(
     Ok(Json(rule))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/guardrails/{id}",
+    tag = "guardrails",
+    summary = "Update guardrail rule",
+    params(("id" = Uuid, Path, description = "Guardrail ID")),
+    request_body = CreateGuardrailRequest,
+    responses(
+        (status = 200, description = "Guardrail updated", body = GuardrailRule),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn update_guardrail(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11282,6 +12861,16 @@ async fn update_guardrail(
     Ok(Json(rule))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/guardrails/{id}",
+    tag = "guardrails",
+    summary = "Delete guardrail rule",
+    params(("id" = Uuid, Path, description = "Guardrail ID")),
+    responses(
+        (status = 204, description = "Deleted"),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn delete_guardrail(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
@@ -11303,6 +12892,16 @@ async fn delete_guardrail(
 }
 
 /// Dry-run: evaluate guardrail rules against sample data without executing actions.
+#[utoipa::path(
+    post, path = "/api/v1/guardrails/evaluate",
+    tag = "guardrails",
+    summary = "Evaluate guardrail rules",
+    request_body = EvaluateGuardrailsRequest,
+    responses(
+        (status = 200, description = "Evaluation result", body = EvaluateGuardrailsResponse),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
 async fn evaluate_guardrails(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
