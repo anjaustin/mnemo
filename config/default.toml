@@ -140,3 +140,6 @@ enabled = false
 master_key = ""
 # Key identifier for rotation tracking.
 key_id = "kek-001"
+# Retired keys for decryption during rotation. Format: "key_id:base64_key,key_id:base64_key"
+# Set via MNEMO_ENCRYPTION_RETIRED_KEYS env var. Old keys can still decrypt existing data.
+# retired_keys = ""

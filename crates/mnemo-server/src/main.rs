@@ -78,12 +78,36 @@ async fn main() -> anyhow::Result<()> {
                 "MNEMO_ENCRYPTION_ENABLED=true but MNEMO_ENCRYPTION_MASTER_KEY is not set"
             ));
         }
-        let encryptor = mnemo_core::encryption::EnvelopeEncryptor::from_base64(
+        let mut encryptor = mnemo_core::encryption::EnvelopeEncryptor::from_base64(
             &config.encryption.master_key,
             config.encryption.key_id.clone(),
         )?;
+
+        // Load retired keys for key rotation support
+        if !config.encryption.retired_keys.is_empty() {
+            for entry in config.encryption.retired_keys.split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = entry.splitn(2, ':').collect();
+                if parts.len() != 2 {
+                    return Err(anyhow::anyhow!(
+                        "Invalid retired key format: expected 'key_id:base64_key', got '{entry}'"
+                    ));
+                }
+                encryptor.add_retired_key(parts[1], parts[0].to_string())?;
+                tracing::info!(key_id = parts[0], "Loaded retired encryption key");
+            }
+        }
+
+        let key_count = encryptor.known_key_ids().len();
         state_store = state_store.with_encryption(encryptor);
-        tracing::info!(key_id = %config.encryption.key_id, "BYOK envelope encryption enabled");
+        tracing::info!(
+            active_key_id = %config.encryption.key_id,
+            total_keys = key_count,
+            "BYOK envelope encryption enabled"
+        );
     }
 
     let state_store = Arc::new(state_store);

@@ -63,32 +63,40 @@ struct EncryptedEnvelope {
     _ciphertext: String,
 }
 
-/// AES-256-GCM envelope encryptor.
+/// AES-256-GCM envelope encryptor with key rotation support.
 ///
-/// The master key (KEK) is used to wrap per-document DEKs. Each document
-/// gets a fresh random DEK and nonce for forward secrecy.
+/// Holds one active KEK for encryption and zero or more retired KEKs
+/// that can only be used for decryption. Each document's envelope stores
+/// the `_key_id` it was encrypted with, allowing transparent decryption
+/// across key rotations.
 ///
 /// Debug is manually implemented to avoid leaking key material.
 pub struct EnvelopeEncryptor {
-    /// Key Encryption Key — wraps DEKs.
-    kek: [u8; 32],
-    /// Identifier for this KEK version (enables key rotation).
-    key_id: String,
+    /// All known KEKs: key_id → KEK bytes. Includes the active key.
+    keys: std::collections::HashMap<String, [u8; 32]>,
+    /// Which key_id is used for new encryptions.
+    active_key_id: String,
 }
 
 impl std::fmt::Debug for EnvelopeEncryptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EnvelopeEncryptor")
-            .field("key_id", &self.key_id)
-            .field("kek", &"[REDACTED]")
+            .field("active_key_id", &self.active_key_id)
+            .field("known_key_ids", &self.keys.keys().collect::<Vec<_>>())
+            .field("keys", &"[REDACTED]")
             .finish()
     }
 }
 
 impl EnvelopeEncryptor {
-    /// Create a new encryptor with the given 256-bit master key and key ID.
+    /// Create a new encryptor with a single active key.
     pub fn new(kek: [u8; 32], key_id: String) -> Self {
-        Self { kek, key_id }
+        let mut keys = std::collections::HashMap::new();
+        keys.insert(key_id.clone(), kek);
+        Self {
+            keys,
+            active_key_id: key_id,
+        }
     }
 
     /// Create from a base64-encoded master key string.
@@ -96,6 +104,29 @@ impl EnvelopeEncryptor {
     /// The intermediate byte vector is zeroized after copying into the
     /// fixed-size KEK array to prevent key material lingering on the heap.
     pub fn from_base64(key_b64: &str, key_id: String) -> Result<Self, MnemoError> {
+        let kek = Self::decode_key(key_b64)?;
+        Ok(Self::new(kek, key_id))
+    }
+
+    /// Add a retired key that can be used for decryption but not encryption.
+    pub fn add_retired_key(&mut self, key_b64: &str, key_id: String) -> Result<(), MnemoError> {
+        let kek = Self::decode_key(key_b64)?;
+        self.keys.insert(key_id, kek);
+        Ok(())
+    }
+
+    /// Returns the active key ID used for new encryptions.
+    pub fn active_key_id(&self) -> &str {
+        &self.active_key_id
+    }
+
+    /// Returns all known key IDs (active + retired).
+    pub fn known_key_ids(&self) -> Vec<&str> {
+        self.keys.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Decode a base64 key into a 32-byte array, zeroizing intermediates.
+    fn decode_key(key_b64: &str) -> Result<[u8; 32], MnemoError> {
         let mut bytes = BASE64
             .decode(key_b64)
             .map_err(|e| MnemoError::Config(format!("Invalid base64 master key: {e}")))?;
@@ -109,7 +140,17 @@ impl EnvelopeEncryptor {
         let mut kek = [0u8; 32];
         kek.copy_from_slice(&bytes);
         bytes.zeroize();
-        Ok(Self { kek, key_id })
+        Ok(kek)
+    }
+
+    /// Look up a KEK by key_id.
+    fn get_key(&self, key_id: &str) -> Result<&[u8; 32], MnemoError> {
+        self.keys.get(key_id).ok_or_else(|| {
+            let known: Vec<&str> = self.keys.keys().map(|s| s.as_str()).collect();
+            MnemoError::Internal(format!(
+                "Unknown encryption key_id '{key_id}'. Known keys: {known:?}"
+            ))
+        })
     }
 
     /// Encrypt plaintext using envelope encryption.
@@ -119,6 +160,8 @@ impl EnvelopeEncryptor {
     /// 3. Wrap (encrypt) the DEK with the KEK.
     /// 4. Return the envelope as a JSON string.
     pub fn encrypt(&self, plaintext: &str) -> Result<String, MnemoError> {
+        let kek_bytes = self.get_key(&self.active_key_id)?;
+
         // Generate random DEK
         let mut dek_bytes = Aes256Gcm::generate_key(OsRng);
 
@@ -130,7 +173,7 @@ impl EnvelopeEncryptor {
             .map_err(|e| MnemoError::Internal(format!("Encryption failed: {e}")))?;
 
         // Wrap DEK with KEK
-        let kek_key = Key::<Aes256Gcm>::from_slice(&self.kek);
+        let kek_key = Key::<Aes256Gcm>::from_slice(kek_bytes);
         let kek_cipher = Aes256Gcm::new(kek_key);
         let kek_nonce = Aes256Gcm::generate_nonce(OsRng);
 
@@ -148,7 +191,7 @@ impl EnvelopeEncryptor {
 
         let envelope = EncryptedEnvelope {
             _encrypted: true,
-            _key_id: self.key_id.clone(),
+            _key_id: self.active_key_id.clone(),
             _algorithm: "AES-256-GCM".to_string(),
             _dek_ciphertext: BASE64.encode(&dek_blob),
             _nonce: BASE64.encode(data_nonce),
@@ -175,6 +218,9 @@ impl EnvelopeEncryptor {
             ));
         }
 
+        // Look up the KEK that was used to encrypt this envelope
+        let kek_bytes = self.get_key(&envelope._key_id)?;
+
         // Decode base64 fields
         let dek_blob = BASE64
             .decode(&envelope._dek_ciphertext)
@@ -196,7 +242,7 @@ impl EnvelopeEncryptor {
         let kek_nonce = Nonce::from_slice(kek_nonce_bytes);
 
         // Unwrap DEK with KEK
-        let kek_key = Key::<Aes256Gcm>::from_slice(&self.kek);
+        let kek_key = Key::<Aes256Gcm>::from_slice(kek_bytes);
         let kek_cipher = Aes256Gcm::new(kek_key);
         let mut dek_bytes = kek_cipher.decrypt(kek_nonce, wrapped_dek).map_err(|_| {
             MnemoError::Internal(
@@ -252,7 +298,9 @@ pub fn is_encrypted(json_str: &str) -> bool {
 
 impl Drop for EnvelopeEncryptor {
     fn drop(&mut self) {
-        self.kek.zeroize();
+        for kek in self.keys.values_mut() {
+            kek.zeroize();
+        }
     }
 }
 
@@ -365,5 +413,64 @@ mod tests {
         let enc = EnvelopeEncryptor::new(test_key(), "kek-2025-q1".to_string());
         let encrypted = enc.encrypt("data").unwrap();
         assert!(encrypted.contains("kek-2025-q1"));
+    }
+
+    fn test_key_b() -> [u8; 32] {
+        let mut k = [0u8; 32];
+        for (i, b) in k.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_add(100);
+        }
+        k
+    }
+
+    #[test]
+    fn test_key_rotation_decrypt_with_old_key() {
+        // Encrypt with key A
+        let enc_a = EnvelopeEncryptor::new(test_key(), "key-a".to_string());
+        let encrypted = enc_a.encrypt("secret from key A").unwrap();
+        assert!(encrypted.contains("key-a"));
+
+        // Create new encryptor with key B active, key A retired
+        let mut enc_b = EnvelopeEncryptor::new(test_key_b(), "key-b".to_string());
+        enc_b
+            .add_retired_key(&BASE64.encode(test_key()), "key-a".to_string())
+            .unwrap();
+
+        // Should decrypt data encrypted with old key A
+        let decrypted = enc_b.decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted, "secret from key A");
+
+        // New encryptions use key B
+        let new_encrypted = enc_b.encrypt("new data").unwrap();
+        assert!(new_encrypted.contains("key-b"));
+        assert_eq!(enc_b.decrypt(&new_encrypted).unwrap(), "new data");
+    }
+
+    #[test]
+    fn test_key_rotation_unknown_key_id_error() {
+        let enc = EnvelopeEncryptor::new(test_key(), "key-x".to_string());
+        let encrypted = enc.encrypt("data").unwrap();
+
+        // Encryptor with only key-y cannot decrypt key-x data
+        let enc_y = EnvelopeEncryptor::new(test_key_b(), "key-y".to_string());
+        let err = enc_y.decrypt(&encrypted).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("key-x"),
+            "error should mention missing key_id: {msg}"
+        );
+        assert!(msg.contains("key-y"), "error should list known keys: {msg}");
+    }
+
+    #[test]
+    fn test_known_key_ids() {
+        let mut enc = EnvelopeEncryptor::new(test_key(), "active".to_string());
+        enc.add_retired_key(&BASE64.encode(test_key_b()), "retired-1".to_string())
+            .unwrap();
+
+        let mut ids = enc.known_key_ids();
+        ids.sort();
+        assert_eq!(ids, vec!["active", "retired-1"]);
+        assert_eq!(enc.active_key_id(), "active");
     }
 }

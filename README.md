@@ -206,7 +206,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Mnemo CORS**: Configurable via `MNEMO_CORS_ALLOWED_ORIGINS` (comma-separated) or `cors_allowed_origins` in TOML. Defaults to `["*"]` for backward compatibility. Set specific origins for production.
 - **Mnemo auth-exempt routes**: Unauthenticated routes (health, swagger, dashboard) receive a read-only `CallerContext::anonymous()`. Auth-disabled mode still grants admin via `CallerContext::admin_bootstrap()`.
 - **Mnemo OpenAPI paths**: The OpenAPI 3.1 spec registers schemas but has zero `#[utoipa::path]` annotations on handlers, so the spec contains no endpoint documentation yet. Swagger UI loads but shows only models.
-- **Mnemo BYOK key rotation**: BYOK supports a single `key_id` but has no multi-key decryption or rotation workflow. Rotating keys currently requires re-encrypting all data. This is a genuine gap for compliance-sensitive deployments.
+- **Mnemo BYOK key rotation**: BYOK supports key rotation via `MNEMO_ENCRYPTION_RETIRED_KEYS` (comma-separated `key_id:base64_key` pairs). Old keys decrypt existing data; new data uses the active key. No automatic re-encryption workflow yet — requires manual re-write of affected values.
 - **Mnemo OTLP security**: The OpenTelemetry exporter supports TLS (`MNEMO_OTEL_TLS_ENABLED`, `MNEMO_OTEL_TLS_CA_PATH`) and auth headers (`MNEMO_OTEL_AUTH_HEADER`). Defaults to plaintext for local collectors.
 - **Mnemo internal types in OpenAPI**: `utoipa` derives on internal structs (e.g., `GraphNode`, `RedisEdge`) expose implementation details in the schema. Needs a DTO separation layer.
 - **Mnemo Helm Qdrant auth**: Qdrant API key auth is supported via `qdrant.apiKey` in Helm values and `MNEMO_QDRANT_API_KEY` env var. Disabled by default; NOTES.txt warns and provides configuration guidance when auth is off.
@@ -756,7 +756,8 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_AUDIT_SIGNING_SECRET` | HMAC secret for signing audit export responses (SOC 2 compliance) | (none) |
 | `MNEMO_ENCRYPTION_ENABLED` | Enable AES-256-GCM at-rest encryption for Redis state | `false` |
 | `MNEMO_ENCRYPTION_MASTER_KEY` | Base64-encoded 32-byte master encryption key | (none) |
-| `MNEMO_ENCRYPTION_KEY_ID` | Identifier for the active encryption key (rotation support) | `default` |
+| `MNEMO_ENCRYPTION_KEY_ID` | Identifier for the active encryption key (rotation support) | `kek-001` |
+| `MNEMO_ENCRYPTION_RETIRED_KEYS` | Retired keys for rotation (`key_id:base64key,key_id:base64key`) | (none) |
 | `MNEMO_OTEL_ENABLED` | Enable OpenTelemetry OTLP trace export | `false` |
 | `MNEMO_OTEL_ENDPOINT` | OTLP gRPC collector endpoint | `http://localhost:4317` |
 | `MNEMO_OTEL_SERVICE_NAME` | Service name reported in traces | `mnemo` |

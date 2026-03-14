@@ -349,6 +349,12 @@ pub struct EncryptionSection {
     /// Key identifier for rotation tracking.
     #[serde(default = "default_encryption_key_id")]
     pub key_id: String,
+    /// Retired keys for decryption during key rotation.
+    /// Format: comma-separated `key_id:base64_key` pairs.
+    /// Set via `MNEMO_ENCRYPTION_RETIRED_KEYS` env var.
+    /// Example: `kek-001:base64key1,kek-002:base64key2`
+    #[serde(default)]
+    pub retired_keys: String,
 }
 
 impl std::fmt::Debug for EncryptionSection {
@@ -357,6 +363,20 @@ impl std::fmt::Debug for EncryptionSection {
             .field("enabled", &self.enabled)
             .field("master_key", &"[REDACTED]")
             .field("key_id", &self.key_id)
+            .field(
+                "retired_keys",
+                &if self.retired_keys.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    format!(
+                        "[{} retired key(s)]",
+                        self.retired_keys
+                            .split(',')
+                            .filter(|s| !s.is_empty())
+                            .count()
+                    )
+                },
+            )
             .finish()
     }
 }
@@ -367,6 +387,7 @@ impl Default for EncryptionSection {
             enabled: false,
             master_key: String::new(),
             key_id: default_encryption_key_id(),
+            retired_keys: String::new(),
         }
     }
 }
@@ -663,6 +684,9 @@ impl MnemoConfig {
         }
         if let Ok(v) = std::env::var("MNEMO_ENCRYPTION_KEY_ID") {
             config.encryption.key_id = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_ENCRYPTION_RETIRED_KEYS") {
+            config.encryption.retired_keys = v;
         }
 
         Ok(config)
