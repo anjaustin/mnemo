@@ -203,6 +203,17 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Mnemo reranking caveat**: MMR uses score-proximity approximation rather than full embedding dot-product.
 - **Mnemo multi-modal**: Not supported. Text-only memory ingestion. This is a genuine gap.
 - **Mnemo managed cloud**: Not yet available. Mnemo is self-hosted only. This is a genuine gap for teams that prefer managed infrastructure.
+- **Mnemo CORS**: `CorsLayer::permissive()` in production. Intentional for development; needs environment-based origin configuration for production deployments.
+- **Mnemo auth-exempt routes**: Unauthenticated routes (health, swagger, dashboard) receive a synthetic admin `CallerContext`. Functionally safe but architecturally unsound — needs refactor to distinguish "no auth required" from "admin by default."
+- **Mnemo OpenAPI paths**: The OpenAPI 3.1 spec registers schemas but has zero `#[utoipa::path]` annotations on handlers, so the spec contains no endpoint documentation yet. Swagger UI loads but shows only models.
+- **Mnemo BYOK key rotation**: BYOK supports a single `key_id` but has no multi-key decryption or rotation workflow. Rotating keys currently requires re-encrypting all data. This is a genuine gap for compliance-sensitive deployments.
+- **Mnemo OTLP security**: The OpenTelemetry exporter connects to the collector over plaintext gRPC. No TLS or bearer token auth configuration is available yet.
+- **Mnemo internal types in OpenAPI**: `utoipa` derives on internal structs (e.g., `GraphNode`, `RedisEdge`) expose implementation details in the schema. Needs a DTO separation layer.
+- **Mnemo Helm Qdrant auth**: Qdrant subchart does not expose an auth toggle. Qdrant runs unauthenticated inside the cluster by default.
+- **Mnemo Helm Ingress TLS**: Ingress template has no TLS block. Requires cluster-specific setup (cert-manager, cloud LB).
+- **Mnemo Helm NetworkPolicy**: No NetworkPolicy template. Pod-to-pod traffic is unrestricted within the namespace.
+- **Mnemo Helm subchart seccomp**: Only the Mnemo deployment has `seccompProfile: RuntimeDefault`. Redis and Qdrant pods inherit cluster defaults.
+- **Mnemo dead config sections**: `[graph]` and `[retention]` sections in `config/default.toml` are parsed but silently ignored. Not a security issue; retention is enforced per-user via the policy API.
 - **Zep self-hosted**: [Graphiti](https://github.com/getzep/graphiti) is now fully open-source (Apache 2.0, 23.7k stars) with Neo4j, FalkorDB, Kuzu, and Neptune backends. Prior "partial" rating was stale. Zep Cloud remains the managed platform.
 - **Zep graph traversal**: BFS shipped (`bfs_origin_node_uuids`), plus node-distance reranker. No shortest-path API.
 - **Zep reranking**: Five rerankers: RRF, MMR, cross-encoder, node_distance, episode_mentions. Full parity.
@@ -846,7 +857,7 @@ See `docs/QA_QC_FALSIFICATION_PRD.md` for the full 25-domain falsification plan.
 - Production Helm chart with Redis/Qdrant subcharts ✅
 - OpenTelemetry OTLP trace export ✅
 - BYOK AES-256-GCM envelope encryption ✅
-- Red-team audit (30 findings, 15 fixed — all CRITICAL + HIGH + most MEDIUM) ✅
+- Red-team audit (30 findings: 15 fixed — all CRITICAL + HIGH + most MEDIUM; 12 deferred as acceptable risk — see Honesty Notes) ✅
 - Version sync across all workspace crates, SDKs, and Helm chart ✅
 
 ## Contributing
