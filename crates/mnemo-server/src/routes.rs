@@ -2135,6 +2135,7 @@ struct AuditExportRecord {
     at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     request_id: Option<String>,
+    #[schema(value_type = Object)]
     details: serde_json::Value,
     /// Only present for webhook audit records
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3573,6 +3574,7 @@ struct ImportMessage {
 struct ImportChatHistoryRequest {
     user: String,
     source: ChatHistorySource,
+    #[schema(value_type = Object)]
     payload: serde_json::Value,
     #[serde(default)]
     default_session: Option<String>,
@@ -3886,6 +3888,7 @@ struct TraceLookupResponse {
     matched_webhook_events: Vec<MemoryWebhookEventRecord>,
     matched_webhook_audit: Vec<MemoryWebhookAuditRecord>,
     matched_governance_audit: Vec<GovernanceAuditRecord>,
+    #[schema(value_type = Object)]
     summary: serde_json::Value,
 }
 
@@ -4517,6 +4520,7 @@ struct AgentContextResponse {
     experience_events_used: u32,
     experience_weight_sum: f32,
     user_memory_items_used: u32,
+    #[schema(value_type = Object)]
     attribution_guards: serde_json::Value,
 }
 
@@ -4528,6 +4532,7 @@ struct MetadataFilterDiagnostics {
     candidate_reduction_ratio: f32,
     planner_latency_ms: u64,
     relaxed_fallback_applied: bool,
+    #[schema(value_type = Object)]
     applied_filters: serde_json::Value,
 }
 
@@ -10353,6 +10358,7 @@ struct VectorPoint {
     id: String,
     vector: Vec<f32>,
     #[serde(default)]
+    #[schema(value_type = Object)]
     metadata: serde_json::Value,
 }
 

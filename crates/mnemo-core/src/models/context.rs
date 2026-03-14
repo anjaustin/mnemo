@@ -45,6 +45,7 @@ pub struct ContextBlock {
     /// Optional semantic routing diagnostics (strategy selection, confidence, alternatives).
     /// Set by the server layer when the semantic router auto-classifies the query.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
     pub routing_decision: Option<serde_json::Value>,
 }
 
@@ -255,6 +256,7 @@ pub struct SearchResult {
 
     /// Additional details depending on result_type.
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
 }
 

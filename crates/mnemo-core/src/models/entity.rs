@@ -99,6 +99,7 @@ pub struct Entity {
 
     /// Arbitrary metadata.
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
 
     /// Sensitivity classification.  Defaults to `Internal` for secure-by-default

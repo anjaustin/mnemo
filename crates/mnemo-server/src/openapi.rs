@@ -352,10 +352,33 @@ impl utoipa::Modify for SecurityAddon {
 mod tests {
     use super::*;
 
+    /// Verify the full OpenAPI spec can be serialized to JSON without
+    /// stack overflow.  This was previously impossible due to recursive
+    /// `serde_json::Value` schemas; fixed by annotating all Value fields
+    /// with `#[schema(value_type = Object)]`.
+    #[test]
+    fn openapi_to_json_does_not_overflow() {
+        use utoipa::OpenApi;
+        let json = MnemoApiDoc::openapi()
+            .to_json()
+            .expect("OpenAPI JSON serialization must not overflow");
+        // Sanity: the spec must contain our title and at least one path
+        assert!(json.contains("\"Mnemo API\""), "spec must contain title");
+        assert!(
+            json.contains("/api/v1/users"),
+            "spec must contain user paths"
+        );
+        assert!(json.contains("/health"), "spec must contain health path");
+        // Verify path count is reasonable (we registered 142 paths)
+        let path_count = json.matches("\"summary\"").count();
+        assert!(
+            path_count >= 100,
+            "expected at least 100 path summaries, got {path_count}"
+        );
+    }
+
     /// RT-11: signing_secret field must not appear in the
-    /// MemoryWebhookSubscription schema.  We verify at the individual
-    /// type level because constructing the full `MnemoApiDoc::openapi()`
-    /// triggers stack overflow from recursive `serde_json::Value` schemas.
+    /// MemoryWebhookSubscription schema.
     #[test]
     fn rt11_signing_secret_hidden_from_webhook_schema() {
         let mut collected = Vec::new();

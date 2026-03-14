@@ -32,6 +32,7 @@ pub struct User {
 
     /// Arbitrary key-value metadata.
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
 
     pub created_at: DateTime<Utc>,
@@ -54,6 +55,7 @@ pub struct CreateUserRequest {
     pub email: Option<String>,
 
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
 }
 
@@ -70,6 +72,7 @@ pub struct UpdateUserRequest {
     pub external_id: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
     pub metadata: Option<serde_json::Value>,
 }
 

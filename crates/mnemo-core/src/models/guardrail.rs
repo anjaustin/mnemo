@@ -96,11 +96,20 @@ pub enum GuardrailCondition {
     /// Fact confidence is below the threshold.
     ConfidenceBelow { confidence: f32 },
     /// All sub-conditions must match.
-    And { conditions: Vec<GuardrailCondition> },
+    And {
+        #[schema(no_recursion)]
+        conditions: Vec<GuardrailCondition>,
+    },
     /// Any sub-condition must match.
-    Or { conditions: Vec<GuardrailCondition> },
+    Or {
+        #[schema(no_recursion)]
+        conditions: Vec<GuardrailCondition>,
+    },
     /// Negate the sub-condition.
-    Not { condition: Box<GuardrailCondition> },
+    Not {
+        #[schema(no_recursion)]
+        condition: Box<GuardrailCondition>,
+    },
 }
 
 // ─── Action ────────────────────────────────────────────────────────

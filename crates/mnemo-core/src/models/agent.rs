@@ -30,6 +30,7 @@ pub struct AgentIdentityProfile {
     /// by the application; Mnemo treats it as an opaque value and never
     /// introspects its contents.
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub core: serde_json::Value,
     /// UTC timestamp of the most recent write to this profile.
     pub updated_at: DateTime<Utc>,
@@ -57,6 +58,7 @@ impl AgentIdentityProfile {
 pub struct UpdateAgentIdentityRequest {
     /// Replacement `core` value. The entire blob is replaced (not merged).
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub core: serde_json::Value,
 }
 
@@ -385,6 +387,7 @@ pub struct PromotionProposal {
     pub proposal: String,
     /// The proposed replacement `core` blob. Applied verbatim if approved.
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub candidate_core: serde_json::Value,
     /// Human-readable rationale for making this proposal.
     pub reason: String,
@@ -420,6 +423,7 @@ pub struct CreatePromotionProposalRequest {
     pub id: Option<Uuid>,
     pub proposal: String,
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub candidate_core: serde_json::Value,
     pub reason: String,
     /// Defaults to `"medium"` if omitted.
@@ -801,6 +805,7 @@ pub struct CreateBranchRequest {
     /// Optional initial core override. If omitted, the branch starts with
     /// a copy of the parent's current core.
     #[serde(default)]
+    #[schema(value_type = Option<Object>)]
     pub core_override: Option<serde_json::Value>,
 }
 
@@ -823,6 +828,7 @@ pub struct MergeResult {
     /// The parent version before merge.
     pub parent_version_before: u64,
     /// The branch's core at merge time.
+    #[schema(value_type = Object)]
     pub branch_core_applied: serde_json::Value,
 }
 
@@ -896,6 +902,7 @@ pub struct ForkAgentRequest {
     /// Optional identity core override for the new agent.
     /// If None, the parent's core is copied verbatim.
     #[serde(default)]
+    #[schema(value_type = Option<Object>)]
     pub core_override: Option<serde_json::Value>,
     /// Filter for selecting which experience events to transfer.
     /// If None, all experience events are transferred.
@@ -1172,6 +1179,7 @@ pub struct IdentityUpdateProof {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VerifiedIdentityUpdateRequest {
     /// The candidate identity core (same as `UpdateAgentIdentityRequest.core`).
+    #[schema(value_type = Object)]
     pub core: serde_json::Value,
     /// Cryptographic proof that all keys satisfy the contamination guard.
     pub proof: IdentityUpdateProof,

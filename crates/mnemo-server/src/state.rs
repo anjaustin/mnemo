@@ -93,6 +93,7 @@ pub struct MemoryWebhookEventRecord {
     pub webhook_id: Uuid,
     pub event_type: MemoryWebhookEventType,
     pub user_id: Uuid,
+    #[schema(value_type = Object)]
     pub payload: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub attempts: u32,
@@ -113,6 +114,7 @@ pub struct MemoryWebhookAuditRecord {
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[schema(value_type = Object)]
     pub details: serde_json::Value,
     pub at: chrono::DateTime<chrono::Utc>,
 }
@@ -138,6 +140,7 @@ pub struct GovernanceAuditRecord {
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[schema(value_type = Object)]
     pub details: serde_json::Value,
     pub at: chrono::DateTime<chrono::Utc>,
 }

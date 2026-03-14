@@ -24,6 +24,7 @@ pub struct Session {
 
     /// Arbitrary key-value metadata for application-specific data.
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
 
     /// Running count of episodes in this session.
@@ -67,6 +68,7 @@ pub struct CreateSessionRequest {
     pub name: Option<String>,
 
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
 }
 
@@ -76,6 +78,7 @@ pub struct UpdateSessionRequest {
     pub name: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
     pub metadata: Option<serde_json::Value>,
 
     /// Progressive summary written by the ingest pipeline after every N episodes.

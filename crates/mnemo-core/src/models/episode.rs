@@ -65,6 +65,7 @@ pub struct Episode {
 
     /// Arbitrary metadata attached to this episode.
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
 
     /// When this event occurred in the real world (provided by the caller).
@@ -126,6 +127,7 @@ pub struct CreateEpisodeRequest {
     pub name: Option<String>,
 
     #[serde(default)]
+    #[schema(value_type = Object)]
     pub metadata: serde_json::Value,
 
     /// When this event occurred. If omitted, defaults to now.
