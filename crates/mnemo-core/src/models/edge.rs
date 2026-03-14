@@ -11,6 +11,48 @@ use uuid::Uuid;
 
 use super::classification::Classification;
 
+// ─── Fact Temporal Scope (Spec 03 D2) ─────────────────────────────
+
+/// How the temporal validity of a fact should be interpreted during retrieval.
+///
+/// Set during LLM extraction. Defaults to `Mutable` when the LLM does not
+/// classify the fact or when the field is absent (backward-compatible `None`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FactTemporalScope {
+    /// Fact is expected to change over time: preferences, status, targets.
+    /// Retrieval strongly prefers the most recent valid value.
+    Mutable,
+    /// Fact is generally stable: birthdate, company founding year, nationality.
+    /// Always included in retrieval regardless of age; decay has no effect.
+    Stable,
+    /// Fact is explicitly time-bounded: quarterly target, event date, deadline.
+    /// Excluded from `current` retrieval after `expires_at`; available in `historical`.
+    TimeBounded {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expires_at: Option<DateTime<Utc>>,
+    },
+}
+
+impl FactTemporalScope {
+    /// Returns `true` if this fact should be included in a `current` retrieval
+    /// at the given reference time.
+    pub fn is_current_at(&self, now: DateTime<Utc>) -> bool {
+        match self {
+            FactTemporalScope::Mutable => true,
+            FactTemporalScope::Stable => true,
+            FactTemporalScope::TimeBounded { expires_at } => {
+                expires_at.map(|exp| now < exp).unwrap_or(true)
+            }
+        }
+    }
+
+    /// Returns `true` if this fact should be immune to temporal decay in scoring.
+    pub fn resists_decay(&self) -> bool {
+        matches!(self, FactTemporalScope::Stable)
+    }
+}
+
 /// An edge represents a fact/relationship between two entities in the temporal knowledge graph.
 ///
 /// Edges are the core of Mnemo's temporal reasoning. Unlike traditional knowledge graphs
@@ -83,6 +125,21 @@ pub struct Edge {
 
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+
+    // ── Spec 03 additions ──────────────────────────────────────────
+    /// Temporal scope of this fact (Spec 03 D2).
+    /// `None` is treated as `Mutable` for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_scope: Option<FactTemporalScope>,
+
+    /// Number of times this fact has been returned in a context retrieval (Spec 03 D3).
+    /// Used for reinforcement scoring. Only distinct sessions are counted.
+    #[serde(default)]
+    pub access_count: u32,
+
+    /// When this fact was last returned in a context retrieval (Spec 03 D3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_accessed_at: Option<DateTime<Utc>>,
 }
 
 /// Represents a relationship extracted by the LLM/extraction pipeline
@@ -105,6 +162,63 @@ pub struct ExtractedRelationship {
     /// LLM-suggested classification.  Defaults to `Internal` if not provided.
     #[serde(default)]
     pub classification: Classification,
+
+    /// LLM-suggested temporal scope. `None` → treated as `Mutable` at ingest time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_scope: Option<FactTemporalScope>,
+}
+
+// ─── Belief Change (Spec 03 D1) ───────────────────────────────────
+
+/// A detected belief change: a new fact with the same subject+predicate but
+/// a different object than an existing valid fact.
+///
+/// Stored in Redis per-user sorted by `detected_at` for the
+/// `GET /api/v1/memory/{user}/belief_changes` endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BeliefChange {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    /// The source entity name.
+    pub subject: String,
+    /// The relationship label (predicate).
+    pub predicate: String,
+    /// The old fact text.
+    pub old_value: String,
+    /// The new (potentially superseding) fact text.
+    pub new_value: String,
+    /// The edge ID of the old (now potentially invalidated) fact.
+    pub old_edge_id: Uuid,
+    /// The edge ID of the new fact.
+    pub new_edge_id: Uuid,
+    /// When this change was detected (ingest time of new episode).
+    pub detected_at: DateTime<Utc>,
+    /// Whether Mnemo automatically superseded the old fact.
+    /// `true` = old edge was invalidated; `false` = flagged for review.
+    pub auto_superseded: bool,
+}
+
+/// Query parameters for the belief changes endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
+pub struct BeliefChangesQuery {
+    #[serde(default = "default_belief_limit")]
+    pub limit: u32,
+    /// Only return changes since this timestamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<DateTime<Utc>>,
+}
+
+fn default_belief_limit() -> u32 {
+    50
+}
+
+impl Default for BeliefChangesQuery {
+    fn default() -> Self {
+        Self {
+            limit: 50,
+            since: None,
+        }
+    }
 }
 
 /// Query parameters for filtering edges.
@@ -189,6 +303,9 @@ impl Edge {
             classification: rel.classification,
             created_at: now,
             updated_at: now,
+            temporal_scope: rel.temporal_scope.clone(),
+            access_count: 0,
+            last_accessed_at: None,
         }
     }
 
@@ -422,6 +539,7 @@ mod tests {
             confidence: 0.95,
             valid_at: None,
             classification: Classification::default(),
+            temporal_scope: None,
         }
     }
 
@@ -1014,5 +1132,172 @@ mod tests {
             "Importance must be clamped, got {}",
             fi
         );
+    }
+
+    // ─── Spec 03 D2: FactTemporalScope tests ───────────────────────
+
+    #[test]
+    fn test_fact_temporal_scope_mutable_is_always_current() {
+        let scope = FactTemporalScope::Mutable;
+        let past = Utc::now() - chrono::Duration::days(3650);
+        let future = Utc::now() + chrono::Duration::days(3650);
+        assert!(scope.is_current_at(past));
+        assert!(scope.is_current_at(future));
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_stable_is_always_current() {
+        let scope = FactTemporalScope::Stable;
+        let past = Utc::now() - chrono::Duration::days(3650);
+        let future = Utc::now() + chrono::Duration::days(3650);
+        assert!(scope.is_current_at(past));
+        assert!(scope.is_current_at(future));
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_stable_resists_decay() {
+        assert!(FactTemporalScope::Stable.resists_decay());
+        assert!(!FactTemporalScope::Mutable.resists_decay());
+        assert!(!FactTemporalScope::TimeBounded { expires_at: None }.resists_decay());
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_time_bounded_expired() {
+        let expired = FactTemporalScope::TimeBounded {
+            expires_at: Some(Utc::now() - chrono::Duration::days(1)),
+        };
+        assert!(
+            !expired.is_current_at(Utc::now()),
+            "past expiry should not be current"
+        );
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_time_bounded_not_yet_expired() {
+        let future_scope = FactTemporalScope::TimeBounded {
+            expires_at: Some(Utc::now() + chrono::Duration::days(30)),
+        };
+        assert!(
+            future_scope.is_current_at(Utc::now()),
+            "future expiry should be current"
+        );
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_time_bounded_no_expiry_is_current() {
+        let no_expiry = FactTemporalScope::TimeBounded { expires_at: None };
+        assert!(
+            no_expiry.is_current_at(Utc::now()),
+            "no expiry means indefinitely current"
+        );
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_serde_roundtrip_mutable() {
+        let scope = FactTemporalScope::Mutable;
+        let json = serde_json::to_string(&scope).unwrap();
+        let back: FactTemporalScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(scope, back);
+        assert!(json.contains("mutable"));
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_serde_roundtrip_stable() {
+        let scope = FactTemporalScope::Stable;
+        let json = serde_json::to_string(&scope).unwrap();
+        let back: FactTemporalScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(scope, back);
+        assert!(json.contains("stable"));
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_serde_roundtrip_time_bounded_with_expiry() {
+        let exp = Utc::now() + chrono::Duration::days(10);
+        let scope = FactTemporalScope::TimeBounded {
+            expires_at: Some(exp),
+        };
+        let json = serde_json::to_string(&scope).unwrap();
+        let back: FactTemporalScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(scope, back);
+        assert!(json.contains("time_bounded"));
+    }
+
+    #[test]
+    fn test_fact_temporal_scope_serde_tagged_format() {
+        // Verify the tagged JSON uses `"type"` field as discriminant
+        let json = serde_json::to_string(&FactTemporalScope::Stable).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "stable");
+    }
+
+    // ─── Spec 03 D1: BeliefChange serde ────────────────────────────
+
+    #[test]
+    fn test_belief_change_serde_roundtrip() {
+        let change = BeliefChange {
+            id: Uuid::from_u128(42),
+            user_id: Uuid::from_u128(1),
+            subject: "Kendra".into(),
+            predicate: "prefers".into(),
+            old_value: "Adidas shoes".into(),
+            new_value: "Nike shoes".into(),
+            old_edge_id: Uuid::from_u128(10),
+            new_edge_id: Uuid::from_u128(11),
+            detected_at: Utc::now(),
+            auto_superseded: true,
+        };
+        let json = serde_json::to_string(&change).unwrap();
+        let back: BeliefChange = serde_json::from_str(&json).unwrap();
+        assert_eq!(change.id, back.id);
+        assert_eq!(change.subject, back.subject);
+        assert_eq!(change.old_value, back.old_value);
+        assert_eq!(change.new_value, back.new_value);
+        assert!(back.auto_superseded);
+    }
+
+    #[test]
+    fn test_belief_change_auto_superseded_false() {
+        let change = BeliefChange {
+            id: Uuid::from_u128(99),
+            user_id: Uuid::from_u128(2),
+            subject: "Alice".into(),
+            predicate: "works_at".into(),
+            old_value: "Acme Corp".into(),
+            new_value: "Globex Corp".into(),
+            old_edge_id: Uuid::from_u128(20),
+            new_edge_id: Uuid::nil(),
+            detected_at: Utc::now(),
+            auto_superseded: false,
+        };
+        let json = serde_json::to_string(&change).unwrap();
+        let back: BeliefChange = serde_json::from_str(&json).unwrap();
+        assert!(!back.auto_superseded);
+        assert_eq!(back.new_edge_id, Uuid::nil());
+    }
+
+    #[test]
+    fn test_belief_changes_query_default_limit() {
+        let q = BeliefChangesQuery::default();
+        assert_eq!(q.limit, 50);
+        assert!(q.since.is_none());
+    }
+
+    #[test]
+    fn test_belief_changes_query_serde_roundtrip() {
+        let q = BeliefChangesQuery {
+            limit: 25,
+            since: None,
+        };
+        let json = serde_json::to_string(&q).unwrap();
+        let back: BeliefChangesQuery = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.limit, 25);
+        assert!(back.since.is_none());
+    }
+
+    #[test]
+    fn test_belief_changes_query_missing_limit_defaults() {
+        // When limit is absent from JSON, it should default to 50
+        let back: BeliefChangesQuery = serde_json::from_str("{}").unwrap();
+        assert_eq!(back.limit, 50);
     }
 }

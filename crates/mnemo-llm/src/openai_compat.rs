@@ -357,6 +357,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     .as_deref()
                     .map(Classification::from_str_flexible)
                     .unwrap_or_default(),
+                temporal_scope: None,
             })
             .collect();
 
@@ -462,6 +463,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     .as_deref()
                     .map(Classification::from_str_flexible)
                     .unwrap_or_default(),
+                temporal_scope: None,
             })
             .collect();
         Ok((

@@ -163,6 +163,9 @@ pub fn apply_hypotheticals(
                 valid_at: Utc::now(),
                 invalid_at: None,
                 relevance: hyp.confidence,
+                access_count: 0,
+                last_accessed_at: None,
+                temporal_scope: None,
             };
             facts.push(synthetic);
             injected_count += 1;
@@ -209,6 +212,9 @@ mod tests {
             valid_at: Utc::now(),
             invalid_at: None,
             relevance,
+            access_count: 0,
+            last_accessed_at: None,
+            temporal_scope: None,
         }
     }
 

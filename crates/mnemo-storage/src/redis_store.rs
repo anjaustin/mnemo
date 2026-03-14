@@ -17,7 +17,7 @@ use mnemo_core::models::{
         CreatePromotionProposalRequest, ExperienceEvent, ForkAgentRequest, ForkLineage, ForkResult,
         MergeResult, PromotionProposal, UpdateAgentIdentityRequest,
     },
-    edge::{Edge, EdgeFilter},
+    edge::{BeliefChange, BeliefChangesQuery, Edge, EdgeFilter},
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams, ProcessingStatus},
     guardrail::GuardrailRule,
@@ -892,6 +892,59 @@ impl EdgeStore for RedisStateStore {
                     && e.is_valid()
             })
             .collect())
+    }
+
+    async fn record_edge_access(&self, edge_id: Uuid) -> StorageResult<()> {
+        let key = self.key(&["edge", &edge_id.to_string()]);
+        if let Some(mut edge) = self.get_json::<Edge>(&key).await? {
+            edge.access_count = edge.access_count.saturating_add(1);
+            edge.last_accessed_at = Some(chrono::Utc::now());
+            edge.updated_at = chrono::Utc::now();
+            self.set_json(&key, &edge).await?;
+        }
+        Ok(())
+    }
+}
+
+impl BeliefChangeStore for RedisStateStore {
+    async fn record_belief_change(&self, change: BeliefChange) -> StorageResult<()> {
+        let key = self.key(&["belief_changes", &change.user_id.to_string()]);
+        let score = change.detected_at.timestamp_millis() as f64;
+        let json = serde_json::to_string(&change)
+            .map_err(|e| MnemoError::Serialization(e.to_string()))?;
+        let mut conn = self.conn.clone();
+        conn.zadd::<_, _, _, ()>(&key, json, score)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        // Trim to 1000 most recent belief changes per user
+        conn.zremrangebyrank::<_, ()>(&key, 0, -1001)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn list_belief_changes(
+        &self,
+        user_id: Uuid,
+        query: &BeliefChangesQuery,
+    ) -> StorageResult<Vec<BeliefChange>> {
+        let key = self.key(&["belief_changes", &user_id.to_string()]);
+        let mut conn = self.conn.clone();
+        let min_score = query
+            .since
+            .map(|t| t.timestamp_millis() as f64)
+            .unwrap_or(f64::NEG_INFINITY);
+        let limit = query.limit.max(1) as isize;
+        // ZRANGEBYSCORE in descending order: get most recent first
+        let raw: Vec<String> = conn
+            .zrevrangebyscore_limit(&key, "+inf", min_score, 0, limit)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        let changes = raw
+            .into_iter()
+            .filter_map(|s| serde_json::from_str::<BeliefChange>(&s).ok())
+            .collect();
+        Ok(changes)
     }
 }
 

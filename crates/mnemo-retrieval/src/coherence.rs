@@ -406,6 +406,9 @@ mod tests {
             classification: mnemo_core::models::classification::Classification::default(),
             created_at: created,
             updated_at: Utc::now(),
+            access_count: 0,
+            last_accessed_at: None,
+            temporal_scope: None,
         }
     }
 

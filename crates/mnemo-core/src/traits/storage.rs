@@ -10,7 +10,7 @@ use crate::models::{
     },
     api_key::ApiKey,
     digest::MemoryDigest,
-    edge::{Edge, EdgeFilter},
+    edge::{BeliefChange, BeliefChangesQuery, Edge, EdgeFilter},
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams},
     guardrail::GuardrailRule,
@@ -290,6 +290,31 @@ pub trait EdgeStore: Send + Sync {
         target_entity_id: Uuid,
         label: &str,
     ) -> StorageResult<Vec<Edge>>;
+
+    /// Increment `access_count` and update `last_accessed_at` for an edge.
+    ///
+    /// Called asynchronously after retrieval — must not block the response path.
+    /// Implementations should be fire-and-forget safe (errors logged, not propagated).
+    async fn record_edge_access(&self, edge_id: Uuid) -> StorageResult<()>;
+}
+
+// ─── Belief Change Storage (Spec 03 D1) ───────────────────────────
+
+/// Persistence for detected belief changes.
+#[allow(async_fn_in_trait)]
+pub trait BeliefChangeStore: Send + Sync {
+    /// Persist a detected belief change.
+    async fn record_belief_change(
+        &self,
+        change: BeliefChange,
+    ) -> StorageResult<()>;
+
+    /// List belief changes for a user, optionally filtered by `since`.
+    async fn list_belief_changes(
+        &self,
+        user_id: Uuid,
+        query: &BeliefChangesQuery,
+    ) -> StorageResult<Vec<BeliefChange>>;
 }
 
 // ─── Vector Storage ────────────────────────────────────────────────

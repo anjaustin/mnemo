@@ -232,6 +232,15 @@ pub struct FactSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invalid_at: Option<DateTime<Utc>>,
     pub relevance: f32,
+    /// How many times this fact has been returned in retrieval (Spec 03 D3).
+    #[serde(default)]
+    pub access_count: u32,
+    /// When this fact was last returned in retrieval (Spec 03 D3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_accessed_at: Option<DateTime<Utc>>,
+    /// Temporal scope of this fact (Spec 03 D2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_scope: Option<String>,
 }
 
 /// Lightweight episode reference included in context responses.
@@ -895,6 +904,9 @@ mod tests {
             valid_at: Utc::now(),
             invalid_at: None,
             relevance: 0.92,
+            access_count: 0,
+            last_accessed_at: None,
+            temporal_scope: None,
         });
 
         block.assemble(500);
@@ -920,6 +932,9 @@ mod tests {
                 valid_at: Utc::now(),
                 invalid_at: None,
                 relevance: 0.5,
+                access_count: 0,
+                last_accessed_at: None,
+                temporal_scope: None,
             });
         }
 

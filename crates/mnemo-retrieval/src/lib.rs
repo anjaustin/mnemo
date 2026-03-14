@@ -302,6 +302,19 @@ where
                     );
                 }
 
+                // D3: apply reinforcement boost to relevance score
+                let base_relevance = *rrf_score as f32;
+                let reinforced_relevance = apply_reinforcement(
+                    base_relevance,
+                    edge.access_count,
+                    edge.last_accessed_at,
+                );
+
+                // D2: scope label for FactSummary
+                let scope_label = edge.temporal_scope.as_ref().map(|s| {
+                    serde_json::to_string(s).unwrap_or_default()
+                });
+
                 block.facts.push(FactSummary {
                     id: edge.id,
                     source_entity: src_name,
@@ -311,7 +324,10 @@ where
                     classification: edge.classification,
                     valid_at: edge.valid_at,
                     invalid_at: edge.invalid_at,
-                    relevance: *rrf_score as f32,
+                    relevance: reinforced_relevance,
+                    access_count: edge.access_count,
+                    last_accessed_at: edge.last_accessed_at,
+                    temporal_scope: scope_label,
                 });
             }
         }
@@ -357,6 +373,13 @@ where
                     );
                 }
 
+                let graph_base = entity_summary.relevance * 0.8;
+                let graph_relevance =
+                    apply_reinforcement(graph_base, edge.access_count, edge.last_accessed_at);
+                let scope_label = edge.temporal_scope.as_ref().map(|s| {
+                    serde_json::to_string(s).unwrap_or_default()
+                });
+
                 block.facts.push(FactSummary {
                     id: edge.id,
                     source_entity: entity_summary.name.clone(),
@@ -366,7 +389,10 @@ where
                     classification: edge.classification,
                     valid_at: edge.valid_at,
                     invalid_at: edge.invalid_at,
-                    relevance: entity_summary.relevance * 0.8,
+                    relevance: graph_relevance,
+                    access_count: edge.access_count,
+                    last_accessed_at: edge.last_accessed_at,
+                    temporal_scope: scope_label,
                 });
             }
         }
@@ -444,6 +470,16 @@ where
         //     add an open_question signal (consumed by D2 build_structured).
         let absent_signal = matches!(query_classification.query_type, QueryType::Absent)
             && block.facts.is_empty();
+
+        // ── D3: Reinforcement — async access recording ─────────
+        // Bump access_count + last_accessed_at for each fact returned in this
+        // context. Errors are silently swallowed — this must not fail a query.
+        {
+            let ids: Vec<Uuid> = block.facts.iter().map(|f| f.id).collect();
+            for id in ids {
+                let _ = self.state_store.record_edge_access(id).await;
+            }
+        }
 
         // ── D2: Build structured context ──────────────────────
         if request.structured {
@@ -684,6 +720,37 @@ fn mmr_merge(sources: Vec<Vec<ScoredHit>>) -> Vec<(Uuid, f64)> {
     selected
 }
 
+// ─── D3: Reinforcement scoring ─────────────────────────────────────
+
+/// Compute the reinforcement-boosted relevance score (Spec 03 D3).
+///
+/// `score = base_score * recency + reinforcement`
+/// where:
+///   recency     = 1.0 / (1.0 + days_since_last_access * DECAY_RATE)
+///   reinforcement = log2(1 + access_count) * REINFORCEMENT_WEIGHT
+///
+/// Facts never accessed have recency = 1.0, reinforcement = 0.0 (no penalty).
+fn apply_reinforcement(
+    base: f32,
+    access_count: u32,
+    last_accessed_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> f32 {
+    const DECAY_RATE: f32 = 0.05;
+    const REINFORCEMENT_WEIGHT: f32 = 0.1;
+
+    let recency = match last_accessed_at {
+        Some(t) => {
+            let days = (chrono::Utc::now() - t).num_days().max(0) as f32;
+            1.0 / (1.0 + days * DECAY_RATE)
+        }
+        None => 1.0, // never accessed — no penalty
+    };
+
+    let reinforcement = (1.0 + access_count as f32).log2() * REINFORCEMENT_WEIGHT;
+
+    (base * recency + reinforcement).clamp(0.0, 1.5) // allow slight boost above 1.0
+}
+
 fn resolve_temporal_intent(intent: TemporalIntent, query_text: &str) -> TemporalIntent {
     if intent != TemporalIntent::Auto {
         return intent;
@@ -733,7 +800,32 @@ fn apply_temporal_scoring(
         .unwrap_or_else(|| default_temporal_weight(temporal_intent))
         .clamp(0.0, 1.0) as f64;
 
+    // D2: collect expired TimeBounded fact IDs to remove before scoring
+    let expired_ids: std::collections::HashSet<Uuid> = {
+        use mnemo_core::models::edge::FactTemporalScope;
+        if matches!(temporal_intent, TemporalIntent::Current | TemporalIntent::Auto) {
+            block.facts.iter().filter_map(|f| {
+                if let Some(scope_json) = &f.temporal_scope {
+                    if let Ok(scope) = serde_json::from_str::<FactTemporalScope>(scope_json) {
+                        if !scope.is_current_at(now) {
+                            return Some(f.id);
+                        }
+                    }
+                }
+                None
+            }).collect()
+        } else {
+            std::collections::HashSet::new()
+        }
+    };
+    block.facts.retain(|f| !expired_ids.contains(&f.id));
+
     for fact in &mut block.facts {
+        // D2: Stable facts resist temporal decay — keep them at full relevance
+        let is_stable = fact.temporal_scope.as_deref().map(|s| s.contains("stable")).unwrap_or(false);
+        if is_stable {
+            continue; // skip temporal adjustment for stable facts
+        }
         let temporal_score = score_fact_temporal(fact, temporal_intent, temporal_filter, now);
         fact.relevance = apply_temporal_blend(fact.relevance as f64, temporal_score, weight) as f32;
     }
@@ -946,6 +1038,9 @@ mod tests {
             valid_at: now - Duration::days(2),
             invalid_at: None,
             relevance: 0.01,
+            access_count: 0,
+            last_accessed_at: None,
+            temporal_scope: None,
         };
         let stale_fact = FactSummary {
             id: Uuid::now_v7(),
@@ -957,6 +1052,9 @@ mod tests {
             valid_at: now - Duration::days(200),
             invalid_at: Some(now - Duration::days(20)),
             relevance: 0.01,
+            access_count: 0,
+            last_accessed_at: None,
+            temporal_scope: None,
         };
 
         assert!(
@@ -1294,6 +1392,81 @@ mod tests {
             b_expected_penalty > c_expected_penalty,
             "near-clone b should receive a larger diversity penalty than diverse c ({:.4} vs {:.4})",
             b_expected_penalty, c_expected_penalty
+        );
+    }
+
+    // ─── Spec 03 D3: apply_reinforcement ───────────────────────────
+
+    #[test]
+    fn test_reinforcement_zero_accesses_no_change_to_base() {
+        // access_count=0, no last_accessed_at → recency=1.0, reinforcement=log2(1)*0.1=0
+        let result = apply_reinforcement(0.5, 0, None);
+        // base * 1.0 + 0.0 = 0.5
+        assert!(
+            (result - 0.5).abs() < 1e-5,
+            "zero accesses should not change base relevance, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_reinforcement_many_accesses_boost_relevance() {
+        // High access count should raise relevance above base
+        let result = apply_reinforcement(0.5, 100, None);
+        assert!(result > 0.5, "many accesses should boost relevance");
+    }
+
+    #[test]
+    fn test_reinforcement_result_clamped_to_1_5() {
+        // Even extreme access count must not exceed 1.5
+        let result = apply_reinforcement(1.0, u32::MAX, None);
+        assert!(
+            result <= 1.5,
+            "reinforcement must be clamped at 1.5, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_reinforcement_result_never_negative() {
+        let result = apply_reinforcement(0.0, 0, Some(chrono::Utc::now() - Duration::days(365)));
+        assert!(result >= 0.0, "reinforcement must never be negative");
+    }
+
+    #[test]
+    fn test_reinforcement_decay_over_time() {
+        // A fact accessed long ago should score lower than the same fact accessed recently
+        let recent = apply_reinforcement(0.5, 5, Some(chrono::Utc::now() - Duration::days(1)));
+        let old = apply_reinforcement(0.5, 5, Some(chrono::Utc::now() - Duration::days(200)));
+        assert!(
+            recent > old,
+            "recently accessed fact ({}) should outscore older access ({})",
+            recent,
+            old
+        );
+    }
+
+    #[test]
+    fn test_reinforcement_access_count_monotonically_increases_score() {
+        // Holding recency constant, more accesses should mean higher score
+        let low = apply_reinforcement(0.5, 1, None);
+        let mid = apply_reinforcement(0.5, 10, None);
+        let high = apply_reinforcement(0.5, 100, None);
+        assert!(mid > low, "10 accesses should score higher than 1");
+        assert!(high > mid, "100 accesses should score higher than 10");
+    }
+
+    #[test]
+    fn test_reinforcement_never_accessed_no_penalty_vs_recent() {
+        // never accessed (None) should score at least as well as recently accessed at count 0
+        let never = apply_reinforcement(0.5, 0, None);
+        let recent_zero = apply_reinforcement(0.5, 0, Some(chrono::Utc::now()));
+        // both should equal base (within floating point)
+        assert!(
+            (never - recent_zero).abs() < 0.01,
+            "never vs just-now accessed with 0 count should be nearly equal: {} vs {}",
+            never,
+            recent_zero
         );
     }
 }

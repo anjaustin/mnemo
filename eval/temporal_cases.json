@@ -1,6 +1,7 @@
 [
   {
     "name": "preference_change_current",
+    "description": "D1/D3: Most recent preference supersedes earlier one",
     "memories": [
       {
         "content": "I prefer Adidas running shoes.",
@@ -23,6 +24,7 @@
   },
   {
     "name": "preference_change_historical",
+    "description": "D1: Historical query returns the superseded fact, not the current one",
     "memories": [
       {
         "content": "I prefer Adidas running shoes.",
@@ -46,6 +48,7 @@
   },
   {
     "name": "recent_focus_head",
+    "description": "D3: Current focus is most recent activity",
     "memories": [
       {
         "content": "I was debugging Redis indexing yesterday.",
@@ -64,6 +67,594 @@
     "expect": {
       "contains": ["thread head mode"],
       "not_contains": ["debugging Redis indexing"]
+    }
+  },
+  {
+    "name": "job_change_current",
+    "description": "D1: Employment change — current job replaces old one",
+    "memories": [
+      {
+        "content": "Alice works at Acme Corporation as a senior engineer.",
+        "created_at": "2023-06-01T09:00:00Z"
+      },
+      {
+        "content": "Alice recently joined Globex Corp as a principal engineer.",
+        "created_at": "2026-01-15T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "Where does Alice currently work?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["Globex"],
+      "not_contains": ["Acme Corporation"]
+    }
+  },
+  {
+    "name": "job_change_historical",
+    "description": "D1: Historical query retrieves old job",
+    "memories": [
+      {
+        "content": "Alice works at Acme Corporation as a senior engineer.",
+        "created_at": "2023-06-01T09:00:00Z"
+      },
+      {
+        "content": "Alice recently joined Globex Corp as a principal engineer.",
+        "created_at": "2026-01-15T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "Where did Alice work in 2023?",
+      "mode": "historical",
+      "as_of": "2023-12-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["Acme"],
+      "not_contains": ["Globex"]
+    }
+  },
+  {
+    "name": "stable_fact_birthdate_always_present",
+    "description": "D2 Stable: Birthdate-style fact is always included regardless of age",
+    "memories": [
+      {
+        "content": "Maria was born on July 14, 1990 in Buenos Aires.",
+        "created_at": "2021-01-01T10:00:00Z"
+      },
+      {
+        "content": "Maria recently moved to Toronto.",
+        "created_at": "2026-02-10T10:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is Maria's birthdate?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["July 14, 1990"],
+      "not_contains": []
+    }
+  },
+  {
+    "name": "belief_change_rapid_successive",
+    "description": "D1: Three rapid successive changes — only the most recent one is current",
+    "memories": [
+      {
+        "content": "My favorite programming language is Python.",
+        "created_at": "2024-01-01T12:00:00Z"
+      },
+      {
+        "content": "I now prefer Rust over Python for most projects.",
+        "created_at": "2025-03-01T12:00:00Z"
+      },
+      {
+        "content": "After more experience, I am back to preferring Python for its ecosystem.",
+        "created_at": "2026-02-20T12:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What programming language do I currently prefer?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["Python"],
+      "not_contains": ["prefer Rust"]
+    }
+  },
+  {
+    "name": "belief_change_rapid_middle_historical",
+    "description": "D1: Historical query for middle state returns intermediate belief",
+    "memories": [
+      {
+        "content": "My favorite programming language is Python.",
+        "created_at": "2024-01-01T12:00:00Z"
+      },
+      {
+        "content": "I now prefer Rust over Python for most projects.",
+        "created_at": "2025-03-01T12:00:00Z"
+      },
+      {
+        "content": "After more experience, I am back to preferring Python for its ecosystem.",
+        "created_at": "2026-02-20T12:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What programming language did I prefer in 2025?",
+      "mode": "historical",
+      "as_of": "2025-06-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["Rust"],
+      "not_contains": []
+    }
+  },
+  {
+    "name": "location_change_current",
+    "description": "D1: Most recent location supersedes old one",
+    "memories": [
+      {
+        "content": "Ben lives in Seattle, Washington.",
+        "created_at": "2022-09-01T08:00:00Z"
+      },
+      {
+        "content": "Ben relocated to Austin, Texas last month.",
+        "created_at": "2026-02-01T08:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "Where does Ben live now?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["Austin"],
+      "not_contains": ["Seattle"]
+    }
+  },
+  {
+    "name": "location_change_historical",
+    "description": "D1: Historical query returns the prior city",
+    "memories": [
+      {
+        "content": "Ben lives in Seattle, Washington.",
+        "created_at": "2022-09-01T08:00:00Z"
+      },
+      {
+        "content": "Ben relocated to Austin, Texas last month.",
+        "created_at": "2026-02-01T08:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "Where did Ben live back in 2022?",
+      "mode": "historical",
+      "as_of": "2022-12-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["Seattle"],
+      "not_contains": ["Austin"]
+    }
+  },
+  {
+    "name": "project_status_current",
+    "description": "D1/D3: Project status update — current status supersedes completed one",
+    "memories": [
+      {
+        "content": "Project Orion is in the planning phase.",
+        "created_at": "2025-10-01T10:00:00Z"
+      },
+      {
+        "content": "Project Orion has moved to active development.",
+        "created_at": "2026-01-10T10:00:00Z"
+      },
+      {
+        "content": "Project Orion was successfully shipped and is now in maintenance mode.",
+        "created_at": "2026-03-01T10:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the current status of Project Orion?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["maintenance"],
+      "not_contains": ["planning phase"]
+    }
+  },
+  {
+    "name": "diet_preference_change",
+    "description": "D1: Diet change — current diet replaces old one",
+    "memories": [
+      {
+        "content": "Sarah follows a vegetarian diet.",
+        "created_at": "2023-01-15T12:00:00Z"
+      },
+      {
+        "content": "Sarah recently started eating meat again after her doctor's recommendation.",
+        "created_at": "2025-11-20T12:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What diet does Sarah follow?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["meat"],
+      "not_contains": ["vegetarian diet"]
+    }
+  },
+  {
+    "name": "stable_nationality_always_present",
+    "description": "D2 Stable: Nationality is a stable fact — always surfaced regardless of retrieval age",
+    "memories": [
+      {
+        "content": "Carlos is a Brazilian citizen born in São Paulo.",
+        "created_at": "2020-05-01T10:00:00Z"
+      },
+      {
+        "content": "Carlos moved to Germany for work in 2024.",
+        "created_at": "2024-08-01T10:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is Carlos's nationality?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["Brazilian"],
+      "not_contains": []
+    }
+  },
+  {
+    "name": "temporal_intent_auto_resolves_to_current",
+    "description": "D2 Auto: Auto intent with present-tense query resolves to current",
+    "memories": [
+      {
+        "content": "The API rate limit is set to 100 requests per minute.",
+        "created_at": "2025-01-01T10:00:00Z"
+      },
+      {
+        "content": "The API rate limit was increased to 500 requests per minute.",
+        "created_at": "2026-02-15T10:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the current API rate limit?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["500"],
+      "not_contains": ["100 requests per minute"]
+    }
+  },
+  {
+    "name": "temporal_intent_recent",
+    "description": "D2 Recent: Recent intent surfaces last few days of activity",
+    "memories": [
+      {
+        "content": "Team completed the authentication module in Q4 2025.",
+        "created_at": "2025-12-20T12:00:00Z"
+      },
+      {
+        "content": "Team shipped the payment gateway integration last week.",
+        "created_at": "2026-03-06T12:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What has the team done recently?",
+      "mode": "head",
+      "time_intent": "recent"
+    },
+    "expect": {
+      "contains": ["payment gateway"],
+      "not_contains": []
+    }
+  },
+  {
+    "name": "multi_subject_no_cross_contamination",
+    "description": "D1: Changes to one subject do not affect another subject's facts",
+    "memories": [
+      {
+        "content": "Alice prefers dark roast coffee.",
+        "created_at": "2025-01-01T08:00:00Z"
+      },
+      {
+        "content": "Bob prefers light roast coffee.",
+        "created_at": "2025-01-01T08:00:00Z"
+      },
+      {
+        "content": "Alice switched to light roast after her dentist's advice.",
+        "created_at": "2026-02-10T08:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What coffee does Bob prefer?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["light roast"],
+      "not_contains": []
+    }
+  },
+  {
+    "name": "two_subjects_independent_changes",
+    "description": "D1: Both subjects have changes — each is queried independently",
+    "memories": [
+      {
+        "content": "Alice works at TechCorp.",
+        "created_at": "2024-01-01T09:00:00Z"
+      },
+      {
+        "content": "Bob works at DataInc.",
+        "created_at": "2024-01-01T09:00:00Z"
+      },
+      {
+        "content": "Alice left TechCorp and joined StartupXYZ.",
+        "created_at": "2026-01-01T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "Where does Alice currently work?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["StartupXYZ"],
+      "not_contains": ["TechCorp"]
+    }
+  },
+  {
+    "name": "role_promotion_current",
+    "description": "D1: Role promotion — current title replaces old one",
+    "memories": [
+      {
+        "content": "Jordan is a software engineer at the company.",
+        "created_at": "2022-03-01T09:00:00Z"
+      },
+      {
+        "content": "Jordan was promoted to tech lead last quarter.",
+        "created_at": "2025-10-01T09:00:00Z"
+      },
+      {
+        "content": "Jordan was just promoted to engineering manager.",
+        "created_at": "2026-03-01T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is Jordan's current role?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["engineering manager"],
+      "not_contains": ["software engineer", "tech lead"]
+    }
+  },
+  {
+    "name": "product_version_current",
+    "description": "D1: Software version — most recent version supersedes all prior",
+    "memories": [
+      {
+        "content": "Mnemo is currently at version 0.6.0.",
+        "created_at": "2025-09-01T10:00:00Z"
+      },
+      {
+        "content": "Mnemo 0.7.0 was released with multi-agent topology support.",
+        "created_at": "2025-12-15T10:00:00Z"
+      },
+      {
+        "content": "Mnemo 0.9.0 was released with full temporal reasoning support.",
+        "created_at": "2026-03-10T10:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What version of Mnemo is current?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["0.9.0"],
+      "not_contains": ["0.6.0"]
+    }
+  },
+  {
+    "name": "product_version_historical",
+    "description": "D1: Historical version query returns the correct past version",
+    "memories": [
+      {
+        "content": "Mnemo is currently at version 0.6.0.",
+        "created_at": "2025-09-01T10:00:00Z"
+      },
+      {
+        "content": "Mnemo 0.7.0 was released with multi-agent topology support.",
+        "created_at": "2025-12-15T10:00:00Z"
+      },
+      {
+        "content": "Mnemo 0.9.0 was released with full temporal reasoning support.",
+        "created_at": "2026-03-10T10:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What version was current in late 2025?",
+      "mode": "historical",
+      "as_of": "2025-11-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": ["0.6.0"],
+      "not_contains": ["0.9.0"]
+    }
+  },
+  {
+    "name": "relationship_status_change",
+    "description": "D1: Relationship status — current state supersedes prior one",
+    "memories": [
+      {
+        "content": "Team Atlas is in conflict with Team Phoenix over API ownership.",
+        "created_at": "2025-06-01T09:00:00Z"
+      },
+      {
+        "content": "Team Atlas and Team Phoenix resolved their API conflict and agreed on a shared ownership model.",
+        "created_at": "2026-01-20T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the current relationship between Team Atlas and Team Phoenix?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["shared ownership"],
+      "not_contains": ["in conflict"]
+    }
+  },
+  {
+    "name": "budget_change_current",
+    "description": "D1: Budget change — current budget replaces old one",
+    "memories": [
+      {
+        "content": "The marketing budget for Q1 2026 is $50,000.",
+        "created_at": "2025-12-01T09:00:00Z"
+      },
+      {
+        "content": "The marketing budget for Q1 2026 was revised up to $75,000 after the board approval.",
+        "created_at": "2026-01-15T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the current Q1 2026 marketing budget?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["75,000"],
+      "not_contains": ["50,000"]
+    }
+  },
+  {
+    "name": "tech_stack_migration",
+    "description": "D1: Technology migration — new stack supersedes old one",
+    "memories": [
+      {
+        "content": "The backend is built with Django and PostgreSQL.",
+        "created_at": "2023-01-01T09:00:00Z"
+      },
+      {
+        "content": "The backend was migrated to Rust and Qdrant for better performance.",
+        "created_at": "2026-02-01T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the current backend tech stack?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["Rust"],
+      "not_contains": ["Django"]
+    }
+  },
+  {
+    "name": "goal_change_current",
+    "description": "D1: Goal change — most recent goal replaces old one",
+    "memories": [
+      {
+        "content": "My primary goal this year is to lose 10 pounds.",
+        "created_at": "2026-01-01T09:00:00Z"
+      },
+      {
+        "content": "I changed my primary goal to run a half marathon.",
+        "created_at": "2026-02-15T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is my primary goal right now?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["half marathon"],
+      "not_contains": ["lose 10 pounds"]
+    }
+  },
+  {
+    "name": "config_value_current",
+    "description": "D1: Configuration change — current setting supersedes prior one",
+    "memories": [
+      {
+        "content": "The maximum upload file size is set to 10MB.",
+        "created_at": "2025-03-01T10:00:00Z"
+      },
+      {
+        "content": "The maximum upload file size was increased to 100MB to support video uploads.",
+        "created_at": "2026-01-10T10:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is the current maximum upload file size?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["100MB"],
+      "not_contains": ["10MB"]
+    }
+  },
+  {
+    "name": "founder_stable_fact",
+    "description": "D2 Stable: Company founding year is stable — always surfaced",
+    "memories": [
+      {
+        "content": "Mnemo was founded in 2024 by a team of AI engineers.",
+        "created_at": "2024-06-01T10:00:00Z"
+      },
+      {
+        "content": "Mnemo raised its Series A in 2026.",
+        "created_at": "2026-01-01T10:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "When was Mnemo founded?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["2024"],
+      "not_contains": []
+    }
+  },
+  {
+    "name": "feature_flag_toggle",
+    "description": "D1: Feature flag toggle — current state supersedes prior",
+    "memories": [
+      {
+        "content": "The dark mode feature flag is disabled by default.",
+        "created_at": "2025-09-01T09:00:00Z"
+      },
+      {
+        "content": "The dark mode feature flag was enabled for all users in the latest release.",
+        "created_at": "2026-03-01T09:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "Is dark mode enabled?",
+      "mode": "head",
+      "time_intent": "current"
+    },
+    "expect": {
+      "contains": ["enabled"],
+      "not_contains": ["disabled"]
     }
   }
 ]

@@ -19,15 +19,15 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use mnemo_core::error::MnemoError;
-use mnemo_core::models::edge::{Edge, EdgeFilter};
+use mnemo_core::models::edge::{BeliefChange, Edge, EdgeFilter};
 use mnemo_core::models::entity::{Entity, ExtractedEntity};
 use mnemo_core::models::episode::Episode;
 use mnemo_core::models::session::UpdateSessionRequest;
 use mnemo_core::models::webhook_event::IngestWebhookEvent;
 use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
 use mnemo_core::traits::storage::{
-    DigestStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, SpanStore, StorageResult,
-    VectorStore,
+    BeliefChangeStore, DigestStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, SpanStore,
+    StorageResult, VectorStore,
 };
 
 /// Re-export `LlmSpan` from mnemo-core so callers can use `mnemo_ingest::LlmSpan`.
@@ -153,7 +153,7 @@ pub type DigestCache = Arc<RwLock<HashMap<Uuid, MemoryDigest>>>;
 /// and generates memory digests in the background.
 pub struct IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore + SpanStore,
+    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore + SpanStore + BeliefChangeStore,
     V: VectorStore,
     L: LlmProvider,
     E: EmbeddingProvider,
@@ -190,6 +190,7 @@ where
         + SessionStore
         + DigestStore
         + SpanStore
+        + BeliefChangeStore
         + Send
         + Sync
         + 'static,
@@ -808,6 +809,49 @@ where
                         old_fact,
                         request_id: req_id.clone(),
                     });
+                }
+            }
+
+            // ── D1: Structural belief-change detection ────────────
+            // Check for existing valid edges with the same source+label but a
+            // *different* target — these represent a potential belief change.
+            {
+                let all_outgoing = self.state_store.get_outgoing_edges(src).await.unwrap_or_default();
+                for existing in all_outgoing
+                    .iter()
+                    .filter(|e| e.label == rel.label && e.user_id == episode.user_id && e.is_valid() && e.target_entity_id != tgt)
+                {
+                    let tgt_name_new = rel.target_name.clone();
+                    let tgt_name_old = self
+                        .state_store
+                        .get_entity(existing.target_entity_id)
+                        .await
+                        .map(|e| e.name)
+                        .unwrap_or_default();
+
+                    // Auto-supersede when the target names are clearly different
+                    // (not a mere rephrasing — the LLM already canonicalises names).
+                    let auto_supersede = tgt_name_new.to_lowercase() != tgt_name_old.to_lowercase();
+
+                    if auto_supersede {
+                        let mut old = existing.clone();
+                        old.invalidate(episode.id);
+                        let _ = self.state_store.update_edge(&old).await;
+                    }
+
+                    let change = BeliefChange {
+                        id: Uuid::now_v7(),
+                        user_id: episode.user_id,
+                        subject: rel.source_name.clone(),
+                        predicate: rel.label.clone(),
+                        old_value: existing.fact.clone(),
+                        new_value: rel.fact.clone(),
+                        old_edge_id: existing.id,
+                        new_edge_id: Uuid::nil(), // filled after new edge is created below
+                        detected_at: chrono::Utc::now(),
+                        auto_superseded: auto_supersede,
+                    };
+                    let _ = self.state_store.record_belief_change(change).await;
                 }
             }
 

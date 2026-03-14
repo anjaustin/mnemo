@@ -1161,6 +1161,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:user/coherence", get(get_user_coherence))
         .route("/api/v1/memory/:user/stale", get(get_stale_facts))
         .route("/api/v1/memory/:user/revalidate", post(revalidate_fact))
+        .route("/api/v1/memory/:user/belief_changes", get(get_belief_changes))
         .route(
             "/api/v1/memory/:user/clarifications",
             get(list_clarifications).post(generate_clarifications),
@@ -11803,6 +11804,43 @@ async fn revalidate_fact(
         previous_confidence,
         new_effective_confidence: new_effective,
     }))
+}
+
+/// `GET /api/v1/memory/:user/belief_changes`
+///
+/// List detected belief changes for a user (Spec 03 D1).
+/// Returns the most recent belief changes, optionally filtered by `since`.
+/// Each entry includes old/new fact text, whether it was auto-superseded, and the
+/// edge IDs for the old and new facts.
+#[utoipa::path(
+    get, path = "/api/v1/memory/{user}/belief_changes",
+    tag = "memory",
+    summary = "List belief changes",
+    params(
+        ("user" = String, Path, description = "User identifier"),
+        mnemo_core::models::edge::BeliefChangesQuery,
+    ),
+    responses(
+        (status = 200, description = "Success", body = Object),
+    ),
+    security(("bearer" = []), ("api_key" = [])),
+)]
+async fn get_belief_changes(
+    State(state): State<AppState>,
+    Path(user_identifier): Path<String>,
+    Query(query): Query<mnemo_core::models::edge::BeliefChangesQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use mnemo_core::traits::storage::BeliefChangeStore;
+    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let changes = state
+        .state_store
+        .list_belief_changes(user.id, &query)
+        .await?;
+    Ok(Json(serde_json::json!({
+        "user_id": user.id,
+        "count": changes.len(),
+        "belief_changes": changes,
+    })))
 }
 
 /// `GET /api/v1/memory/:user/clarifications`

@@ -456,6 +456,9 @@ mod tests {
             classification: mnemo_core::models::classification::Classification::default(),
             created_at: now,
             updated_at: now,
+            access_count: 0,
+            last_accessed_at: None,
+            temporal_scope: None,
         }
     }
 
@@ -601,6 +604,10 @@ mod tests {
                 })
                 .cloned()
                 .collect())
+        }
+
+        async fn record_edge_access(&self, _edge_id: Uuid) -> StorageResult<()> {
+            Ok(())
         }
     }
 
