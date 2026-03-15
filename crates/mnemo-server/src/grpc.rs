@@ -41,7 +41,7 @@ use mnemo_core::models::agent::{
     AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent,
     UpdateAgentIdentityRequest,
 };
-use mnemo_core::models::api_key::{hash_api_key, CallerContext};
+use mnemo_core::models::api_key::{hash_api_key, ApiKeyRole, CallerContext};
 use mnemo_core::models::classification::Classification;
 use mnemo_core::models::context::{
     ContextMessage as CoreContextMessage, ContextRequest as CoreContextRequest,
@@ -269,13 +269,18 @@ pub async fn validate_grpc_auth<T>(
 }
 
 /// Extract the request-id from gRPC metadata, or generate one.
+/// Sanitizes the value to alphanumeric+hyphen, max 64 chars.
 fn extract_request_id<T>(request: &Request<T>) -> String {
     request
         .metadata()
         .get("x-mnemo-request-id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
         .unwrap_or_else(|| Uuid::now_v7().to_string())
 }
 
@@ -310,7 +315,12 @@ fn from_proto_classification(v: i32) -> Result<Classification, Status> {
         Ok(ProtoClassification::Internal) => Ok(Classification::Internal),
         Ok(ProtoClassification::Confidential) => Ok(Classification::Confidential),
         Ok(ProtoClassification::Restricted) => Ok(Classification::Restricted),
-        _ => Err(Status::invalid_argument(format!(
+        // Proto3 default (0 = Unspecified) must be rejected explicitly — callers
+        // must always provide a concrete classification level for patch operations.
+        Ok(ProtoClassification::Unspecified) => Err(Status::invalid_argument(
+            "classification must be explicitly set to PUBLIC, INTERNAL, CONFIDENTIAL, or RESTRICTED",
+        )),
+        Err(_) => Err(Status::invalid_argument(format!(
             "unknown classification value: {v}"
         ))),
     }
@@ -367,6 +377,8 @@ fn proto_value_to_json(v: prost_types::Value) -> serde_json::Value {
         None | Some(Kind::NullValue(_)) => serde_json::Value::Null,
         Some(Kind::BoolValue(b)) => serde_json::Value::Bool(b),
         Some(Kind::NumberValue(n)) => {
+            // NaN and ±Infinity are not valid JSON; treat as null to avoid
+            // corrupting stored metadata. Callers that care can check for null.
             serde_json::Number::from_f64(n)
                 .map(serde_json::Value::Number)
                 .unwrap_or(serde_json::Value::Null)
@@ -416,9 +428,11 @@ async fn find_user_by_identifier(
         Err(e) if e.status_code() == 404 => {}
         Err(e) => return Err(e),
     }
-    // Full-scan name match as last resort
+    // Full-scan name match as last resort — capped at 3 pages (600 users)
+    // to prevent unbounded Redis scans on large deployments.
     let mut after = None;
-    loop {
+    const MAX_SCAN_PAGES: usize = 3;
+    for _ in 0..MAX_SCAN_PAGES {
         let users = store.list_users(200, after).await?;
         if users.is_empty() {
             break;
@@ -491,6 +505,31 @@ fn normalize_agent_id(agent_id: &str) -> Result<String, Status> {
         return Err(Status::invalid_argument("agent_id is required"));
     }
     Ok(trimmed.to_string())
+}
+
+// ─── Input length limits ─────────────────────────────────────────────
+/// Maximum length for user identifier strings (UUID / external_id / name).
+const MAX_USER_IDENTIFIER_LEN: usize = 256;
+/// Maximum length for session name strings.
+const MAX_SESSION_NAME_LEN: usize = 256;
+/// Maximum length for episode text / memory text.
+const MAX_TEXT_LEN: usize = 32_768; // 32 KiB
+
+// ─── Role enforcement helpers ────────────────────────────────────────
+/// Require at least Write role; returns gRPC PermissionDenied on failure.
+#[allow(clippy::result_large_err)]
+fn require_write(caller: &CallerContext) -> Result<(), Status> {
+    caller
+        .require_role(ApiKeyRole::Write)
+        .map_err(|e| Status::permission_denied(e.to_string()))
+}
+
+/// Require Admin role; returns gRPC PermissionDenied on failure.
+#[allow(clippy::result_large_err)]
+fn require_admin(caller: &CallerContext) -> Result<(), Status> {
+    caller
+        .require_role(ApiKeyRole::Admin)
+        .map_err(|e| Status::permission_denied(e.to_string()))
 }
 
 // ─── Proto type converters ──────────────────────────────────────────
@@ -609,7 +648,11 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<GetContextRequest>,
     ) -> Result<Response<GetContextResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        // Read-only RPC — Read role or above is sufficient.
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -725,7 +768,7 @@ impl MemoryService for GrpcState {
             context: block.context,
             entities,
             facts,
-            token_count: block.token_count as i32,
+            token_count: block.token_count.min(i32::MAX as u32) as i32,
             latency_ms: block.latency_ms,
             routing_decision: block
                 .routing_decision
@@ -737,15 +780,34 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<RememberMemoryRequest>,
     ) -> Result<Response<RememberMemoryResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        // Writing memory requires at least Write role.
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
         if req.user.trim().is_empty() {
             return Err(Status::invalid_argument("user is required"));
         }
+        if req.user.len() > MAX_USER_IDENTIFIER_LEN {
+            return Err(Status::invalid_argument(format!(
+                "user identifier too long (max {MAX_USER_IDENTIFIER_LEN} chars)"
+            )));
+        }
         if req.text.trim().is_empty() {
             return Err(Status::invalid_argument("text is required"));
+        }
+        if req.text.len() > MAX_TEXT_LEN {
+            return Err(Status::invalid_argument(format!(
+                "text too long (max {MAX_TEXT_LEN} bytes)"
+            )));
+        }
+        if let Some(ref s) = req.session {
+            if s.len() > MAX_SESSION_NAME_LEN {
+                return Err(Status::invalid_argument(format!(
+                    "session name too long (max {MAX_SESSION_NAME_LEN} chars)"
+                )));
+            }
         }
 
         let user_identifier = req.user.trim().to_string();
@@ -786,7 +848,8 @@ impl MemoryService for GrpcState {
             .map_err(storage_err_to_status)?;
 
         let role = match req.role.as_deref() {
-            Some("user") | None => Some(MessageRole::User),
+            None => None,
+            Some("user") => Some(MessageRole::User),
             Some("assistant") => Some(MessageRole::Assistant),
             Some("system") => Some(MessageRole::System),
             Some(unknown) => {
@@ -825,12 +888,21 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<GetMemoryContextRequest>,
     ) -> Result<Response<GetMemoryContextResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        // Read-only RPC — Read role or above is sufficient.
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
         if req.user.trim().is_empty() {
             return Err(Status::invalid_argument("user is required"));
+        }
+        if req.user.len() > MAX_USER_IDENTIFIER_LEN {
+            return Err(Status::invalid_argument(format!(
+                "user identifier too long (max {MAX_USER_IDENTIFIER_LEN} chars)"
+            )));
         }
         if req.query.trim().is_empty() {
             return Err(Status::invalid_argument("query is required"));
@@ -854,27 +926,57 @@ impl MemoryService for GrpcState {
             None => None,
         };
 
-        let time_intent = match req.time_intent.as_deref() {
-            None | Some("auto") => TemporalIntent::Auto,
-            Some("current") => TemporalIntent::Current,
-            Some("historical") => TemporalIntent::Historical,
-            Some("recent") => TemporalIntent::Recent,
-            Some(other) => {
-                return Err(Status::invalid_argument(format!(
-                    "unknown time_intent: '{other}'"
-                )))
-            }
+        // Parse contract — drives temporal intent override and as_of requirement.
+        let contract_str = req.contract.clone().unwrap_or_else(|| "default".to_string());
+        let contract_requires_as_of = contract_str == "historical_strict";
+        if contract_requires_as_of && as_of.is_none() {
+            return Err(Status::invalid_argument(
+                "historical_strict contract requires as_of",
+            ));
+        }
+
+        // Parse retrieval_policy — drives default max_tokens / min_relevance / temporal_weight.
+        let policy_str = req
+            .retrieval_policy
+            .clone()
+            .unwrap_or_else(|| "balanced".to_string());
+        let (policy_max_tokens, policy_min_relevance, policy_temporal_weight) =
+            match policy_str.as_str() {
+                "precision" => (400u32, 0.55f32, Some(0.35f32)),
+                "recall" => (700, 0.15, Some(0.2)),
+                "stability" => (500, 0.4, Some(0.8)),
+                _ => (500, 0.3, None), // balanced (default)
+            };
+
+        let max_tokens = req.max_tokens.unwrap_or(policy_max_tokens);
+        let min_relevance = req.min_relevance.unwrap_or(policy_min_relevance);
+        let temporal_weight = req.temporal_weight.or(policy_temporal_weight);
+
+        // Parse time_intent — contract can override.
+        let time_intent = match contract_str.as_str() {
+            "current_strict" => TemporalIntent::Current,
+            "historical_strict" => TemporalIntent::Historical,
+            _ => match req.time_intent.as_deref() {
+                None | Some("auto") => TemporalIntent::Auto,
+                Some("current") => TemporalIntent::Current,
+                Some("historical") => TemporalIntent::Historical,
+                Some("recent") => TemporalIntent::Recent,
+                Some(other) => {
+                    return Err(Status::invalid_argument(format!(
+                        "unknown time_intent: '{other}'"
+                    )))
+                }
+            },
         };
 
-        let max_tokens = req.max_tokens.unwrap_or(500);
-        let min_relevance = req.min_relevance.unwrap_or(0.3);
+        // Parse mode_str for echo in response.
+        let mode_str = req.mode.clone().unwrap_or_else(|| "hybrid".to_string());
 
         let session_id = if let Some(ref session_str) = req.session {
             let trimmed = session_str.trim();
             if trimmed.is_empty() {
                 None
             } else {
-                // Try to find existing session by name
                 let mut after = None;
                 let mut found_id = None;
                 'outer: loop {
@@ -923,7 +1025,7 @@ impl MemoryService for GrpcState {
             temporal_filter: as_of,
             as_of,
             time_intent,
-            temporal_weight: req.temporal_weight,
+            temporal_weight,
             min_relevance,
             agent_id: None,
             region_ids: vec![],
@@ -981,18 +1083,12 @@ impl MemoryService for GrpcState {
             })
             .collect();
 
-        let mode_str = req.mode.unwrap_or_else(|| "hybrid".to_string());
-        let contract_str = req.contract.unwrap_or_else(|| "default".to_string());
-        let policy_str = req
-            .retrieval_policy
-            .unwrap_or_else(|| "balanced".to_string());
-
         Ok(Response::new(GetMemoryContextResponse {
             context: block.context,
             entities,
             facts,
             episodes,
-            token_count: block.token_count as i32,
+            token_count: block.token_count.min(i32::MAX as u32) as i32,
             latency_ms: block.latency_ms,
             mode: mode_str,
             contract_applied: contract_str,
@@ -1011,7 +1107,9 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<CreateEpisodeRequest>,
     ) -> Result<Response<ProtoEpisode>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        // Writing episodes requires at least Write role.
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1022,6 +1120,11 @@ impl MemoryService for GrpcState {
             return Err(Status::invalid_argument(format!(
                 "unsupported episode_type: '{}' (only 'message' is supported)",
                 req.episode_type
+            )));
+        }
+        if req.content.len() > MAX_TEXT_LEN {
+            return Err(Status::invalid_argument(format!(
+                "content too long (max {MAX_TEXT_LEN} bytes)"
             )));
         }
 
@@ -1037,12 +1140,17 @@ impl MemoryService for GrpcState {
             None => None,
         };
 
-        // Validate session exists
-        let _session = self
+        // Validate session exists AND belongs to the specified user (P1: cross-user injection guard).
+        let session = self
             .state_store
             .get_session(session_id)
             .await
             .map_err(storage_err_to_status)?;
+        if session.user_id != user_id {
+            return Err(Status::permission_denied(
+                "session does not belong to the specified user",
+            ));
+        }
 
         let core_req = CoreCreateEpisodeRequest {
             id: None,
@@ -1068,7 +1176,8 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<ListEpisodesRequest>,
     ) -> Result<Response<ListEpisodesResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1096,7 +1205,8 @@ impl MemoryService for GrpcState {
         &self,
         request: Request<DeleteEpisodeRequest>,
     ) -> Result<Response<DeleteEpisodeResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1119,7 +1229,8 @@ impl UserService for GrpcState {
         &self,
         request: Request<ProtoCreateUserRequest>,
     ) -> Result<Response<ProtoUser>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_admin(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1155,7 +1266,8 @@ impl UserService for GrpcState {
         &self,
         request: Request<GetUserRequest>,
     ) -> Result<Response<ProtoUser>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_admin(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1174,7 +1286,8 @@ impl UserService for GrpcState {
         &self,
         request: Request<GetUserByExternalIdRequest>,
     ) -> Result<Response<ProtoUser>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_admin(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1195,7 +1308,8 @@ impl UserService for GrpcState {
         &self,
         request: Request<ProtoUpdateUserRequest>,
     ) -> Result<Response<ProtoUser>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_admin(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1228,7 +1342,8 @@ impl UserService for GrpcState {
         &self,
         request: Request<DeleteUserRequest>,
     ) -> Result<Response<DeleteResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_admin(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1246,7 +1361,8 @@ impl UserService for GrpcState {
         &self,
         request: Request<ListUsersRequest>,
     ) -> Result<Response<ListUsersResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_admin(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1289,7 +1405,8 @@ impl SessionService for GrpcState {
         &self,
         request: Request<ProtoCreateSessionRequest>,
     ) -> Result<Response<ProtoSession>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1319,11 +1436,12 @@ impl SessionService for GrpcState {
         Ok(Response::new(session_to_proto(session)))
     }
 
-    async fn get_session(
-        &self,
-        request: Request<GetSessionRequest>,
-    ) -> Result<Response<ProtoSession>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+     async fn get_session(
+         &self,
+         request: Request<GetSessionRequest>,
+     ) -> Result<Response<ProtoSession>, Status> {
+         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1342,7 +1460,8 @@ impl SessionService for GrpcState {
         &self,
         request: Request<ProtoUpdateSessionRequest>,
     ) -> Result<Response<ProtoSession>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1374,7 +1493,8 @@ impl SessionService for GrpcState {
         &self,
         request: Request<DeleteSessionRequest>,
     ) -> Result<Response<DeleteResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1388,11 +1508,12 @@ impl SessionService for GrpcState {
         Ok(Response::new(DeleteResponse { deleted: true }))
     }
 
-    async fn list_user_sessions(
-        &self,
-        request: Request<ListUserSessionsRequest>,
-    ) -> Result<Response<ListUserSessionsResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+     async fn list_user_sessions(
+         &self,
+         request: Request<ListUserSessionsRequest>,
+     ) -> Result<Response<ListUserSessionsResponse>, Status> {
+         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1437,11 +1558,12 @@ impl SessionService for GrpcState {
 
 #[tonic::async_trait]
 impl EntityService for GrpcState {
-    async fn list_entities(
-        &self,
-        request: Request<ListEntitiesRequest>,
-    ) -> Result<Response<ListEntitiesResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+     async fn list_entities(
+         &self,
+         request: Request<ListEntitiesRequest>,
+     ) -> Result<Response<ListEntitiesResponse>, Status> {
+         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1473,11 +1595,12 @@ impl EntityService for GrpcState {
         }))
     }
 
-    async fn get_entity(
-        &self,
-        request: Request<GetEntityRequest>,
-    ) -> Result<Response<ProtoEntity>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+     async fn get_entity(
+         &self,
+         request: Request<GetEntityRequest>,
+     ) -> Result<Response<ProtoEntity>, Status> {
+         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1496,7 +1619,8 @@ impl EntityService for GrpcState {
         &self,
         request: Request<DeleteEntityRequest>,
     ) -> Result<Response<DeleteResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1514,7 +1638,8 @@ impl EntityService for GrpcState {
         &self,
         request: Request<PatchClassificationRequest>,
     ) -> Result<Response<ProtoEntity>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1548,43 +1673,87 @@ impl EdgeService for GrpcState {
         &self,
         request: Request<QueryEdgesRequest>,
     ) -> Result<Response<QueryEdgesResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
         let limit = req.limit.unwrap_or(20).clamp(1, 1000) as u32;
+        let include_invalidated = !req.current_only.unwrap_or(false);
 
-        let filter = mnemo_core::models::edge::EdgeFilter {
-            source_entity_id: req
-                .entity_id
-                .as_deref()
-                .map(|s| parse_uuid(s, "entity_id"))
-                .transpose()?,
-            target_entity_id: None,
-            label: req.label,
-            valid_at_time: None,
-            include_invalidated: !req.current_only.unwrap_or(false),
-            max_classification: None,
-            limit,
-        };
+        let entity_id = req
+            .entity_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| parse_uuid(s, "entity_id"))
+            .transpose()?;
 
-        let edges = self
-            .state_store
-            .query_edges(user_id, filter)
-            .await
-            .map_err(storage_err_to_status)?;
+        // Query both source and target directions so "edges involving entity X"
+        // returns all relationships where X appears as either source or target.
+        let mut all_edges: Vec<mnemo_core::models::edge::Edge> = Vec::new();
+        if let Some(eid) = entity_id {
+            let src_filter = mnemo_core::models::edge::EdgeFilter {
+                source_entity_id: Some(eid),
+                target_entity_id: None,
+                label: req.label.clone(),
+                valid_at_time: None,
+                include_invalidated,
+                max_classification: None,
+                limit,
+            };
+            let tgt_filter = mnemo_core::models::edge::EdgeFilter {
+                source_entity_id: None,
+                target_entity_id: Some(eid),
+                label: req.label.clone(),
+                valid_at_time: None,
+                include_invalidated,
+                max_classification: None,
+                limit,
+            };
+            all_edges.extend(
+                self.state_store
+                    .query_edges(user_id, src_filter)
+                    .await
+                    .map_err(storage_err_to_status)?,
+            );
+            all_edges.extend(
+                self.state_store
+                    .query_edges(user_id, tgt_filter)
+                    .await
+                    .map_err(storage_err_to_status)?,
+            );
+            all_edges.sort_by_key(|e| e.id);
+            all_edges.dedup_by_key(|e| e.id);
+            all_edges.truncate(limit as usize);
+        } else {
+            let filter = mnemo_core::models::edge::EdgeFilter {
+                source_entity_id: None,
+                target_entity_id: None,
+                label: req.label,
+                valid_at_time: None,
+                include_invalidated,
+                max_classification: None,
+                limit,
+            };
+            all_edges = self
+                .state_store
+                .query_edges(user_id, filter)
+                .await
+                .map_err(storage_err_to_status)?;
+        }
 
         Ok(Response::new(QueryEdgesResponse {
-            edges: edges.into_iter().map(edge_to_proto).collect(),
+            edges: all_edges.into_iter().map(edge_to_proto).collect(),
         }))
     }
 
-    async fn get_edge(
-        &self,
-        request: Request<GetEdgeRequest>,
-    ) -> Result<Response<ProtoEdge>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+     async fn get_edge(
+         &self,
+         request: Request<GetEdgeRequest>,
+     ) -> Result<Response<ProtoEdge>, Status> {
+         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1603,7 +1772,8 @@ impl EdgeService for GrpcState {
         &self,
         request: Request<DeleteEdgeRequest>,
     ) -> Result<Response<DeleteResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1621,7 +1791,8 @@ impl EdgeService for GrpcState {
         &self,
         request: Request<PatchClassificationRequest>,
     ) -> Result<Response<ProtoEdge>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1655,7 +1826,8 @@ impl AgentService for GrpcState {
         &self,
         request: Request<RegisterAgentRequest>,
     ) -> Result<Response<AgentProfile>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1673,13 +1845,14 @@ impl AgentService for GrpcState {
             .await
             .map_err(storage_err_to_status)?;
 
-        // If core fields were provided, apply them as an identity update
+        // If core fields were provided, apply them as an identity update.
+        // Propagate errors — don't return stale profile on failure.
         if !core.as_object().map(|o| o.is_empty()).unwrap_or(true) {
             let update_req = UpdateAgentIdentityRequest { core };
-            let _ = self
-                .state_store
+            self.state_store
                 .update_agent_identity(&agent_id, update_req)
-                .await;
+                .await
+                .map_err(storage_err_to_status)?;
         }
 
         let updated_profile = self
@@ -1695,7 +1868,8 @@ impl AgentService for GrpcState {
         &self,
         request: Request<GetAgentRequest>,
     ) -> Result<Response<AgentProfile>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1714,7 +1888,8 @@ impl AgentService for GrpcState {
         &self,
         request: Request<ProtoUpdateAgentIdentityRequest>,
     ) -> Result<Response<AgentProfile>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1739,7 +1914,8 @@ impl AgentService for GrpcState {
         &self,
         request: Request<DeleteAgentRequest>,
     ) -> Result<Response<DeleteResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1757,7 +1933,8 @@ impl AgentService for GrpcState {
         &self,
         request: Request<AddExperienceRequest>,
     ) -> Result<Response<ProtoExperienceEvent>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1811,10 +1988,13 @@ impl AgentService for GrpcState {
             .await
             .map_err(storage_err_to_status)?;
 
-        // EWC++: compute Fisher importance
+        // EWC++: compute Fisher importance using the most recent 50 events in
+        // this category (capped from 500 to bound latency on the hot write path).
+        // Errors are best-effort — the event is already persisted with fisher=0.0;
+        // a background job can recompute if needed.
         let all_events = self
             .state_store
-            .list_experience_events(&agent_id, 500)
+            .list_experience_events(&agent_id, 50)
             .await
             .unwrap_or_default();
         let category_events: Vec<ExperienceEvent> = all_events
@@ -1823,6 +2003,7 @@ impl AgentService for GrpcState {
             .collect();
         let fisher = mnemo_core::models::agent::compute_fisher_importance(&event, &category_events);
         event.fisher_importance = fisher;
+        // Best-effort persistence of the Fisher score.
         let _ = self.state_store.update_experience_event(&event).await;
 
         Ok(Response::new(experience_event_to_proto(event)))
@@ -1832,7 +2013,8 @@ impl AgentService for GrpcState {
         &self,
         request: Request<GetAgentContextRequest>,
     ) -> Result<Response<GetAgentContextResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1903,7 +2085,7 @@ impl AgentService for GrpcState {
             time_intent,
             temporal_weight: req.temporal_weight,
             min_relevance,
-            agent_id: None,
+            agent_id: Some(agent_id.clone()),
             region_ids: vec![],
             structured: false,
             explain: false,
@@ -1981,7 +2163,7 @@ impl AgentService for GrpcState {
             context: context.context,
             entities,
             facts,
-            token_count: context.token_count as i32,
+            token_count: context.token_count.min(i32::MAX as u32) as i32,
             latency_ms: context.latency_ms,
             identity: Some(agent_profile_to_proto(identity)),
             identity_version,
@@ -1995,7 +2177,8 @@ impl AgentService for GrpcState {
         &self,
         request: Request<LoraFeedbackRequest>,
     ) -> Result<Response<LoraFeedbackResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        require_write(&caller)?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -2052,7 +2235,8 @@ impl AgentService for GrpcState {
         &self,
         request: Request<GetLoraStatsRequest>,
     ) -> Result<Response<LoraStatsResponse>, Status> {
-        let _caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();

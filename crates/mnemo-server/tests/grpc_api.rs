@@ -48,6 +48,7 @@ use mnemo_proto::proto::{
     GetContextRequest,
     GetEdgeRequest,
     GetEntityRequest,
+    GetMemoryContextRequest,
     GetSessionRequest,
     GetUserRequest,
     ListEntitiesRequest,
@@ -1881,4 +1882,361 @@ async fn test_grpc_agent_add_experience() {
     assert_eq!(event.agent_id, "grpc-exp-agent");
     assert_eq!(event.category, "test_category");
     assert!(!event.id.is_empty());
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Red-team: Role enforcement (P0-1)
+// ═══════════════════════════════════════════════════════════════════
+
+/// RT-1: Mutating RPCs must reject requests without any auth key.
+#[tokio::test]
+async fn test_grpc_rt_unauthenticated_write_rejected() {
+    let (app, _store) = build_test_state().await;
+    // Start server with auth ENABLED (one bootstrap key)
+    let auth = Arc::new(AuthConfig::with_keys(vec!["valid-admin-key".to_string()]));
+    let (addr, _handle) = start_grpc_server_with_auth(&app, auth).await;
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    // No metadata key → should fail with Unauthenticated
+    let err = client
+        .remember_memory(RememberMemoryRequest {
+            user: "should-fail".to_string(),
+            text: "hello".to_string(),
+            session: None,
+            role: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        tonic::Code::Unauthenticated,
+        "unauthenticated write should fail: {err}"
+    );
+}
+
+/// RT-2: Admin RPCs (UserService) must reject non-admin bootstrap callers.
+/// Note: bootstrap keys are always Admin; this test verifies auth is active.
+#[tokio::test]
+async fn test_grpc_rt_admin_ops_require_auth() {
+    let (app, _store) = build_test_state().await;
+    let auth = Arc::new(AuthConfig::with_keys(vec!["admin-key".to_string()]));
+    let (addr, _handle) = start_grpc_server_with_auth(&app, auth).await;
+    let mut client = UserServiceClient::connect(addr).await.unwrap();
+
+    // No key → Unauthenticated
+    let err = client
+        .create_user(ProtoCreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "should-fail".to_string(),
+            email: None,
+            metadata: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+
+    // Wrong key → Unauthenticated
+    let mut req = tonic::Request::new(ProtoCreateUserRequest {
+        id: None,
+        external_id: None,
+        name: "should-also-fail".to_string(),
+        email: None,
+        metadata: None,
+    });
+    req.metadata_mut()
+        .insert("authorization", "Bearer wrong-key".parse().unwrap());
+    let err = client.create_user(req).await.unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+
+    // Correct admin key → succeeds
+    let mut req = tonic::Request::new(ProtoCreateUserRequest {
+        id: None,
+        external_id: None,
+        name: "created-by-admin".to_string(),
+        email: None,
+        metadata: None,
+    });
+    req.metadata_mut()
+        .insert("authorization", "Bearer admin-key".parse().unwrap());
+    let resp = client.create_user(req).await.unwrap().into_inner();
+    assert_eq!(resp.name, "created-by-admin");
+}
+
+/// RT-3: DeleteUser requires Admin — without key is rejected.
+#[tokio::test]
+async fn test_grpc_rt_delete_user_requires_admin() {
+    let (app, store) = build_test_state().await;
+    let auth = Arc::new(AuthConfig::with_keys(vec!["admin-only-key".to_string()]));
+    let (addr, _handle) = start_grpc_server_with_auth(&app, auth).await;
+
+    // Create user via store directly
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "ToDelete".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    let mut client = UserServiceClient::connect(addr.clone()).await.unwrap();
+
+    // No key → Unauthenticated
+    let err = client
+        .delete_user(DeleteUserRequest {
+            id: user.id.to_string(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+
+    // With admin key → succeeds
+    let mut client2 = UserServiceClient::connect(addr).await.unwrap();
+    let mut req = tonic::Request::new(DeleteUserRequest {
+        id: user.id.to_string(),
+    });
+    req.metadata_mut()
+        .insert("authorization", "Bearer admin-only-key".parse().unwrap());
+    let resp = client2.delete_user(req).await.unwrap().into_inner();
+    assert!(resp.deleted);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Red-team: Ownership checks (P0-2, P1-6)
+// ═══════════════════════════════════════════════════════════════════
+
+/// RT-4: CreateEpisode must reject cross-user session injection.
+/// User A's session_id cannot be used to inject episodes under User B's user_id.
+#[tokio::test]
+async fn test_grpc_rt_create_episode_cross_user_rejected() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    // Create User A and their session
+    let user_a = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "UserA".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+    let session_a = store
+        .create_session(mnemo_core::models::session::CreateSessionRequest {
+            id: None,
+            user_id: user_a.id,
+            agent_id: None,
+            name: Some("session-a".to_string()),
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    // Create User B
+    let user_b = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "UserB".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    // Try to inject episode into User A's session using User B's user_id
+    let err = client
+        .create_episode(CreateEpisodeRequest {
+            user_id: user_b.id.to_string(), // ← User B
+            session_id: session_a.id.to_string(), // ← User A's session
+            content: "injected content".to_string(),
+            episode_type: "message".to_string(),
+            role: None,
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.code(),
+        tonic::Code::PermissionDenied,
+        "cross-user session injection should be rejected: {err}"
+    );
+}
+
+/// RT-5: CreateEpisode with matching user_id and session_id succeeds.
+#[tokio::test]
+async fn test_grpc_rt_create_episode_same_user_succeeds() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "EpisodeOwner".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+    let session = store
+        .create_session(mnemo_core::models::session::CreateSessionRequest {
+            id: None,
+            user_id: user.id,
+            agent_id: None,
+            name: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    let episode = client
+        .create_episode(CreateEpisodeRequest {
+            user_id: user.id.to_string(),
+            session_id: session.id.to_string(),
+            content: "valid episode".to_string(),
+            episode_type: "message".to_string(),
+            role: Some("user".to_string()),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!episode.id.is_empty());
+    assert_eq!(episode.user_id, user.id.to_string());
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Red-team: Input validation (P1-3)
+// ═══════════════════════════════════════════════════════════════════
+
+/// RT-6: RememberMemory must reject oversized user identifiers.
+#[tokio::test]
+async fn test_grpc_rt_remember_memory_user_too_long() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let long_user = "x".repeat(257); // exceeds MAX_USER_IDENTIFIER_LEN=256
+    let err = client
+        .remember_memory(RememberMemoryRequest {
+            user: long_user,
+            text: "hello".to_string(),
+            session: None,
+            role: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("too long") || err.message().contains("max"));
+}
+
+/// RT-7: RememberMemory must reject oversized text payloads.
+#[tokio::test]
+async fn test_grpc_rt_remember_memory_text_too_long() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let long_text = "y".repeat(32_769); // exceeds MAX_TEXT_LEN=32768
+    let err = client
+        .remember_memory(RememberMemoryRequest {
+            user: "valid-user".to_string(),
+            text: long_text,
+            session: None,
+            role: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("too long") || err.message().contains("max"));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Red-team: Proto contract (P1-7, P3-18)
+// ═══════════════════════════════════════════════════════════════════
+
+/// RT-8: PatchClassification with UNSPECIFIED (0) must return InvalidArgument.
+#[tokio::test]
+async fn test_grpc_rt_patch_classification_unspecified_rejected() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = EntityServiceClient::connect(addr).await.unwrap();
+
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "PatchRejectUser".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    let entity = Entity::from_extraction(
+        &ExtractedEntity {
+            name: "PatchTarget".into(),
+            entity_type: EntityType::Concept,
+            summary: None,
+            classification: Default::default(),
+        },
+        user.id,
+        Uuid::now_v7(),
+    );
+    let created = store.create_entity(entity).await.unwrap();
+
+    // Send CLASSIFICATION_UNSPECIFIED = 0 (proto3 default)
+    let err = client
+        .patch_entity_classification(PatchClassificationRequest {
+            id: created.id.to_string(),
+            classification: 0, // Unspecified
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        tonic::Code::InvalidArgument,
+        "UNSPECIFIED classification should be rejected: {err}"
+    );
+}
+
+/// RT-9: GetMemoryContext with historical_strict contract but no as_of must return InvalidArgument.
+#[tokio::test]
+async fn test_grpc_rt_historical_strict_requires_as_of() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let err = client
+        .get_memory_context(GetMemoryContextRequest {
+            user: "some-user".to_string(),
+            query: "what happened".to_string(),
+            session: None,
+            max_tokens: None,
+            min_relevance: None,
+            time_intent: None,
+            as_of: None, // ← missing
+            temporal_weight: None,
+            mode: None,
+            contract: Some("historical_strict".to_string()), // ← requires as_of
+            retrieval_policy: None,
+            include_narrative: None,
+            goal: None,
+            view: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        tonic::Code::InvalidArgument,
+        "historical_strict without as_of should be rejected: {err}"
+    );
 }
