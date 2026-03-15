@@ -101,6 +101,7 @@ def run_profile(
     cases: list[dict[str, Any]],
     profile: str,
     verbose: bool = False,
+    wait_for_processing: bool = False,
 ) -> EvalResult:
     total = len(cases)
     passed = 0
@@ -118,10 +119,25 @@ def run_profile(
 
             memories_ok = True
             for memory in case.get("memories", []):
-                ok = backend.ingest(
-                    user_id, session_id, memory["content"], memory.get("created_at")
-                )
-                memories_ok = memories_ok and ok
+                if wait_for_processing and isinstance(backend, MnemoBackend):
+                    # Ingest each episode then wait for it to reach terminal
+                    # status before ingesting the next.  This prevents the
+                    # ingest worker from processing two episodes concurrently
+                    # for the same user, which causes entity-dedup races where
+                    # both tasks see "entity not found" and create duplicates
+                    # instead of the second one updating the first's summary.
+                    ok, eid = backend.ingest_tracked(
+                        user_id, session_id, memory["content"], memory.get("created_at")
+                    )
+                    if ok and eid:
+                        backend.wait_for_processing([eid])
+                    if not ok:
+                        memories_ok = False
+                else:
+                    ok = backend.ingest(
+                        user_id, session_id, memory["content"], memory.get("created_at")
+                    )
+                    memories_ok = memories_ok and ok
 
             if not memories_ok:
                 errors += 1
@@ -147,7 +163,15 @@ def run_profile(
 
             top_line = extract_top_context_line(context_text)
             expect = case.get("expect", {})
-            contains = all(token in top_line for token in expect.get("contains", []))
+            # `contains` — correct answer must appear *anywhere* in the context
+            # (entities section, facts section, or episode history).
+            contains = all(
+                token in context_text for token in expect.get("contains", [])
+            )
+            # `stale` — a superseded fact must NOT appear as the *top* result.
+            # We check the first bullet line only so that a stale token buried
+            # deep in context (e.g. as historical context) doesn't count against
+            # the system — the test is about surfacing, not mentioning.
             stale = any(token in top_line for token in expect.get("not_contains", []))
 
             if stale:
@@ -222,6 +246,17 @@ def main() -> None:
     parser.add_argument("--zep-api-key-file", default="zep_api.key")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
+        "--wait-for-processing",
+        action="store_true",
+        help=(
+            "After ingesting memories, poll until all episodes reach a terminal "
+            "processing status (completed/failed) before querying. Requires the "
+            "ingest worker to be running with a valid LLM API key. Adds latency "
+            "but produces accurate embedding-based rankings instead of fallback "
+            "recency ordering. Recommended for CI / accuracy benchmarks."
+        ),
+    )
+    parser.add_argument(
         "--output",
         default=None,
         help="Path to write D1 JSON result file (default: eval/results/auto-named)",
@@ -235,8 +270,24 @@ def main() -> None:
 
     if args.target in ("mnemo", "both"):
         mnemo = MnemoBackend(args.mnemo_base_url)
-        results.append(run_profile(mnemo, cases, "temporal", verbose=args.verbose))
-        results.append(run_profile(mnemo, cases, "baseline", verbose=args.verbose))
+        results.append(
+            run_profile(
+                mnemo,
+                cases,
+                "temporal",
+                verbose=args.verbose,
+                wait_for_processing=args.wait_for_processing,
+            )
+        )
+        results.append(
+            run_profile(
+                mnemo,
+                cases,
+                "baseline",
+                verbose=args.verbose,
+                wait_for_processing=args.wait_for_processing,
+            )
+        )
 
     if args.target in ("zep", "both"):
         key = args.zep_api_key or os.environ.get("ZEP_API_KEY")

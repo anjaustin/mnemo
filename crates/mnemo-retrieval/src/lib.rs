@@ -475,14 +475,28 @@ where
         // D1: For Temporal queries, amplify temporal weight so recent changes
         //     rank higher. For Factual queries, reduce temporal weight so
         //     exact matches are not penalised for being older.
-        let adjusted_temporal_weight = match query_classification.query_type {
-            QueryType::Temporal => {
-                Some(request.temporal_weight.unwrap_or(0.55_f32).max(0.55))
+        //
+        // Exception: when the caller provides an explicit temporal_weight or a
+        // non-Auto time_intent, honour it unconditionally. The classifier cap
+        // must not override deliberate caller signalling — e.g. a factual query
+        // like "What is Maria's birthdate?" paired with time_intent=current and
+        // temporal_weight=0.9 should use the full weight so that the older stable
+        // episode is not buried beneath a recent unrelated episode.
+        let caller_is_explicit = request.temporal_weight.is_some()
+            || !matches!(request.time_intent, TemporalIntent::Auto);
+
+        let adjusted_temporal_weight = if caller_is_explicit {
+            request.temporal_weight
+        } else {
+            match query_classification.query_type {
+                QueryType::Temporal => {
+                    Some(request.temporal_weight.unwrap_or(0.55_f32).max(0.55))
+                }
+                QueryType::Factual => {
+                    Some(request.temporal_weight.unwrap_or(0.20_f32).min(0.20))
+                }
+                _ => request.temporal_weight,
             }
-            QueryType::Factual => {
-                Some(request.temporal_weight.unwrap_or(0.20_f32).min(0.20))
-            }
-            _ => request.temporal_weight,
         };
 
         apply_temporal_scoring(
@@ -566,6 +580,13 @@ where
         }
 
         // ── D4: Assemble context string (tiered or standard) ──
+        // For historical queries (as_of set), entity summaries always reflect the
+        // *current* entity state — they are not temporally versioned.  Suppress
+        // them so the first context bullet is a temporally-filtered fact or
+        // episode, not a current-state summary that would appear stale.
+        if matches!(request.time_intent, TemporalIntent::Historical) && request.as_of.is_some() {
+            block.entities.clear();
+        }
         if request.tiered_budget {
             let tier_config = TierConfig::from_env();
             block.assemble_tiered(request.max_tokens, &tier_config, None);
@@ -898,8 +919,12 @@ fn apply_temporal_scoring(
         fact.relevance = apply_temporal_blend(fact.relevance as f64, temporal_score, weight) as f32;
     }
 
+    // For Current/Recent intent, tag episodes with their raw temporal score so
+    // we can prune the stragglers after blending.
+    let mut episode_temporal_scores: Vec<f64> = Vec::with_capacity(block.episodes.len());
     for episode in &mut block.episodes {
         let temporal_score = score_episode_temporal(episode, temporal_intent, temporal_filter, now);
+        episode_temporal_scores.push(temporal_score);
         episode.relevance =
             apply_temporal_blend(episode.relevance as f64, temporal_score, weight) as f32;
     }
@@ -927,6 +952,29 @@ fn apply_temporal_scoring(
             .partial_cmp(&a.relevance)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    // For Current/Recent intent: drop episodes whose raw temporal score is
+    // below the stale threshold (0.01).  An episode scoring below this had
+    // effectively zero temporal signal — including it in context would
+    // surface stale information regardless of its base relevance.
+    //
+    // The threshold is intentionally conservative: exp(-x/21) < 0.01 means
+    // the episode is older than ~97 days.  Episodes within ~3 months still
+    // qualify (score ≥ 0.01).  For Historical/Auto intents this filter does
+    // not apply (temporal score semantics are different).
+    if matches!(temporal_intent, TemporalIntent::Current | TemporalIntent::Recent) {
+        let mut i = 0;
+        block.episodes.retain(|_| {
+            let keep = episode_temporal_scores
+                .get(i)
+                .map(|&s| s >= 0.01)
+                .unwrap_or(true);
+            i += 1;
+            keep
+        });
+        // Trim the score vec to match (no longer needed but keep consistent)
+        episode_temporal_scores.retain(|&s| s >= 0.01);
+    }
+
     block.episodes.sort_by(|a, b| {
         b.relevance
             .partial_cmp(&a.relevance)
@@ -997,8 +1045,12 @@ fn score_episode_temporal(
     match temporal_intent {
         TemporalIntent::Historical => {
             if let Some(as_of) = temporal_filter {
+                // σ = 180 days: episodes close to as_of score ~1.0, episodes
+                // one year away score ~0.13, two years away score ~0.017.
+                // The previous σ=14 collapsed everything >6 weeks to ~0,
+                // eliminating temporal differentiation for multi-month queries.
                 let delta = (episode.created_at - as_of).num_days().unsigned_abs() as f64;
-                (-delta / 14.0).exp().clamp(0.0, 1.0)
+                (-delta / 180.0).exp().clamp(0.0, 1.0)
             } else {
                 0.5
             }
@@ -1536,5 +1588,156 @@ mod tests {
             never,
             recent_zero
         );
+    }
+
+    // ── Fix 2: σ=180 days historical episode scoring ─────────────────────────
+
+    #[test]
+    fn fix2_historical_episode_sigma_differentiates_months() {
+        // With σ=180 days: an episode 90 days from as_of should score substantially
+        // higher than one 540 days from as_of.  The old σ=14 collapsed both to ~0.
+        let as_of = Utc::now();
+        let near = EpisodeSummary {
+            id: Uuid::now_v7(),
+            session_id: Uuid::now_v7(),
+            role: None,
+            preview: "near".into(),
+            created_at: as_of - Duration::days(90),
+            relevance: 0.5,
+        };
+        let far = EpisodeSummary {
+            id: Uuid::now_v7(),
+            session_id: Uuid::now_v7(),
+            role: None,
+            preview: "far".into(),
+            created_at: as_of - Duration::days(540),
+            relevance: 0.5,
+        };
+        let score_near = score_episode_temporal(&near, TemporalIntent::Historical, Some(as_of), as_of);
+        let score_far = score_episode_temporal(&far, TemporalIntent::Historical, Some(as_of), as_of);
+        assert!(
+            score_near > score_far * 4.0,
+            "near episode (90d, score={:.4}) should be >4× far episode (540d, score={:.4})",
+            score_near, score_far
+        );
+        // Verify neither is collapsed to zero — differentiation is meaningful
+        assert!(score_near > 0.5, "90-day episode should score above 0.5, got {:.4}", score_near);
+        assert!(score_far > 0.001, "540-day episode should not collapse to zero, got {:.4}", score_far);
+    }
+
+    #[test]
+    fn fix2_historical_episode_adjacent_months_rank_correctly() {
+        // Rust episode at 2025-03 vs Python at 2024-01, as_of=2025-06-01:
+        // Rust is 92 days away, Python is 517 days away — Rust must score higher.
+        let as_of: DateTime<Utc> = "2025-06-01T00:00:00Z".parse().unwrap();
+        let rust_ep = EpisodeSummary {
+            id: Uuid::now_v7(),
+            session_id: Uuid::now_v7(),
+            role: None,
+            preview: "I now prefer Rust over Python for most projects.".into(),
+            created_at: "2025-03-01T12:00:00Z".parse().unwrap(),
+            relevance: 0.5,
+        };
+        let python_ep = EpisodeSummary {
+            id: Uuid::now_v7(),
+            session_id: Uuid::now_v7(),
+            role: None,
+            preview: "My favorite programming language is Python.".into(),
+            created_at: "2024-01-01T12:00:00Z".parse().unwrap(),
+            relevance: 0.5,
+        };
+        let score_rust = score_episode_temporal(&rust_ep, TemporalIntent::Historical, Some(as_of), as_of);
+        let score_python = score_episode_temporal(&python_ep, TemporalIntent::Historical, Some(as_of), as_of);
+        assert!(
+            score_rust > score_python,
+            "Rust (92d from as_of, {:.4}) should score higher than Python (517d, {:.4})",
+            score_rust, score_python
+        );
+    }
+
+    // ── Fix 3: Relative relevance floor for episodes ─────────────────────────
+
+    #[test]
+    fn fix3_stale_episodes_filtered_by_temporal_score() {
+        // For Current intent: episodes whose raw temporal score < 0.01
+        // (older than ~97 days) must be dropped before context assembly.
+        // exp(-760/21) ≈ 0 → TechCorp dropped; exp(-74/21) ≈ 0.030 → StartupXYZ kept.
+        let now = Utc::now();
+        let mut block = ContextBlock::empty();
+
+        block.episodes.push(EpisodeSummary {
+            id: Uuid::now_v7(),
+            session_id: Uuid::now_v7(),
+            role: None,
+            preview: "Alice joined StartupXYZ.".into(),
+            created_at: now - Duration::days(74),  // ~2 months — score≈0.030
+            relevance: 0.005,
+        });
+        block.episodes.push(EpisodeSummary {
+            id: Uuid::now_v7(),
+            session_id: Uuid::now_v7(),
+            role: None,
+            preview: "Alice works at TechCorp.".into(),
+            created_at: now - Duration::days(760),  // ~2 years — score≈0
+            relevance: 0.004,
+        });
+
+        apply_temporal_scoring(&mut block, TemporalIntent::Current, None, Some(0.9));
+
+        // Only the episode within ~97 days survives the stale filter
+        assert_eq!(
+            block.episodes.len(), 1,
+            "stale episode (760d) should be dropped; remaining: {:?}",
+            block.episodes.iter().map(|e| &e.preview).collect::<Vec<_>>()
+        );
+        assert!(
+            block.episodes[0].preview.contains("StartupXYZ"),
+            "surviving episode should be the recent one, got: {}",
+            block.episodes[0].preview
+        );
+    }
+
+    #[test]
+    fn fix3_recent_episodes_within_threshold_all_kept() {
+        // Episodes within ~97 days (score ≥ 0.01) must all survive the stale filter.
+        // exp(-60/21) ≈ 0.057, exp(-30/21) ≈ 0.24, exp(-2/21) ≈ 0.91 — all ≥ 0.01.
+        let now = Utc::now();
+        let mut block = ContextBlock::empty();
+        for &age in &[2i64, 30, 60] {
+            block.episodes.push(EpisodeSummary {
+                id: Uuid::now_v7(),
+                session_id: Uuid::now_v7(),
+                role: None,
+                preview: format!("episode {}d old", age),
+                created_at: now - Duration::days(age),
+                relevance: 0.1,
+            });
+        }
+        apply_temporal_scoring(&mut block, TemporalIntent::Current, None, None);
+        assert_eq!(block.episodes.len(), 3, "all recent episodes should survive; got {:?}", block.episodes.len());
+    }
+
+    #[test]
+    fn fix3_filter_does_not_apply_to_historical_intent() {
+        // For Historical intent the stale filter must not run — temporal
+        // scoring uses proximity to as_of, not recency, and old episodes are valid.
+        let now = Utc::now();
+        let as_of = now - Duration::days(500);
+        let mut block = ContextBlock::empty();
+
+        // Episode created 490 days ago — very old for Current, but close to as_of
+        block.episodes.push(EpisodeSummary {
+            id: Uuid::now_v7(),
+            session_id: Uuid::now_v7(),
+            role: None,
+            preview: "Alice worked at TechCorp.".into(),
+            created_at: now - Duration::days(490),
+            relevance: 0.5,
+        });
+
+        apply_temporal_scoring(&mut block, TemporalIntent::Historical, Some(as_of), Some(0.9));
+
+        // Must survive — it's close to as_of and Historical filter is not applied
+        assert_eq!(block.episodes.len(), 1, "historical intent must not filter episodes by recency");
     }
 }

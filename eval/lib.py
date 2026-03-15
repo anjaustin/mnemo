@@ -199,6 +199,62 @@ class MnemoBackend(MemoryBackend):
         )
         return status == 201
 
+    def ingest_tracked(
+        self,
+        user_id: str,
+        session_id: str,
+        content: str,
+        created_at: str | None = None,
+    ) -> tuple[bool, str | None]:
+        """Like ingest() but returns (success, episode_id) for polling."""
+        payload: dict[str, Any] = {
+            "type": "message",
+            "role": "user",
+            "content": content,
+        }
+        if created_at:
+            payload["created_at"] = created_at
+        status, body = self.http.req(
+            f"/api/v1/sessions/{session_id}/episodes", "POST", payload
+        )
+        if status == 201:
+            return True, body.get("id")
+        return False, None
+
+    def wait_for_processing(
+        self,
+        episode_ids: list[str],
+        timeout_s: float = 45.0,
+        poll_interval_s: float = 0.5,
+    ) -> None:
+        """Block until all episodes reach a terminal processing status.
+
+        Terminal statuses: completed, failed, skipped.
+        Episodes that cannot be found are treated as done (may have been
+        deleted or never enqueued).  Times out silently after timeout_s.
+        """
+        import time
+
+        terminal = {"completed", "failed", "skipped"}
+        pending = set(episode_ids)
+        deadline = time.monotonic() + timeout_s
+
+        while pending and time.monotonic() < deadline:
+            still_pending = set()
+            for eid in pending:
+                s, body = self.http.req(f"/api/v1/episodes/{eid}")
+                if s == 404:
+                    continue  # gone — treat as done
+                if s != 200:
+                    still_pending.add(eid)
+                    continue
+                ps = body.get("processing_status", "")
+                if ps not in terminal:
+                    still_pending.add(eid)
+            pending = still_pending
+            if pending:
+                time.sleep(poll_interval_s)
+
     def query(
         self,
         user_id: str,

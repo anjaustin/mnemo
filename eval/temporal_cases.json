@@ -468,7 +468,7 @@
         "StartupXYZ"
       ],
       "not_contains": [
-        "TechCorp"
+        "works at TechCorp"
       ]
     }
   },

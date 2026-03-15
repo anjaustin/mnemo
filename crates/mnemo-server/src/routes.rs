@@ -5210,6 +5210,7 @@ async fn get_memory_context(
         AdaptiveRetrievalPolicy::Recall => 0.15,
         AdaptiveRetrievalPolicy::Stability => 0.4,
     });
+    let query_text = req.query.clone();
     let context_req = ContextRequest {
         session_id,
         messages: vec![ContextMessage {
@@ -5241,6 +5242,7 @@ async fn get_memory_context(
         max_tokens,
         temporal_intent,
         req.as_of,
+        &query_text,
         &mut context,
     )
     .await?;
@@ -5893,6 +5895,7 @@ async fn time_travel_trace(
         max_tokens,
         temporal_intent,
         Some(req.from),
+        &req.query,
         &mut context_from,
     )
     .await?;
@@ -5916,6 +5919,7 @@ async fn time_travel_trace(
         max_tokens,
         temporal_intent,
         Some(req.to),
+        &req.query,
         &mut context_to,
     )
     .await?;
@@ -6345,6 +6349,7 @@ async fn time_travel_summary(
         default_max_tokens,
         temporal_intent,
         Some(req.from),
+        &req.query,
         &mut context_from,
     )
     .await?;
@@ -6368,6 +6373,7 @@ async fn time_travel_summary(
         default_max_tokens,
         temporal_intent,
         Some(req.to),
+        &req.query,
         &mut context_to,
     )
     .await?;
@@ -6665,6 +6671,7 @@ async fn causal_recall_chains(
         max_tokens,
         temporal_intent,
         req.as_of,
+        &req.query,
         &mut context,
     )
     .await?;
@@ -8753,6 +8760,7 @@ async fn get_agent_context(
 
     let max_tokens = req.max_tokens.unwrap_or(500);
     let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
+    let agent_query_text = req.query.clone();
     let context_req = ContextRequest {
         session_id,
         messages: vec![ContextMessage {
@@ -8785,6 +8793,7 @@ async fn get_agent_context(
         max_tokens,
         temporal_intent,
         req.as_of,
+        &agent_query_text,
         &mut context,
     )
     .await?;
@@ -9845,6 +9854,7 @@ async fn maybe_attach_recent_episode_fallback(
     max_tokens: u32,
     temporal_intent: TemporalIntent,
     as_of: Option<chrono::DateTime<chrono::Utc>>,
+    query_hint: &str,
     context: &mut ContextBlock,
 ) -> Result<(), MnemoError> {
     if !context.context.trim().is_empty() {
@@ -9901,9 +9911,22 @@ async fn maybe_attach_recent_episode_fallback(
     }
 
     let now = chrono::Utc::now();
+    let has_query = !query_hint.trim().is_empty();
     episodes.sort_by(|a, b| {
-        let a_score = fallback_temporal_score(a.created_at, temporal_intent, as_of, now);
-        let b_score = fallback_temporal_score(b.created_at, temporal_intent, as_of, now);
+        let a_temporal = fallback_temporal_score(a.created_at, temporal_intent, as_of, now);
+        let b_temporal = fallback_temporal_score(b.created_at, temporal_intent, as_of, now);
+        let a_score = if has_query {
+            // Blend temporal (40%) + keyword relevance (60%) so stable facts beat
+            // recent-but-irrelevant episodes when the query targets those facts.
+            0.4 * a_temporal + 0.6 * fallback_keyword_score(query_hint, &a.content)
+        } else {
+            a_temporal
+        };
+        let b_score = if has_query {
+            0.4 * b_temporal + 0.6 * fallback_keyword_score(query_hint, &b.content)
+        } else {
+            b_temporal
+        };
         b_score
             .partial_cmp(&a_score)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -9975,8 +9998,9 @@ fn fallback_temporal_score(
     match temporal_intent {
         TemporalIntent::Historical => {
             if let Some(as_of) = as_of {
+                // σ = 180 days — matches score_episode_temporal in retrieval lib.
                 let delta = (created_at - as_of).num_days().unsigned_abs() as f64;
-                (-delta / 14.0).exp().clamp(0.0, 1.0)
+                (-delta / 180.0).exp().clamp(0.0, 1.0)
             } else {
                 0.5
             }
@@ -9986,6 +10010,41 @@ fn fallback_temporal_score(
             (-age_days / 21.0).exp().clamp(0.0, 1.0)
         }
     }
+}
+
+/// Lightweight keyword-overlap score for fallback ranking when embeddings are
+/// not yet available (episode still pending extraction).  Returns a value in
+/// [0, 1] representing the fraction of non-trivial query tokens that appear in
+/// the episode content.
+fn fallback_keyword_score(query: &str, content: &str) -> f64 {
+    // Common English stop-words to skip so short function-words don't dominate.
+    const STOPWORDS: &[&str] = &[
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+        "should", "may", "might", "can", "could", "of", "in", "on", "at",
+        "to", "for", "with", "by", "from", "as", "or", "and", "but", "not",
+        "what", "when", "where", "who", "how", "why", "which", "that", "this",
+        "it", "its", "he", "she", "they", "we", "i", "you", "my", "your",
+        "his", "her", "their", "our", "their", "s",
+    ];
+
+    let content_lower = content.to_lowercase();
+
+    let query_tokens: Vec<&str> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.len() > 1 && !STOPWORDS.contains(t))
+        .collect();
+
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let matched = query_tokens
+        .iter()
+        .filter(|&&tok| content_lower.contains(tok))
+        .count();
+
+    matched as f64 / query_tokens.len() as f64
 }
 
 async fn find_user_by_identifier(state: &AppState, identifier: &str) -> Result<User, MnemoError> {

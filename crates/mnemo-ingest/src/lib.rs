@@ -747,10 +747,11 @@ where
                 .await?;
             let id = if let Some(mut e) = existing {
                 e.record_mention();
-                if e.summary.is_none() {
-                    if let Some(ref s) = ext.summary {
-                        e.update_summary(s.clone());
-                    }
+                // Always overwrite with the latest LLM-derived summary so the
+                // entity description reflects the most recent known state ("most
+                // recent wins"), consistent with how edges/facts are superseded.
+                if let Some(ref s) = ext.summary {
+                    e.update_summary(s.clone());
                 }
                 self.state_store.update_entity(&e).await?;
                 e.id
