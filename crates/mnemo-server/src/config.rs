@@ -33,6 +33,12 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Dedicated gRPC port. When set, gRPC services bind to this port independently
+    /// from the REST HTTP port. When unset (default), gRPC is multiplexed on the
+    /// same port as REST (current behaviour).
+    /// Set via `MNEMO_GRPC_PORT` (e.g. `50051`).
+    #[serde(default)]
+    pub grpc_port: Option<u16>,
     #[serde(default)]
     pub workers: usize,
     /// If true, the server rejects non-TLS connections and non-https webhook targets.
@@ -61,6 +67,7 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            grpc_port: None,
             workers: 0,
             require_tls: false,
             audit_signing_secret: None,
@@ -515,6 +522,9 @@ impl MnemoConfig {
         }
         if let Ok(v) = std::env::var("MNEMO_SERVER_PORT") {
             config.server.port = v.parse().unwrap_or(config.server.port);
+        }
+        if let Ok(v) = std::env::var("MNEMO_GRPC_PORT") {
+            config.server.grpc_port = v.parse().ok();
         }
         if let Ok(v) = std::env::var("MNEMO_REDIS_URL") {
             config.redis.url = v;

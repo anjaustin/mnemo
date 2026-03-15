@@ -7,7 +7,10 @@
 //! # Environment Variables
 //!
 //! Core:
-//! - `MNEMO_SERVER_HOST` / `MNEMO_SERVER_PORT` — Bind address (default `0.0.0.0:8080`)
+//! - `MNEMO_SERVER_HOST` / `MNEMO_SERVER_PORT` — REST bind address (default `0.0.0.0:8080`)
+//! - `MNEMO_GRPC_PORT` — Optional dedicated gRPC port (e.g. `50051`). When set, gRPC
+//!   binds to a separate port like Qdrant's `:6334`. When unset, gRPC is multiplexed
+//!   on the same port as REST.
 //! - `MNEMO_REDIS_URL` — Redis connection string
 //! - `MNEMO_QDRANT_URL` — Qdrant gRPC endpoint
 //!
@@ -618,20 +621,28 @@ async fn main() -> anyhow::Result<()> {
         .set_serving::<mnemo_proto::proto::memory_service_server::MemoryServiceServer<GrpcState>>()
         .await;
     health_reporter
+        .set_serving::<mnemo_proto::proto::user_service_server::UserServiceServer<GrpcState>>()
+        .await;
+    health_reporter
+        .set_serving::<mnemo_proto::proto::session_service_server::SessionServiceServer<GrpcState>>()
+        .await;
+    health_reporter
         .set_serving::<mnemo_proto::proto::entity_service_server::EntityServiceServer<GrpcState>>()
         .await;
     health_reporter
         .set_serving::<mnemo_proto::proto::edge_service_server::EdgeServiceServer<GrpcState>>()
         .await;
+    health_reporter
+        .set_serving::<mnemo_proto::proto::agent_service_server::AgentServiceServer<GrpcState>>()
+        .await;
 
-    // Reflection service
+    // Reflection service (exposes all registered protos to grpcurl / Postman)
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(mnemo_proto::FILE_DESCRIPTOR_SET)
         .build_v1()
         .expect("failed to build gRPC reflection service");
 
-    // F2: Apply message size limits to gRPC services to prevent resource exhaustion.
-    // 4 MiB max decoding size (incoming requests) — generous but bounded.
+    // Message size limits: 4 MiB decode (incoming), 16 MiB encode (outgoing)
     const GRPC_MAX_DECODE_SIZE: usize = 4 * 1024 * 1024;
     const GRPC_MAX_ENCODE_SIZE: usize = 16 * 1024 * 1024;
 
@@ -643,31 +654,84 @@ async fn main() -> anyhow::Result<()> {
                 .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
         )
         .add_service(
+            mnemo_proto::proto::user_service_server::UserServiceServer::new(grpc_state.clone())
+                .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
+        )
+        .add_service(
+            mnemo_proto::proto::session_service_server::SessionServiceServer::new(
+                grpc_state.clone(),
+            )
+            .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+            .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
+        )
+        .add_service(
             mnemo_proto::proto::entity_service_server::EntityServiceServer::new(grpc_state.clone())
                 .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
                 .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
         )
         .add_service(
-            mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state)
+            mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state.clone())
+                .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
+        )
+        .add_service(
+            mnemo_proto::proto::agent_service_server::AgentServiceServer::new(grpc_state)
                 .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
                 .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
         );
-    let grpc = grpc_routes.into_axum_router();
 
     tracing::info!(
-        "gRPC services registered: MemoryService, EntityService, EdgeService + health + reflection"
+        "gRPC services registered: MemoryService, UserService, SessionService, EntityService, EdgeService, AgentService + health + reflection"
     );
 
-    // ─── Multiplex: gRPC + REST on the same port ────────────────
-    // Route based on content-type header: "application/grpc" → tonic, else → Axum.
-    let app = multiplex_grpc_rest(rest, grpc);
+    let rest_addr = format!("{}:{}", config.server.host, config.server.port);
 
-    let addr = format!("{}:{}", config.server.host, config.server.port);
-    let listener = TcpListener::bind(&addr).await?;
-    tracing::info!(addr = %addr, "Mnemo server listening (REST + gRPC)");
+    // ─── Dedicated gRPC port (optional) ─────────────────────────
+    // When MNEMO_GRPC_PORT is set, gRPC binds to its own port (like Qdrant :6334)
+    // and REST binds to MNEMO_SERVER_PORT. When unset, gRPC is multiplexed on REST.
+    if let Some(grpc_port) = config.server.grpc_port {
+        let grpc_addr = format!("{}:{}", config.server.host, grpc_port);
+        let grpc_listener = TcpListener::bind(&grpc_addr).await?;
+        let rest_listener = TcpListener::bind(&rest_addr).await?;
 
-    println!(
-        r#"
+        tracing::info!(rest_addr = %rest_addr, grpc_addr = %grpc_addr, "Mnemo server listening");
+        println!(
+            r#"
+  __  __
+ |  \/  |_ __   ___ _ __ ___   ___
+ | |\/| | '_ \ / _ \ '_ ` _ \ / _ \
+ | |  | | | | |  __/ | | | | | (_) |
+ |_|  |_|_| |_|\___|_| |_| |_|\___/
+
+ v{} | REST {} | gRPC {}
+"#,
+            env!("CARGO_PKG_VERSION"),
+            rest_addr,
+            grpc_addr
+        );
+
+        // Build the tonic tower service for the dedicated gRPC port
+        let grpc_service = grpc_routes.into_axum_router();
+
+        tokio::select! {
+            result = axum::serve(rest_listener, rest.into_make_service()).with_graceful_shutdown(shutdown_signal()) => {
+                if let Err(e) = result { tracing::error!("REST server error: {e}"); }
+            }
+            result = axum::serve(grpc_listener, grpc_service.into_make_service()).with_graceful_shutdown(shutdown_signal()) => {
+                if let Err(e) = result { tracing::error!("gRPC server error: {e}"); }
+            }
+        }
+    } else {
+        // ─── Multiplex: gRPC + REST on the same port ────────────
+        let grpc = grpc_routes.into_axum_router();
+        let app = multiplex_grpc_rest(rest, grpc);
+
+        let listener = TcpListener::bind(&rest_addr).await?;
+        tracing::info!(addr = %rest_addr, "Mnemo server listening (REST + gRPC multiplexed)");
+
+        println!(
+            r#"
   __  __
  |  \/  |_ __   ___ _ __ ___   ___
  | |\/| | '_ \ / _ \ '_ ` _ \ / _ \
@@ -676,13 +740,14 @@ async fn main() -> anyhow::Result<()> {
 
  v{} | {} | REST + gRPC
 "#,
-        env!("CARGO_PKG_VERSION"),
-        addr
-    );
+            env!("CARGO_PKG_VERSION"),
+            rest_addr
+        );
 
-    axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        axum::serve(listener, app.into_make_service())
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
 
     // Flush any pending OTel spans before exit
     mnemo_server::telemetry::shutdown_telemetry(_otel_provider);

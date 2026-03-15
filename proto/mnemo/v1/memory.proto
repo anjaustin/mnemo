@@ -3,14 +3,21 @@ syntax = "proto3";
 package mnemo.v1;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 // ─── Memory Context Service ─────────────────────────────────────────
 // The hot-path endpoint: assemble LLM-ready context from a user's
 // knowledge graph. This is the #1 latency-sensitive call in Mnemo.
 
 service MemoryService {
-  // Assemble a context block for an LLM prompt.
+  // Assemble a context block for an LLM prompt (low-level).
   rpc GetContext(GetContextRequest) returns (GetContextResponse);
+
+  // High-level: ingest a text message into memory (auto-creates user + session).
+  rpc RememberMemory(RememberMemoryRequest) returns (RememberMemoryResponse);
+
+  // High-level: assemble rich context with policy, contract, and view support.
+  rpc GetMemoryContext(GetMemoryContextRequest) returns (GetMemoryContextResponse);
 
   // Retrieve raw episodes for a user+session.
   rpc ListEpisodes(ListEpisodesRequest) returns (ListEpisodesResponse);
@@ -22,6 +29,29 @@ service MemoryService {
   rpc DeleteEpisode(DeleteEpisodeRequest) returns (DeleteEpisodeResponse);
 }
 
+// ─── User Service ────────────────────────────────────────────────────
+// User lifecycle management. Users are the top-level tenant in Mnemo.
+
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (User);
+  rpc GetUser(GetUserRequest) returns (User);
+  rpc GetUserByExternalId(GetUserByExternalIdRequest) returns (User);
+  rpc UpdateUser(UpdateUserRequest) returns (User);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+}
+
+// ─── Session Service ─────────────────────────────────────────────────
+// Conversation session management. Sessions group related episodes.
+
+service SessionService {
+  rpc CreateSession(CreateSessionRequest) returns (Session);
+  rpc GetSession(GetSessionRequest) returns (Session);
+  rpc UpdateSession(UpdateSessionRequest) returns (Session);
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteResponse);
+  rpc ListUserSessions(ListUserSessionsRequest) returns (ListUserSessionsResponse);
+}
+
 // ─── Entity Service ─────────────────────────────────────────────────
 
 service EntityService {
@@ -30,6 +60,12 @@ service EntityService {
 
   // Get a single entity by ID.
   rpc GetEntity(GetEntityRequest) returns (Entity);
+
+  // Delete an entity by ID.
+  rpc DeleteEntity(DeleteEntityRequest) returns (DeleteResponse);
+
+  // Update an entity's classification level.
+  rpc PatchEntityClassification(PatchClassificationRequest) returns (Entity);
 }
 
 // ─── Edge (Fact) Service ────────────────────────────────────────────
@@ -40,6 +76,41 @@ service EdgeService {
 
   // Get a single edge by ID.
   rpc GetEdge(GetEdgeRequest) returns (Edge);
+
+  // Delete an edge by ID.
+  rpc DeleteEdge(DeleteEdgeRequest) returns (DeleteResponse);
+
+  // Update an edge's classification level.
+  rpc PatchEdgeClassification(PatchClassificationRequest) returns (Edge);
+}
+
+// ─── Agent Service ───────────────────────────────────────────────────
+// Agent identity, experience, and personalized context.
+
+service AgentService {
+  // Register a new agent identity profile.
+  rpc RegisterAgent(RegisterAgentRequest) returns (AgentProfile);
+
+  // Get an agent by agent_id.
+  rpc GetAgent(GetAgentRequest) returns (AgentProfile);
+
+  // Update an agent's identity.
+  rpc UpdateAgentIdentity(UpdateAgentIdentityRequest) returns (AgentProfile);
+
+  // Delete an agent.
+  rpc DeleteAgent(DeleteAgentRequest) returns (DeleteResponse);
+
+  // Add an experience event to an agent.
+  rpc AddExperience(AddExperienceRequest) returns (ExperienceEvent);
+
+  // Assemble context enriched with agent identity and experience.
+  rpc GetAgentContext(GetAgentContextRequest) returns (GetAgentContextResponse);
+
+  // Submit retrieval feedback to update LoRA adapter weights.
+  rpc SubmitLoraFeedback(LoraFeedbackRequest) returns (LoraFeedbackResponse);
+
+  // Get LoRA adapter statistics for an agent.
+  rpc GetLoraStats(GetLoraStatsRequest) returns (LoraStatsResponse);
 }
 
 // ─── Common Types ───────────────────────────────────────────────────
@@ -50,6 +121,17 @@ enum Classification {
   CLASSIFICATION_INTERNAL = 2;
   CLASSIFICATION_CONFIDENTIAL = 3;
   CLASSIFICATION_RESTRICTED = 4;
+}
+
+// Generic delete response.
+message DeleteResponse {
+  bool deleted = 1;
+}
+
+// Cursor-based pagination parameters.
+message PaginationRequest {
+  optional uint32 limit = 1;   // Default: 20, max: 500
+  optional string after = 2;   // UUID cursor (last seen ID)
 }
 
 // ─── Memory Context ─────────────────────────────────────────────────
@@ -89,13 +171,173 @@ message FactSummary {
   float relevance = 9;
 }
 
+message EpisodeSummary {
+  string id = 1;                          // UUID
+  string session_id = 2;
+  optional string role = 3;
+  string preview = 4;
+  google.protobuf.Timestamp created_at = 5;
+  float relevance = 6;
+}
+
 message GetContextResponse {
   string context = 1;                     // Assembled context text
   repeated EntitySummary entities = 2;    // Key entities
   repeated FactSummary facts = 3;         // Key facts
   int32 token_count = 4;                  // Actual tokens used
   uint64 latency_ms = 5;                  // Retrieval latency in ms
-  optional string routing_decision = 6;   // Retrieval routing strategy
+  optional string routing_decision = 6;   // Retrieval routing strategy (JSON)
+}
+
+// ─── Remember / High-level Memory ───────────────────────────────────
+
+message RememberMemoryRequest {
+  string user = 1;                        // User UUID or external_id
+  string text = 2;                        // The text to remember
+  optional string session = 3;           // Session name (default: "default")
+  optional string role = 4;             // "user" | "assistant" | "system" (default: "user")
+}
+
+message RememberMemoryResponse {
+  bool ok = 1;
+  string user_id = 2;
+  string session_id = 3;
+  string episode_id = 4;
+}
+
+// ─── GetMemoryContext ────────────────────────────────────────────────
+
+message GetMemoryContextRequest {
+  string user = 1;                        // User UUID or external_id
+  string query = 2;
+  optional string session = 3;
+  optional uint32 max_tokens = 4;
+  optional float min_relevance = 5;
+  optional string time_intent = 6;        // "auto"|"current"|"historical"|"temporal_range"
+  optional string as_of = 7;             // ISO-8601
+  optional float temporal_weight = 8;
+  optional string mode = 9;             // "head"|"hybrid"|"historical"
+  optional string contract = 10;        // "default"|"support_safe"|"current_strict"|"historical_strict"
+  optional string retrieval_policy = 11; // "balanced"|"precision"|"recall"|"stability"
+  optional bool include_narrative = 12;
+  optional string goal = 13;
+  optional string view = 14;
+}
+
+message GetMemoryContextResponse {
+  string context = 1;
+  repeated EntitySummary entities = 2;
+  repeated FactSummary facts = 3;
+  repeated EpisodeSummary episodes = 4;
+  int32 token_count = 5;
+  uint64 latency_ms = 6;
+  string mode = 7;
+  string contract_applied = 8;
+  string retrieval_policy_applied = 9;
+  optional string routing_decision = 10; // JSON
+  optional string narrative_summary = 11;
+  optional string goal_applied = 12;
+  optional string view_applied = 13;
+  repeated string guardrail_warnings = 14;
+}
+
+// ─── Users ──────────────────────────────────────────────────────────
+
+message User {
+  string id = 1;
+  optional string external_id = 2;
+  string name = 3;
+  optional string email = 4;
+  google.protobuf.Struct metadata = 5;   // Arbitrary key-value metadata
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message CreateUserRequest {
+  optional string id = 1;               // Optional: provide your own UUID
+  optional string external_id = 2;
+  string name = 3;
+  optional string email = 4;
+  google.protobuf.Struct metadata = 5;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message GetUserByExternalIdRequest {
+  string external_id = 1;
+}
+
+message UpdateUserRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string email = 3;
+  optional string external_id = 4;
+  google.protobuf.Struct metadata = 5;   // Null Struct = no change
+}
+
+message DeleteUserRequest {
+  string id = 1;
+}
+
+message ListUsersRequest {
+  PaginationRequest pagination = 1;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+  uint32 count = 2;
+  optional string next_cursor = 3;
+}
+
+// ─── Sessions ───────────────────────────────────────────────────────
+
+message Session {
+  string id = 1;
+  string user_id = 2;
+  optional string agent_id = 3;
+  optional string name = 4;
+  google.protobuf.Struct metadata = 5;
+  uint64 episode_count = 6;
+  optional string summary = 7;
+  uint64 head_version = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  optional google.protobuf.Timestamp last_activity_at = 11;
+}
+
+message CreateSessionRequest {
+  optional string id = 1;
+  string user_id = 2;
+  optional string agent_id = 3;
+  optional string name = 4;
+  google.protobuf.Struct metadata = 5;
+}
+
+message GetSessionRequest {
+  string id = 1;
+}
+
+message UpdateSessionRequest {
+  string id = 1;
+  optional string name = 2;
+  google.protobuf.Struct metadata = 3;  // Null Struct = no change
+}
+
+message DeleteSessionRequest {
+  string id = 1;
+}
+
+message ListUserSessionsRequest {
+  string user_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message ListUserSessionsResponse {
+  repeated Session sessions = 1;
+  uint32 count = 2;
+  optional string next_cursor = 3;
 }
 
 // ─── Episodes ───────────────────────────────────────────────────────
@@ -165,6 +407,15 @@ message GetEntityRequest {
   string id = 1;                          // UUID
 }
 
+message DeleteEntityRequest {
+  string id = 1;
+}
+
+message PatchClassificationRequest {
+  string id = 1;
+  Classification classification = 2;
+}
+
 // ─── Edges (Facts) ──────────────────────────────────────────────────
 
 message Edge {
@@ -197,4 +448,112 @@ message QueryEdgesResponse {
 
 message GetEdgeRequest {
   string id = 1;                          // UUID
+}
+
+message DeleteEdgeRequest {
+  string id = 1;
+}
+
+// ─── Agents ─────────────────────────────────────────────────────────
+
+message AgentProfile {
+  string agent_id = 1;
+  uint64 version = 2;
+  google.protobuf.Struct core = 3;       // Agent identity fields (name, capabilities, etc.)
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+message RegisterAgentRequest {
+  string agent_id = 1;
+  google.protobuf.Struct core = 2;
+}
+
+message GetAgentRequest {
+  string agent_id = 1;
+}
+
+message UpdateAgentIdentityRequest {
+  string agent_id = 1;
+  google.protobuf.Struct core = 2;
+}
+
+message DeleteAgentRequest {
+  string agent_id = 1;
+}
+
+message ExperienceEvent {
+  string id = 1;
+  string agent_id = 2;
+  optional string user_id = 3;
+  optional string session_id = 4;
+  string category = 5;
+  string signal = 6;                      // Text signal description (e.g., "user was satisfied")
+  float confidence = 7;
+  float weight = 8;
+  uint32 decay_half_life_days = 9;
+  repeated string evidence_episode_ids = 10;
+  float fisher_importance = 11;
+  google.protobuf.Timestamp created_at = 12;
+}
+
+message AddExperienceRequest {
+  string agent_id = 1;
+  optional string user_id = 2;
+  optional string session_id = 3;
+  string category = 4;
+  string signal = 5;                      // Text signal description
+  float confidence = 6;
+  float weight = 7;
+  uint32 decay_half_life_days = 8;
+  repeated string evidence_episode_ids = 9;
+}
+
+message GetAgentContextRequest {
+  string agent_id = 1;
+  string user = 2;                        // User UUID or external_id
+  string query = 3;
+  optional string session = 4;
+  optional uint32 max_tokens = 5;
+  optional float min_relevance = 6;
+  optional string mode = 7;
+  optional string time_intent = 8;
+  optional string as_of = 9;
+  optional float temporal_weight = 10;
+}
+
+message GetAgentContextResponse {
+  string context = 1;
+  repeated EntitySummary entities = 2;
+  repeated FactSummary facts = 3;
+  int32 token_count = 4;
+  uint64 latency_ms = 5;
+  AgentProfile identity = 6;
+  uint64 identity_version = 7;
+  uint32 experience_events_used = 8;
+  float experience_weight_sum = 9;
+  uint32 user_memory_items_used = 10;
+}
+
+message LoraFeedbackRequest {
+  string agent_id = 1;
+  string edge_id = 2;
+  string signal = 3;                      // "helpful" | "not_helpful" | "irrelevant"
+}
+
+message LoraFeedbackResponse {
+  bool ok = 1;
+  string agent_id = 2;
+  string signal = 3;
+  optional string adapter_updated = 4;
+}
+
+message GetLoraStatsRequest {
+  string agent_id = 1;
+}
+
+message LoraStatsResponse {
+  string agent_id = 1;
+  uint32 user_count = 2;
+  optional google.protobuf.Timestamp last_trained_at = 3;
+  float average_adapter_norm = 4;
 }

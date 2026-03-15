@@ -1,4 +1,4 @@
-//! gRPC integration tests for Mnemo's MemoryService, EntityService, and EdgeService.
+//! gRPC integration tests for Mnemo's gRPC services.
 //!
 //! Spins up a tonic gRPC server against live Redis + Qdrant, then exercises
 //! each RPC via a real tonic client. Mirrors the REST integration tests in
@@ -29,10 +29,39 @@ use mnemo_server::state::{
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
 use mnemo_proto::proto::{
-    edge_service_client::EdgeServiceClient, entity_service_client::EntityServiceClient,
-    memory_service_client::MemoryServiceClient, ContextMessage, CreateEpisodeRequest,
-    DeleteEpisodeRequest, GetContextRequest, GetEdgeRequest, GetEntityRequest, ListEntitiesRequest,
-    ListEpisodesRequest, QueryEdgesRequest,
+    agent_service_client::AgentServiceClient,
+    edge_service_client::EdgeServiceClient,
+    entity_service_client::EntityServiceClient,
+    memory_service_client::MemoryServiceClient,
+    session_service_client::SessionServiceClient,
+    user_service_client::UserServiceClient,
+    AddExperienceRequest as ProtoAddExperienceRequest,
+    ContextMessage,
+    CreateEpisodeRequest,
+    CreateSessionRequest as ProtoCreateSessionRequest,
+    CreateUserRequest as ProtoCreateUserRequest,
+    DeleteEpisodeRequest,
+    DeleteEntityRequest,
+    DeleteSessionRequest,
+    DeleteUserRequest,
+    GetAgentRequest,
+    GetContextRequest,
+    GetEdgeRequest,
+    GetEntityRequest,
+    GetSessionRequest,
+    GetUserRequest,
+    ListEntitiesRequest,
+    ListEpisodesRequest,
+    ListUserSessionsRequest,
+    ListUsersRequest,
+    PaginationRequest,
+    PatchClassificationRequest,
+    QueryEdgesRequest,
+    RegisterAgentRequest,
+    RememberMemoryRequest,
+    UpdateAgentIdentityRequest as ProtoUpdateAgentIdentityRequest,
+    UpdateSessionRequest as ProtoUpdateSessionRequest,
+    UpdateUserRequest as ProtoUpdateUserRequest,
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -179,6 +208,18 @@ async fn start_grpc_server_with_auth(
                 .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
             )
             .add_service(
+                mnemo_proto::proto::user_service_server::UserServiceServer::new(grpc_state.clone())
+                    .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                    .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
+            )
+            .add_service(
+                mnemo_proto::proto::session_service_server::SessionServiceServer::new(
+                    grpc_state.clone(),
+                )
+                .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
+            )
+            .add_service(
                 mnemo_proto::proto::entity_service_server::EntityServiceServer::new(
                     grpc_state.clone(),
                 )
@@ -186,7 +227,12 @@ async fn start_grpc_server_with_auth(
                 .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
             )
             .add_service(
-                mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state)
+                mnemo_proto::proto::edge_service_server::EdgeServiceServer::new(grpc_state.clone())
+                    .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
+                    .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
+            )
+            .add_service(
+                mnemo_proto::proto::agent_service_server::AgentServiceServer::new(grpc_state)
                     .max_decoding_message_size(GRPC_MAX_DECODE_SIZE)
                     .max_encoding_message_size(GRPC_MAX_ENCODE_SIZE),
             )
@@ -1130,4 +1176,709 @@ async fn test_grpc_entity_type_filter() {
 
     let entities = resp.into_inner().entities;
     assert_eq!(entities.len(), 2);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UserService tests
+// ═══════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_grpc_user_create_and_get() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = UserServiceClient::connect(addr).await.unwrap();
+
+    // Create
+    let resp = client
+        .create_user(ProtoCreateUserRequest {
+            id: None,
+            external_id: Some("ext_grpc_001".to_string()),
+            name: "Grpc Alice".to_string(),
+            email: Some("alice@grpc.test".to_string()),
+            metadata: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!resp.id.is_empty());
+    assert_eq!(resp.name, "Grpc Alice");
+    assert_eq!(resp.external_id.as_deref(), Some("ext_grpc_001"));
+    assert_eq!(resp.email.as_deref(), Some("alice@grpc.test"));
+
+    let user_id = resp.id.clone();
+
+    // GetUser
+    let got = client
+        .get_user(GetUserRequest { id: user_id.clone() })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(got.id, user_id);
+    assert_eq!(got.name, "Grpc Alice");
+
+    // GetUserByExternalId
+    let got2 = client
+        .get_user_by_external_id(mnemo_proto::proto::GetUserByExternalIdRequest {
+            external_id: "ext_grpc_001".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(got2.id, user_id);
+}
+
+#[tokio::test]
+async fn test_grpc_user_update() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = UserServiceClient::connect(addr).await.unwrap();
+
+    let user = client
+        .create_user(ProtoCreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "UpdateMe".to_string(),
+            email: None,
+            metadata: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let updated = client
+        .update_user(ProtoUpdateUserRequest {
+            id: user.id.clone(),
+            name: Some("UpdatedName".to_string()),
+            email: Some("updated@grpc.test".to_string()),
+            external_id: None,
+            metadata: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(updated.name, "UpdatedName");
+    assert_eq!(updated.email.as_deref(), Some("updated@grpc.test"));
+}
+
+#[tokio::test]
+async fn test_grpc_user_delete() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = UserServiceClient::connect(addr).await.unwrap();
+
+    let user = client
+        .create_user(ProtoCreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "DeleteMe".to_string(),
+            email: None,
+            metadata: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let del = client
+        .delete_user(DeleteUserRequest { id: user.id.clone() })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(del.deleted);
+
+    // Should now return not found
+    let err = client
+        .get_user(GetUserRequest { id: user.id })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
+async fn test_grpc_user_list() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = UserServiceClient::connect(addr).await.unwrap();
+
+    // Create 3 users
+    for i in 0..3 {
+        client
+            .create_user(ProtoCreateUserRequest {
+                id: None,
+                external_id: None,
+                name: format!("ListUser{i}"),
+                email: None,
+                metadata: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    let resp = client
+        .list_users(ListUsersRequest {
+            pagination: Some(PaginationRequest {
+                limit: Some(100),
+                after: None,
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.users.len() >= 3);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SessionService tests
+// ═══════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_grpc_session_create_and_get() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = SessionServiceClient::connect(addr).await.unwrap();
+
+    // Create a user first
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "SessionUser".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    // Create session via gRPC
+    let session = client
+        .create_session(ProtoCreateSessionRequest {
+            id: None,
+            user_id: user.id.to_string(),
+            agent_id: Some("test-agent".to_string()),
+            name: Some("Test Session".to_string()),
+            metadata: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!session.id.is_empty());
+    assert_eq!(session.user_id, user.id.to_string());
+    assert_eq!(session.name.as_deref(), Some("Test Session"));
+    assert_eq!(session.agent_id.as_deref(), Some("test-agent"));
+    assert_eq!(session.episode_count, 0);
+
+    let session_id = session.id.clone();
+
+    // GetSession
+    let got = client
+        .get_session(GetSessionRequest {
+            id: session_id.clone(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(got.id, session_id);
+}
+
+#[tokio::test]
+async fn test_grpc_session_update() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = SessionServiceClient::connect(addr).await.unwrap();
+
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "SessionUpdateUser".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    let session = client
+        .create_session(ProtoCreateSessionRequest {
+            id: None,
+            user_id: user.id.to_string(),
+            agent_id: None,
+            name: Some("Before".to_string()),
+            metadata: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let updated = client
+        .update_session(ProtoUpdateSessionRequest {
+            id: session.id.clone(),
+            name: Some("After".to_string()),
+            metadata: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(updated.name.as_deref(), Some("After"));
+}
+
+#[tokio::test]
+async fn test_grpc_session_delete() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = SessionServiceClient::connect(addr).await.unwrap();
+
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "SessionDeleteUser".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    let session = client
+        .create_session(ProtoCreateSessionRequest {
+            id: None,
+            user_id: user.id.to_string(),
+            agent_id: None,
+            name: None,
+            metadata: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let del = client
+        .delete_session(DeleteSessionRequest {
+            id: session.id.clone(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(del.deleted);
+
+    let err = client
+        .get_session(GetSessionRequest { id: session.id })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
+async fn test_grpc_list_user_sessions() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = SessionServiceClient::connect(addr).await.unwrap();
+
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "ListSessionUser".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    // Create 2 sessions
+    for i in 0..2 {
+        client
+            .create_session(ProtoCreateSessionRequest {
+                id: None,
+                user_id: user.id.to_string(),
+                agent_id: None,
+                name: Some(format!("session-{i}")),
+                metadata: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    let resp = client
+        .list_user_sessions(ListUserSessionsRequest {
+            user_id: user.id.to_string(),
+            pagination: Some(PaginationRequest {
+                limit: Some(50),
+                after: None,
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.sessions.len(), 2);
+    assert_eq!(resp.count, 2);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Extended EntityService / EdgeService tests
+// ═══════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_grpc_delete_entity() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = EntityServiceClient::connect(addr).await.unwrap();
+
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "DeleteEntityUser".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    let entity = Entity::from_extraction(
+        &ExtractedEntity {
+            name: "ToDelete".into(),
+            entity_type: EntityType::Concept,
+            summary: None,
+            classification: Default::default(),
+        },
+        user.id,
+        Uuid::now_v7(),
+    );
+    let created = store.create_entity(entity).await.unwrap();
+
+    let del = client
+        .delete_entity(DeleteEntityRequest {
+            id: created.id.to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(del.deleted);
+
+    let err = client
+        .get_entity(GetEntityRequest {
+            id: created.id.to_string(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
+async fn test_grpc_patch_entity_classification() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = EntityServiceClient::connect(addr).await.unwrap();
+
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "PatchClassUser".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    let entity = Entity::from_extraction(
+        &ExtractedEntity {
+            name: "PatchMe".into(),
+            entity_type: EntityType::Person,
+            summary: None,
+            classification: Classification::Internal,
+        },
+        user.id,
+        Uuid::now_v7(),
+    );
+    let created = store.create_entity(entity).await.unwrap();
+
+    let patched = client
+        .patch_entity_classification(PatchClassificationRequest {
+            id: created.id.to_string(),
+            classification: mnemo_proto::proto::Classification::Confidential as i32,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        patched.classification,
+        mnemo_proto::proto::Classification::Confidential as i32
+    );
+}
+
+#[tokio::test]
+async fn test_grpc_delete_edge() {
+    let (app, store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = EdgeServiceClient::connect(addr).await.unwrap();
+
+    let user = store
+        .create_user(CreateUserRequest {
+            id: None,
+            external_id: None,
+            name: "DeleteEdgeUser".to_string(),
+            email: None,
+            metadata: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+
+    let src = Entity::from_extraction(
+        &ExtractedEntity {
+            name: "SrcE".into(),
+            entity_type: EntityType::Person,
+            summary: None,
+            classification: Default::default(),
+        },
+        user.id,
+        Uuid::now_v7(),
+    );
+    let tgt = Entity::from_extraction(
+        &ExtractedEntity {
+            name: "TgtE".into(),
+            entity_type: EntityType::Organization,
+            summary: None,
+            classification: Default::default(),
+        },
+        user.id,
+        Uuid::now_v7(),
+    );
+    let src = store.create_entity(src).await.unwrap();
+    let tgt = store.create_entity(tgt).await.unwrap();
+
+    let edge = Edge::from_extraction(
+        &ExtractedRelationship {
+            source_name: "SrcE".into(),
+            target_name: "TgtE".into(),
+            label: "works_at".into(),
+            fact: "SrcE works at TgtE".into(),
+            confidence: 0.9,
+            valid_at: None,
+            classification: Default::default(),
+            temporal_scope: None,
+        },
+        user.id,
+        src.id,
+        tgt.id,
+        Uuid::now_v7(),
+        chrono::Utc::now(),
+        None,
+    );
+    let edge = store.create_edge(edge).await.unwrap();
+
+    let del = client
+        .delete_edge(mnemo_proto::proto::DeleteEdgeRequest {
+            id: edge.id.to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(del.deleted);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MemoryService extensions — RememberMemory
+// ═══════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_grpc_remember_memory() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .remember_memory(RememberMemoryRequest {
+            user: "grpc-remember-user".to_string(),
+            text: "I prefer dark mode in my IDE".to_string(),
+            session: Some("preferences".to_string()),
+            role: Some("user".to_string()),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.ok);
+    assert!(!resp.user_id.is_empty());
+    assert!(!resp.session_id.is_empty());
+    assert!(!resp.episode_id.is_empty());
+}
+
+#[tokio::test]
+async fn test_grpc_remember_memory_auto_creates_user() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = MemoryServiceClient::connect(addr).await.unwrap();
+
+    // First call — user does not exist
+    let r1 = client
+        .remember_memory(RememberMemoryRequest {
+            user: "brand-new-grpc-user-xyz".to_string(),
+            text: "Hello from gRPC".to_string(),
+            session: None,
+            role: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(r1.ok);
+    let user_id = r1.user_id.clone();
+
+    // Second call — same user, should reuse
+    let r2 = client
+        .remember_memory(RememberMemoryRequest {
+            user: "brand-new-grpc-user-xyz".to_string(),
+            text: "Second message".to_string(),
+            session: None,
+            role: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(r2.user_id, user_id);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AgentService tests
+// ═══════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_grpc_agent_register_and_get() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = AgentServiceClient::connect(addr).await.unwrap();
+
+    let resp = client
+        .register_agent(RegisterAgentRequest {
+            agent_id: "grpc-test-agent".to_string(),
+            core: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.agent_id, "grpc-test-agent");
+    assert_eq!(resp.version, 1);
+
+    // GetAgent
+    let got = client
+        .get_agent(GetAgentRequest {
+            agent_id: "grpc-test-agent".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(got.agent_id, "grpc-test-agent");
+}
+
+#[tokio::test]
+async fn test_grpc_agent_update_identity() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = AgentServiceClient::connect(addr).await.unwrap();
+
+    client
+        .register_agent(RegisterAgentRequest {
+            agent_id: "grpc-identity-agent".to_string(),
+            core: None,
+        })
+        .await
+        .unwrap();
+
+    // Build a Struct with { "role": "support-agent" }
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(
+        "role".to_string(),
+        prost_types::Value {
+            kind: Some(prost_types::value::Kind::StringValue("support-agent".to_string())),
+        },
+    );
+    let core = prost_types::Struct { fields };
+
+    let updated = client
+        .update_agent_identity(ProtoUpdateAgentIdentityRequest {
+            agent_id: "grpc-identity-agent".to_string(),
+            core: Some(core),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(updated.agent_id, "grpc-identity-agent");
+    assert!(updated.version >= 1);
+}
+
+#[tokio::test]
+async fn test_grpc_agent_delete() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = AgentServiceClient::connect(addr).await.unwrap();
+
+    client
+        .register_agent(RegisterAgentRequest {
+            agent_id: "grpc-delete-agent".to_string(),
+            core: None,
+        })
+        .await
+        .unwrap();
+
+    let del = client
+        .delete_agent(mnemo_proto::proto::DeleteAgentRequest {
+            agent_id: "grpc-delete-agent".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(del.deleted);
+
+    let err = client
+        .get_agent(GetAgentRequest {
+            agent_id: "grpc-delete-agent".to_string(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
+async fn test_grpc_agent_add_experience() {
+    let (app, _store) = build_test_state().await;
+    let (addr, _handle) = start_grpc_server(&app).await;
+    let mut client = AgentServiceClient::connect(addr).await.unwrap();
+
+    client
+        .register_agent(RegisterAgentRequest {
+            agent_id: "grpc-exp-agent".to_string(),
+            core: None,
+        })
+        .await
+        .unwrap();
+
+    let event = client
+        .add_experience(ProtoAddExperienceRequest {
+            agent_id: "grpc-exp-agent".to_string(),
+            user_id: None,
+            session_id: None,
+            category: "test_category".to_string(),
+            signal: "user was satisfied with response".to_string(),
+            confidence: 0.9,
+            weight: 1.0,
+            decay_half_life_days: 30,
+            evidence_episode_ids: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(event.agent_id, "grpc-exp-agent");
+    assert_eq!(event.category, "test_category");
+    assert!(!event.id.is_empty());
 }
