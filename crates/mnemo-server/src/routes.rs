@@ -1336,6 +1336,10 @@ pub fn build_router(state: AppState) -> Router {
             get(get_agent_lora_stats),
         )
         .route(
+            "/api/v1/agents/:agent_id/lora/users",
+            get(list_agent_lora_users),
+        )
+        .route(
             "/api/v1/agents/:agent_id/lora",
             delete(delete_agent_lora),
         )
@@ -13438,6 +13442,40 @@ async fn post_agent_lora_feedback(
             b_frobenius_norm,
         }),
     ))
+}
+
+/// `GET /api/v1/agents/:agent_id/lora/users`
+///
+/// List all users that have a trained LoRA adapter with this agent.
+///
+/// Returns an array of `LoraStatsResponse` objects — one per user — ordered by
+/// `last_updated` descending (most recently trained adapter first).  The stats
+/// include `update_count`, `b_frobenius_norm`, and timestamps, giving the agent
+/// operator a view of which users have converged adapters and which are new.
+///
+/// Returns an empty array when no adapters exist for this agent yet.
+///
+/// **This endpoint does not require a `user` query parameter** — the agent-view
+/// is keyed on `agent_id` alone and enumerates all users via the reverse index.
+async fn list_agent_lora_users(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+
+    let weights_list = state
+        .state_store
+        .list_lora_weights_for_agent(&agent_id)
+        .await?;
+
+    // Convert to stats and sort by last_updated descending
+    let mut stats: Vec<LoraStatsResponse> = weights_list
+        .iter()
+        .map(LoraStatsResponse::from)
+        .collect();
+    stats.sort_by(|a, b| b.last_updated.cmp(&a.last_updated));
+
+    Ok((StatusCode::OK, Json(stats)))
 }
 
 #[cfg(test)]

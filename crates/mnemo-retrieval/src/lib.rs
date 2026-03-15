@@ -354,7 +354,13 @@ where
                 .get_outgoing_edges(entity_summary.id)
                 .await?;
             for edge in outgoing {
-                if !edge.is_valid() {
+                // D1 (Spec 08): honour as_of in graph traversal, mirroring the
+                // identical check in the semantic/FTS fusion loop above.
+                if let Some(tf) = temporal_filter {
+                    if !edge.is_valid_at(tf) {
+                        continue;
+                    }
+                } else if !edge.is_valid() {
                     continue;
                 }
                 if block.facts.iter().any(|f| f.id == edge.id) {
@@ -425,6 +431,15 @@ where
                 // Agent-scoped retrieval: skip episodes not from the requested agent
                 if let Some(ref req_agent) = request.agent_id {
                     if ep.agent_id.as_deref() != Some(req_agent.as_str()) {
+                        continue;
+                    }
+                }
+
+                // D2 (Spec 08): hard-exclude episodes created after `as_of`.
+                // Soft temporal scoring alone is insufficient — a semantically similar
+                // future episode will outscore a correct historical one on cosine similarity.
+                if let Some(tf) = temporal_filter {
+                    if ep.created_at > tf {
                         continue;
                     }
                 }

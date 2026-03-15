@@ -4100,3 +4100,51 @@ When `MNEMO_LORA_ENABLED=false`, this endpoint accepts the request and returns
 | `items_updated` | Number of items for which a weight update was applied. |
 | `total_update_count` | Cumulative update steps on this adapter (implicit + explicit). |
 | `b_frobenius_norm` | Frobenius norm of B after this batch. Approaches 10.0 as the adapter saturates. |
+
+---
+
+### List Users with LoRA Adapters (Agent View)
+
+```
+GET /api/v1/agents/:agent_id/lora/users
+```
+
+**Auth**: `read`
+
+Returns all users that have a trained LoRA adapter with this agent. Ordered by
+`last_updated` descending — most recently active users first.
+
+This is the **agent-view** of the homeoadaptive index: an operator or agent system
+can use it to inspect which users have converged adapters, compare `b_frobenius_norm`
+distributions, or identify users whose adapters are stale.
+
+Returns an empty array when no adapters exist for this agent yet — never 404.
+
+**Response** `200 OK`:
+```json
+[
+  {
+    "user_id": "uuid-of-user-a",
+    "agent_id": "my-agent",
+    "update_count": 87,
+    "last_updated": 1700050000,
+    "dims": 384,
+    "rank": 8,
+    "scale": 0.125,
+    "b_frobenius_norm": 6.71
+  },
+  {
+    "user_id": "uuid-of-user-b",
+    "agent_id": "my-agent",
+    "update_count": 12,
+    "last_updated": 1700000000,
+    "dims": 384,
+    "rank": 8,
+    "scale": 0.125,
+    "b_frobenius_norm": 1.03
+  }
+]
+```
+
+**No `user` parameter required.** This endpoint enumerates users via the
+`lora_agent_idx:{agent_id}` reverse index maintained in Redis (see Spec 07).
