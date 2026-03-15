@@ -209,6 +209,7 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         sync_status: Arc::new(tokio::sync::RwLock::new(
             mnemo_core::sync::SyncStatus::disabled(),
         )),
+        auth_config: Arc::new(mnemo_server::middleware::AuthConfig::disabled()),
     };
 
     let app = build_router(state.clone())
@@ -5104,6 +5105,7 @@ async fn test_webhook_persistence_survives_restart() {
         sync_status: Arc::new(tokio::sync::RwLock::new(
             mnemo_core::sync::SyncStatus::disabled(),
         )),
+        auth_config: Arc::new(mnemo_server::middleware::AuthConfig::disabled()),
     };
 
     let app1 = build_router(state1.clone())
@@ -5207,6 +5209,7 @@ async fn test_webhook_persistence_survives_restart() {
         sync_status: Arc::new(tokio::sync::RwLock::new(
             mnemo_core::sync::SyncStatus::disabled(),
         )),
+        auth_config: Arc::new(mnemo_server::middleware::AuthConfig::disabled()),
     };
 
     // Verify state2 starts empty

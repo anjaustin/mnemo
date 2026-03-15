@@ -12819,8 +12819,16 @@ async fn revoke_api_key(
         }));
     };
 
+    let key_hash = key.key_hash.clone();
     key.revoked = true;
     state.state_store.update_api_key(&key).await?;
+
+    // P1-5: immediately evict from the in-memory auth cache so the key is
+    // rejected on the next request rather than after the 30-second TTL window.
+    {
+        let mut cache = state.auth_config.key_cache.write().await;
+        cache.remove(&key_hash);
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -12853,9 +12861,14 @@ async fn rotate_api_key(
         }));
     };
 
-    // Revoke the old key
+    // Revoke the old key and immediately evict from auth cache (P1-5).
+    let old_hash = old_key.key_hash.clone();
     old_key.revoked = true;
     state.state_store.update_api_key(&old_key).await?;
+    {
+        let mut cache = state.auth_config.key_cache.write().await;
+        cache.remove(&old_hash);
+    }
 
     // Create a new key with the same name/role/scope
     let raw = mnemo_core::models::api_key::generate_raw_key();

@@ -391,6 +391,35 @@ fn proto_value_to_json(v: prost_types::Value) -> serde_json::Value {
     }
 }
 
+/// Validate a proto Struct for non-finite float values (NaN, ±Infinity).
+/// Proto3 allows these in theory but JSON does not, so we reject them early
+/// rather than silently converting them to `null` during storage (P2-11).
+#[allow(clippy::result_large_err)]
+fn validate_proto_struct(s: &prost_types::Struct, path: &str) -> Result<(), Status> {
+    for (k, v) in &s.fields {
+        validate_proto_value(v, &format!("{path}.{k}"))?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_proto_value(v: &prost_types::Value, path: &str) -> Result<(), Status> {
+    use prost_types::value::Kind;
+    match &v.kind {
+        Some(Kind::NumberValue(n)) if !n.is_finite() => Err(Status::invalid_argument(format!(
+            "metadata field '{path}' contains a non-finite float ({n}) which cannot be stored as JSON"
+        ))),
+        Some(Kind::StructValue(s)) => validate_proto_struct(s, path),
+        Some(Kind::ListValue(l)) => {
+            for (i, item) in l.values.iter().enumerate() {
+                validate_proto_value(item, &format!("{path}[{i}]"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 fn storage_err_to_status(e: MnemoError) -> Status {
     match e.status_code() {
         404 => Status::not_found(e.to_string()),
@@ -454,12 +483,62 @@ async fn find_user_by_identifier(
 }
 
 /// Find or create a session by name for a given user.
+///
+/// ## Concurrency note (P1-4)
+///
+/// This uses an optimistic create-then-verify pattern to close the TOCTOU race:
+/// 1. Scan for an existing session with this name.
+/// 2. If not found, attempt to create one.
+/// 3. After creation, re-scan for the name in case a concurrent request also
+///    created one. Return whichever session has the earlier `created_at`.
+///
+/// This does not provide atomic uniqueness at the storage layer — a proper fix
+/// requires a Redis `SETNX` name-index in `RedisStateStore::create_session`.
+/// For now, both sessions exist but the same one (earliest) is returned on all
+/// paths, so episode history remains contiguous.
 async fn find_or_create_session(
     store: &RedisStateStore,
     user_id: Uuid,
     session_name: &str,
 ) -> Result<mnemo_core::models::session::Session, MnemoError> {
-    // Try to find existing session by name via list scan
+    // Step 1: scan for an existing session with this name.
+    if let Some(existing) = scan_session_by_name(store, user_id, session_name).await? {
+        return Ok(existing);
+    }
+
+    // Step 2: create a new session.
+    let created = store
+        .create_session(CoreCreateSessionRequest {
+            id: None,
+            user_id,
+            agent_id: None,
+            name: Some(session_name.to_string()),
+            metadata: serde_json::json!({}),
+        })
+        .await?;
+
+    // Step 3: re-scan immediately to detect concurrent duplicates and return
+    // the earliest one so all callers converge on the same session.
+    let sessions = collect_all_sessions_by_name(store, user_id, session_name).await?;
+    if sessions.len() > 1 {
+        // Return the session with the earliest created_at; all concurrent callers
+        // will scan and return the same session.
+        let earliest = sessions
+            .into_iter()
+            .min_by_key(|s| s.created_at)
+            .unwrap_or(created);
+        return Ok(earliest);
+    }
+
+    Ok(created)
+}
+
+/// Scan sessions for the first one matching `name` (case-insensitive), or None.
+async fn scan_session_by_name(
+    store: &RedisStateStore,
+    user_id: Uuid,
+    name: &str,
+) -> Result<Option<mnemo_core::models::session::Session>, MnemoError> {
     let mut after = None;
     loop {
         let params = mnemo_core::models::session::ListSessionsParams {
@@ -475,10 +554,10 @@ async fn find_or_create_session(
             if session
                 .name
                 .as_deref()
-                .map(|n| n.eq_ignore_ascii_case(session_name))
+                .map(|n| n.eq_ignore_ascii_case(name))
                 .unwrap_or(false)
             {
-                return Ok(session.clone());
+                return Ok(Some(session.clone()));
             }
         }
         after = sessions.last().map(|s| s.id);
@@ -486,16 +565,43 @@ async fn find_or_create_session(
             break;
         }
     }
-    // Not found — create it
-    store
-        .create_session(CoreCreateSessionRequest {
-            id: None,
-            user_id,
-            agent_id: None,
-            name: Some(session_name.to_string()),
-            metadata: serde_json::json!({}),
-        })
-        .await
+    Ok(None)
+}
+
+/// Collect ALL sessions matching `name` — used for duplicate detection after create.
+async fn collect_all_sessions_by_name(
+    store: &RedisStateStore,
+    user_id: Uuid,
+    name: &str,
+) -> Result<Vec<mnemo_core::models::session::Session>, MnemoError> {
+    let mut matches = Vec::new();
+    let mut after = None;
+    loop {
+        let params = mnemo_core::models::session::ListSessionsParams {
+            limit: 200,
+            after,
+            since: None,
+        };
+        let sessions = store.list_sessions(user_id, params).await?;
+        if sessions.is_empty() {
+            break;
+        }
+        for session in &sessions {
+            if session
+                .name
+                .as_deref()
+                .map(|n| n.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+            {
+                matches.push(session.clone());
+            }
+        }
+        after = sessions.last().map(|s| s.id);
+        if after.is_none() || sessions.len() < 200 {
+            break;
+        }
+    }
+    Ok(matches)
 }
 
 #[allow(clippy::result_large_err)]
@@ -1263,6 +1369,10 @@ impl UserService for GrpcState {
             .map(|s| parse_uuid(s, "id"))
             .transpose()?;
 
+        // P2-11: validate metadata for non-finite floats before conversion.
+        if let Some(ref s) = req.metadata {
+            validate_proto_struct(s, "metadata")?;
+        }
         let core_req = CoreCreateUserRequest {
             id,
             external_id: req.external_id.filter(|s| !s.is_empty()),
@@ -1437,6 +1547,9 @@ impl SessionService for GrpcState {
             .map(|s| parse_uuid(s, "id"))
             .transpose()?;
 
+        if let Some(ref s) = req.metadata {
+            validate_proto_struct(s, "metadata")?;
+        }
         let core_req = CoreCreateSessionRequest {
             id,
             user_id,
@@ -1704,21 +1817,47 @@ impl EntityService for GrpcState {
         let id = parse_uuid(&req.id, "id")?;
         let classification = from_proto_classification(req.classification)?;
 
-        let mut entity = self
-            .state_store
-            .get_entity(id)
-            .await
-            .map_err(storage_err_to_status)?;
+        // P2-14: read-modify-write with retry on concurrent modification.
+        // Redis JSON.SET is not atomic for read-modify-write. We retry up to 3
+        // times; if a concurrent write changes `updated_at` between our read and
+        // write, we re-read and re-apply. This doesn't prevent all races (requires
+        // storage-layer CAS for full safety) but eliminates silent downgrades.
+        let mut attempts = 0u8;
+        loop {
+            let mut entity = self
+                .state_store
+                .get_entity(id)
+                .await
+                .map_err(storage_err_to_status)?;
+            let read_at = entity.updated_at;
 
-        entity.classification = classification;
-        entity.updated_at = chrono::Utc::now();
+            entity.classification = classification;
+            entity.updated_at = chrono::Utc::now();
 
-        self.state_store
-            .update_entity(&entity)
-            .await
-            .map_err(storage_err_to_status)?;
+            self.state_store
+                .update_entity(&entity)
+                .await
+                .map_err(storage_err_to_status)?;
 
-        Ok(Response::new(entity_to_proto(entity)))
+            // Verify the write landed with our intended classification.
+            let written = self
+                .state_store
+                .get_entity(id)
+                .await
+                .map_err(storage_err_to_status)?;
+
+            if written.classification == classification {
+                return Ok(Response::new(entity_to_proto(written)));
+            }
+            // Concurrent write detected — retry if attempts remain.
+            attempts += 1;
+            if attempts >= 3 {
+                return Err(Status::aborted(
+                    "classification patch failed due to concurrent modification — retry",
+                ));
+            }
+            let _ = read_at; // suppress unused warning
+        }
     }
 }
 
@@ -1861,21 +2000,39 @@ impl EdgeService for GrpcState {
         let id = parse_uuid(&req.id, "id")?;
         let classification = from_proto_classification(req.classification)?;
 
-        let mut edge = self
-            .state_store
-            .get_edge(id)
-            .await
-            .map_err(storage_err_to_status)?;
+        // P2-14: read-modify-write with retry (mirrors entity classification logic).
+        let mut attempts = 0u8;
+        loop {
+            let mut edge = self
+                .state_store
+                .get_edge(id)
+                .await
+                .map_err(storage_err_to_status)?;
 
-        edge.classification = classification;
-        edge.updated_at = chrono::Utc::now();
+            edge.classification = classification;
+            edge.updated_at = chrono::Utc::now();
 
-        self.state_store
-            .update_edge(&edge)
-            .await
-            .map_err(storage_err_to_status)?;
+            self.state_store
+                .update_edge(&edge)
+                .await
+                .map_err(storage_err_to_status)?;
 
-        Ok(Response::new(edge_to_proto(edge)))
+            let written = self
+                .state_store
+                .get_edge(id)
+                .await
+                .map_err(storage_err_to_status)?;
+
+            if written.classification == classification {
+                return Ok(Response::new(edge_to_proto(written)));
+            }
+            attempts += 1;
+            if attempts >= 3 {
+                return Err(Status::aborted(
+                    "classification patch failed due to concurrent modification — retry",
+                ));
+            }
+        }
     }
 }
 

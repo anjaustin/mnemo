@@ -300,4 +300,8 @@ pub struct AppState {
     pub pipeline_metrics: Arc<mnemo_ingest::dag::PipelineMetrics>,
     /// Delta consensus sync status — node identity, vector clock, peer tracking.
     pub sync_status: Arc<RwLock<mnemo_core::sync::SyncStatus>>,
+    /// Shared auth configuration — held here so REST handlers that revoke/rotate
+    /// API keys can immediately invalidate the in-memory key cache, closing the
+    /// 30-second revocation window (P1-5).
+    pub auth_config: Arc<crate::middleware::AuthConfig>,
 }

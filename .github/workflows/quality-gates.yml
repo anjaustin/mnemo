@@ -165,6 +165,8 @@ jobs:
               "mnemo",
               "--mnemo-base-url",
               "http://127.0.0.1:8080",
+              "--wait-for-processing",
+              "--verbose",
           ]
           output = subprocess.check_output(cmd, text=True)
           print(output)

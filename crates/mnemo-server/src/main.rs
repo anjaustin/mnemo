@@ -457,6 +457,7 @@ async fn main() -> anyhow::Result<()> {
                 mnemo_core::sync::SyncStatus::disabled()
             }
         })),
+        auth_config: auth_config.clone(),
     };
 
     if let Err(err) = restore_webhook_state(&app_state).await {

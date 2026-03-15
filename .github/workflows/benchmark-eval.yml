@@ -124,7 +124,7 @@ jobs:
           done
           STATUS=0
           python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080 \
-            --output eval/results/temporal_mnemo.json | tee /tmp/mnemo_eval_table.txt
+            --wait-for-processing --verbose --output eval/results/temporal_mnemo.json | tee /tmp/mnemo_eval_table.txt
           [ ${PIPESTATUS[0]} -eq 0 ] || STATUS=1
           python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json \
             --mnemo-base-url http://localhost:8080 --verbose \

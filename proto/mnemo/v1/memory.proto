@@ -9,14 +9,33 @@ import "google/protobuf/struct.proto";
 // The hot-path endpoint: assemble LLM-ready context from a user's
 // knowledge graph. This is the #1 latency-sensitive call in Mnemo.
 
+// WARNING — GOVERNANCE NOTE
+// The gRPC API surface is a "bare path" that calls directly into the storage
+// and retrieval layer. The following REST-only controls are NOT enforced on
+// any gRPC RPC:
+//   - Guardrail evaluation (content filtering, classification-ceiling rules)
+//   - Retention policy enforcement (expired episodes may be returned)
+//   - Memory view constraints (entity/edge type whitelists, label blacklists)
+//   - Governance audit trail (no audit events emitted)
+//   - Webhook emission (no HEAD_ADVANCED or other events fired)
+//
+// For production workflows that require policy enforcement, use the REST API
+// (POST /api/v1/memory, POST /api/v1/memory/:user/context) which applies the
+// full governance stack. The gRPC API is intended for low-latency storage
+// integrations and direct SDK use cases where the caller is trusted.
+
 service MemoryService {
-  // Assemble a context block for an LLM prompt (low-level).
+  // Assemble a context block for an LLM prompt (low-level, bare path).
+  // WARNING: Does not apply guardrails, retention policy, or views.
   rpc GetContext(GetContextRequest) returns (GetContextResponse);
 
   // High-level: ingest a text message into memory (auto-creates user + session).
+  // WARNING: Does not emit webhooks or run governance audit.
   rpc RememberMemory(RememberMemoryRequest) returns (RememberMemoryResponse);
 
   // High-level: assemble rich context with policy, contract, and view support.
+  // WARNING: Guardrails and retention policy are NOT enforced. Contract and
+  // retrieval_policy fields affect scoring parameters only, not governance.
   rpc GetMemoryContext(GetMemoryContextRequest) returns (GetMemoryContextResponse);
 
   // Retrieve raw episodes for a user+session.

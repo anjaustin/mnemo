@@ -136,6 +136,7 @@ async fn build_test_state() -> (AppState, Arc<RedisStateStore>) {
         sync_status: Arc::new(tokio::sync::RwLock::new(
             mnemo_core::sync::SyncStatus::disabled(),
         )),
+        auth_config: Arc::new(mnemo_server::middleware::AuthConfig::disabled()),
     };
 
     (state, state_store)
