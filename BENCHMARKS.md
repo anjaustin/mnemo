@@ -14,8 +14,8 @@ regression tolerances, and known limitations.
 | Mnemo version | 0.7.0 |
 | Embedding provider | local (`AllMiniLML6V2`) |
 | Embedding dimensions | 384 |
-| LLM provider | anthropic (`claude-haiku-4-20250514`) |
-| Commit | `86f21bd` |
+| LLM provider | anthropic (`claude-haiku-4-5-20251001`) |
+| Commit | `f1f4e50` |
 | Run date | 2026-03-15 |
 
 ---
@@ -39,7 +39,7 @@ Result file: [`eval/results/longmem_mnemo.json`](eval/results/longmem_mnemo.json
 
 ---
 
-## Temporal Eval (Core Pack — 27 cases)
+## Temporal Eval (Core Pack — 31 cases)
 
 Tests recency (return the latest version of a changing fact), point-in-time recall
 (return the version that was true at a specified past date), and stale-fact suppression
@@ -49,17 +49,30 @@ Two retrieval profiles are evaluated:
 - **temporal** — `temporal_weight: 0.9`, explicit `time_intent` and `mode` parameters passed
 - **baseline** — standard retrieval, no temporal parameters
 
+**Full-stack results** (with LLM extraction enabled; `--wait-for-processing`):
+
 | Profile | Accuracy | Stale Rate | Gate (accuracy) | Gate (stale) | p95 Latency |
 |---|---:|---:|---|---|---:|
-| temporal | **85.2%** | **3.7%** | 95% — MISS | 5% — PASS | 66ms |
-| baseline | 77.8% | 11.1% | — | — | 59ms |
+| temporal | **96.8%** | **3.2%** | 95% — **PASS** | 5% — **PASS** | 221ms |
+| baseline | 87.1% | 12.9% | — | — | 225ms |
 
-The temporal profile improves accuracy by 7.4 percentage points and cuts stale rate
-from 11.1% to 3.7% vs baseline. The 95% gate is not yet met; 4 of 27 cases fail
-on point-in-time historical queries (returning the current version of a fact when
-asked for the historical state).
+30/31 cases pass on the temporal profile. The one failure (`diet_preference_change`)
+is caused by a spurious concept entity ("vegetarian diet") being ranked as the top
+result via vector similarity; the correct answer ("Sarah now eats meat") is present
+in the context but not at the top line.
 
-Result files: [`eval/results/temporal_mnemo.json`](eval/results/temporal_mnemo.json) (pre-Spec 08, 27 cases), [`eval/results/temporal_mnemo_spec08.json`](eval/results/temporal_mnemo_spec08.json) (post-Spec 08, 31 cases)
+The temporal profile improves accuracy by 9.7 percentage points and cuts stale rate
+from 12.9% to 3.2% vs baseline. Both the 95% accuracy gate and 5% stale-rate gate
+are met.
+
+**Key fixes (commit `f1f4e50`):**
+- Entity summaries now use "most recent wins" — newer episodes overwrite stale descriptions
+- Historical (`as_of`) queries suppress entity summaries (always-current) and lead with temporally-filtered facts
+- Classifier temporal-weight cap is bypassed when the caller provides an explicit weight
+- Historical scoring sigma broadened (14 → 180 days) for proportionate decay
+- Fallback path uses keyword+temporal blend instead of pure recency
+
+Result files: [`eval/results/temporal_eval_48a877a_2026-03-15T15-16-56.json`](eval/results/temporal_eval_48a877a_2026-03-15T15-16-56.json), [`eval/results/temporal_eval_48a877a_2026-03-15T15-24-42.json`](eval/results/temporal_eval_48a877a_2026-03-15T15-24-42.json)
 
 ---
 
@@ -121,7 +134,7 @@ Result file: [`eval/results/recall_mnemo.json`](eval/results/recall_mnemo.json)
 | LongMemEval | temporal | 3 | 100.0% | ≥ 75% | PASS |
 | LongMemEval | preference | 3 | 100.0% | ≥ 80% | PASS |
 | LongMemEval | absent | 3 | 100.0% | ≥ 90% | PASS |
-| Temporal eval | core (31, post-Spec 08) | 31 | 83.9% | ≥ 95% | MISS |
+| Temporal eval | core (31, post-Spec 08+fixes) | 31 | 96.8% | ≥ 95% | PASS |
 | Temporal eval | scientific (10) | 10 | 60.0% | ≥ 95% | MISS |
 | Recall quality | factual | 40 | 87.5% | ≥ 85% | PASS |
 | Recall quality | temporal | 3 | 66.7% | ≥ 90% | FAIL |
@@ -137,7 +150,7 @@ vector search, context assembly, and JSON serialization. Single-client; no concu
 
 | Harness | p50 | p95 | Gate |
 |---|---:|---:|---|
-| Temporal eval (core) | 44ms | 66ms | ≤ 300ms PASS |
+| Temporal eval (core) | ~120ms | 221ms | ≤ 300ms PASS |
 | Temporal eval (scientific) | 51ms | 62ms | ≤ 300ms PASS |
 | LongMemEval | ~38ms | 47ms | ≤ 300ms PASS |
 | Recall quality | 40ms | 56ms | ≤ 500ms PASS |
@@ -164,25 +177,9 @@ Zep instance before being cited. See [eval/METHODOLOGY.md](eval/METHODOLOGY.md)
 
 ## What the Failing Gates Mean
 
-Mnemo does not pass all its own gates in this run. The two significant gaps:
+Mnemo passes all primary gates in this run. The one remaining gap:
 
-**1. Temporal accuracy on core pack (83.9% on 31 cases after Spec 08)**
-
-Spec 08 (commit following `86f21bd`) added 4 regression cases targeting `as_of`
-hard-filter consistency and all 4 new cases pass. The 5 remaining failures are
-current-intent queries where a semantically similar older fact outscores the newer
-one — a ranking issue that `as_of` filtering does not address (no cutoff applies
-when `time_intent=current`).
-
-**Root cause:** soft temporal scoring (Spec 03) applies a multiplier in `[0.2, 2.0]`
-but cosine similarity differences between similar facts can exceed this range. When
-the old fact is 40ms closer to the query embedding than the new one, the temporal
-multiplier doesn't overcome it.
-
-**Next:** stronger temporal differentiation — explicit invalidation metadata,
-supersession detection, or embedding fine-tuning on temporal ordering signals.
-
-**2. Scientific pack stale rate (40%)**
+**Scientific pack stale rate (40%)**
 
 Slowly-evolving facts (protocol revisions over many months) produce high stale rates.
 AllMiniLML6V2 embeds semantically similar research notes into a tight cluster;
@@ -199,16 +196,20 @@ feedback signals — but this requires instrumentation at the agent level.
 ## Reproducing These Results
 
 ```bash
-# Prerequisites: Mnemo server running with 384-dim local embeddings
+# Prerequisites: Mnemo server running with 384-dim local embeddings + Anthropic extraction
 MNEMO_SERVER_PORT=8081 \
 MNEMO_QDRANT_PREFIX=mnemo_eval384_ \
 MNEMO_EMBEDDING_PROVIDER=local \
 MNEMO_EMBEDDING_MODEL=AllMiniLML6V2 \
 MNEMO_EMBEDDING_DIMENSIONS=384 \
+MNEMO_LLM_PROVIDER=anthropic \
+MNEMO_LLM_MODEL=claude-haiku-4-5-20251001 \
+MNEMO_LLM_API_KEY=<your-anthropic-key> \
 target/debug/mnemo-server &
 
-# Run all harnesses
+# Run temporal eval with full-stack extraction (recommended; adds ~2-5s per case)
 python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8081 \
+    --wait-for-processing \
     --output eval/results/temporal_mnemo.json
 
 python3 eval/temporal_eval.py --target mnemo \
