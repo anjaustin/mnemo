@@ -1,3 +1,7 @@
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::ptr_arg)]
+#![allow(clippy::useless_vec)]
 //! # mnemo-gnn
 //!
 //! Lightweight Graph Attention Network (GAT) re-ranking layer for Mnemo

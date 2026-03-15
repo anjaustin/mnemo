@@ -99,7 +99,19 @@ jobs:
           mkdir -p eval/results
           target/debug/mnemo-server >/tmp/mnemo_eval.log 2>&1 &
           SERVER_PID=$!
-          sleep 3
+          # Wait up to 120s for server to accept connections
+          for i in $(seq 1 120); do
+            if python3 -c "import socket; s=socket.create_connection(('127.0.0.1',8080),timeout=1)" 2>/dev/null; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 120 ]; then
+              echo "Server failed to start within 120s — logs:"
+              cat /tmp/mnemo_eval.log
+              exit 1
+            fi
+            sleep 1
+          done
           STATUS=0
           python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080 \
             --output eval/results/temporal_mnemo.json | tee /tmp/mnemo_eval_table.txt
@@ -127,7 +139,18 @@ jobs:
           mkdir -p eval/results
           target/debug/mnemo-server >/tmp/mnemo_longmem.log 2>&1 &
           SERVER_PID=$!
-          sleep 3
+          for i in $(seq 1 120); do
+            if python3 -c "import socket; s=socket.create_connection(('127.0.0.1',8080),timeout=1)" 2>/dev/null; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 120 ]; then
+              echo "Server failed to start within 120s — logs:"
+              cat /tmp/mnemo_longmem.log
+              exit 1
+            fi
+            sleep 1
+          done
           python3 eval/longmem_eval.py --mnemo-base-url http://localhost:8080 --gate-only \
             --output eval/results/longmem_mnemo.json | tee /tmp/longmem_eval_table.txt
           STATUS=$?
@@ -156,7 +179,13 @@ jobs:
           if [ "${{ github.event.inputs.benchmark_target }}" = "both" ]; then
             target/debug/mnemo-server >/tmp/mnemo_eval.log 2>&1 &
             SERVER_PID=$!
-            sleep 3
+            for i in $(seq 1 120); do
+              if python3 -c "import socket; s=socket.create_connection(('127.0.0.1',8080),timeout=1)" 2>/dev/null; then
+                echo "Server ready after ${i}s"; break
+              fi
+              [ $i -eq 120 ] && { cat /tmp/mnemo_eval.log; exit 1; }
+              sleep 1
+            done
             python3 eval/temporal_eval.py --target both --mnemo-base-url http://localhost:8080 --zep-base-url "${{ github.event.inputs.zep_base_url }}" --zep-api-key "$ZEP_API_KEY" | tee /tmp/zep_eval_table.txt
             STATUS=$?
             kill $SERVER_PID || true

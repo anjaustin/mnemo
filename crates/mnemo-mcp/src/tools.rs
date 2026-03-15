@@ -728,7 +728,7 @@ async fn handle_delegate(server: &McpServer, args: &Value) -> ToolCallResult {
         Ok(resp) => {
             let status = resp.status();
             match resp.json::<Value>().await {
-                Ok(json) if status.is_success() => {
+                Ok(_json) if status.is_success() => {
                     let result = serde_json::json!({
                         "region_id": region_id,
                         "region_name": region_name,

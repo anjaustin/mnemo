@@ -116,6 +116,13 @@ jobs:
           MNEMO_SERVER_PORT: 8080
           MNEMO_REDIS_URL: redis://localhost:6379
           MNEMO_QDRANT_URL: http://localhost:6334
+          MNEMO_QDRANT_PREFIX: mnemo_ci_
+          MNEMO_EMBEDDING_PROVIDER: local
+          MNEMO_EMBEDDING_MODEL: AllMiniLML6V2
+          MNEMO_EMBEDDING_DIMENSIONS: "384"
+          MNEMO_LLM_PROVIDER: anthropic
+          MNEMO_LLM_MODEL: claude-haiku-4-5-20251001
+          MNEMO_LLM_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RUST_LOG: info
         run: |
           cargo run -p mnemo-server > /tmp/mnemo-server.log 2>&1 &

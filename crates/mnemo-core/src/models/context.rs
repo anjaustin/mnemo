@@ -593,6 +593,7 @@ impl ContextBlock {
     /// When `None`, Tier 2 falls back to first-sentence truncation.
     ///
     /// Tier ratios are configurable via `TierConfig` (defaults: 0.60 / 0.25 / 0.15).
+    #[allow(clippy::type_complexity)]
     pub fn assemble_tiered(
         &mut self,
         max_tokens: u32,
@@ -858,7 +859,7 @@ impl TierConfig {
 /// Extract the first sentence (up to max_tokens worth of text).
 fn first_sentence(text: &str, max_tokens: u32) -> String {
     let end = text
-        .find(|c| c == '.' || c == '!' || c == '?')
+        .find(['.', '!', '?'])
         .map(|i| i + 1)
         .unwrap_or(text.len());
     let sentence = &text[..end];

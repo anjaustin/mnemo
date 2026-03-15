@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // ─── Query intent types ────────────────────────────────────────────
 
 /// The intent of an incoming query, used to select a retrieval strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryType {
     /// "What is Jordan's email?" — entity lookup → single fact
@@ -22,15 +22,10 @@ pub enum QueryType {
     /// "What changed since January?" — time-windowed → chronological
     Temporal,
     /// "Give me context on Jordan's accounts" — balanced hybrid retrieval
+    #[default]
     Summary,
     /// "Does Jordan have any legal issues?" — if low confidence → explicit absent notice
     Absent,
-}
-
-impl Default for QueryType {
-    fn default() -> Self {
-        QueryType::Summary
-    }
 }
 
 // ─── Keyword patterns ──────────────────────────────────────────────

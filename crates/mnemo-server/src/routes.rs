@@ -9862,6 +9862,7 @@ fn compare_head_candidate(a: &Session, b: &Session) -> std::cmp::Ordering {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn maybe_attach_recent_episode_fallback(
     state: &AppState,
     user_id: Uuid,
