@@ -50,7 +50,8 @@ use mnemo_core::models::{
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
-use mnemo_core::models::lora::LoraStatsResponse;
+use mnemo_core::models::lora::{LoraFeedbackRequest, LoraFeedbackResponse, LoraStatsResponse};
+use mnemo_core::traits::llm::EmbeddingProvider;
 use mnemo_core::traits::storage::{
     AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
     GuardrailStore, LoraStore, NarrativeStore, RawVectorStore, RegionStore, SessionStore,
@@ -1329,7 +1330,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Domain expansion / transfer learning
         .route("/api/v1/agents/:agent_id/fork", post(fork_agent))
-        // TinyLoRA: per-agent embedding personalization
+        // TinyLoRA: per-agent embedding personalization (homeoadaptive)
         .route(
             "/api/v1/agents/:agent_id/lora/stats",
             get(get_agent_lora_stats),
@@ -1337,6 +1338,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/agents/:agent_id/lora",
             delete(delete_agent_lora),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/feedback",
+            post(post_agent_lora_feedback),
         )
         // Graph knowledge API
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
@@ -13308,6 +13313,131 @@ async fn delete_agent_lora(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/agents/:agent_id/feedback`
+///
+/// Submit explicit relevance ratings for retrieved items, triggering a
+/// **homeoadaptive** update to the `(user, agent)` LoRA adapter.
+///
+/// Each rating nudges the embedding adapter toward highly-rated items and away
+/// from low-rated ones, providing stronger signal than implicit access alone.
+///
+/// The handler looks up each rated edge by UUID to obtain its stored fact text,
+/// re-embeds it, then applies a signed `update_lora_with_rating` step.  Items
+/// whose IDs cannot be resolved (not found, wrong user) are silently skipped.
+///
+/// **When LoRA is disabled** (`MNEMO_LORA_ENABLED=false`), this endpoint
+/// returns `200 OK` with `items_updated: 0` — the request is accepted but no
+/// update is applied, so callers need not check the feature flag.
+async fn post_agent_lora_feedback(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<LoraFeedbackRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+
+    // Validate
+    if body.query_text.trim().is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "query_text must not be empty".into(),
+        )));
+    }
+    let non_zero_ratings: Vec<(&String, f32)> = body
+        .ratings
+        .iter()
+        .filter(|(_, &r)| r != 0.0)
+        .map(|(id, &r)| (id, r))
+        .collect();
+    if non_zero_ratings.is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "ratings must contain at least one non-zero value".into(),
+        )));
+    }
+
+    let user = find_user_by_identifier(&state, &body.user).await?;
+
+    // Embed the query
+    let v_query = state
+        .retrieval
+        .embedder()
+        .embed_for_agent(&body.query_text, user.id, Some(&agent_id))
+        .await
+        .map_err(|e| AppError(MnemoError::Internal(e.to_string())))?;
+
+    let mut items_updated = 0usize;
+
+    for (item_id_str, rating) in &non_zero_ratings {
+        // Clamp rating to [-1, 1]
+        let rating = rating.clamp(-1.0, 1.0);
+
+        // Parse the item UUID
+        let item_id = match item_id_str.parse::<Uuid>() {
+            Ok(id) => id,
+            Err(_) => {
+                tracing::debug!(id = %item_id_str, "feedback: skipping non-UUID item id");
+                continue;
+            }
+        };
+
+        // Look up the edge fact text — skip if not found or belongs to wrong user
+        let edge = match state.state_store.get_edge(item_id).await {
+            Ok(e) if e.user_id == user.id => e,
+            Ok(_) => {
+                tracing::debug!(id = %item_id, "feedback: skipping edge owned by different user");
+                continue;
+            }
+            Err(_) => {
+                tracing::debug!(id = %item_id, "feedback: skipping unresolvable edge id");
+                continue;
+            }
+        };
+
+        // Embed the item's fact text (base embedding, no adaptation)
+        let v_item = match state
+            .retrieval
+            .embedder()
+            .embed(&edge.fact)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(id = %item_id, error = %e, "feedback: failed to embed item fact");
+                continue;
+            }
+        };
+
+        // Apply the signed update
+        state
+            .retrieval
+            .embedder()
+            .update_lora_with_rating(&v_query, &v_item, rating, user.id, Some(&agent_id))
+            .await;
+
+        items_updated += 1;
+    }
+
+    // Return current adapter stats for observability
+    let (total_update_count, b_frobenius_norm) = match state
+        .state_store
+        .get_lora_weights(user.id, Some(&agent_id))
+        .await
+    {
+        Ok(Some(w)) => {
+            let norm = w.b_flat.iter().map(|x| x * x).sum::<f32>().sqrt();
+            (w.update_count, norm)
+        }
+        _ => (0, 0.0),
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(LoraFeedbackResponse {
+            items_updated,
+            total_update_count,
+            b_frobenius_norm,
+        }),
+    ))
 }
 
 #[cfg(test)]

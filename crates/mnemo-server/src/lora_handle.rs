@@ -105,4 +105,24 @@ impl EmbeddingProvider for LoraEmbedderHandle {
             }
         }
     }
+
+    async fn update_lora_with_rating(
+        &self,
+        v_query: &[f32],
+        v_item: &[f32],
+        rating: f32,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) {
+        match self {
+            LoraEmbedderHandle::Base(e) => {
+                e.update_lora_with_rating(v_query, v_item, rating, user_id, agent_id)
+                    .await
+            }
+            LoraEmbedderHandle::Lora(e) => {
+                e.update_lora_with_rating(v_query, v_item, rating, user_id, agent_id)
+                    .await
+            }
+        }
+    }
 }

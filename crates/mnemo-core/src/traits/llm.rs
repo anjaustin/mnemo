@@ -194,4 +194,27 @@ pub trait EmbeddingProvider: Send + Sync {
     ) {
         // No-op by default — only LoraAdaptedEmbedder applies the update.
     }
+
+    /// Apply a LoRA explicit-feedback update with a signed relevance rating.
+    ///
+    /// `rating` is a value in `[-1.0, 1.0]`:
+    /// - Positive: adapter moves toward the item (item was relevant)
+    /// - Negative: adapter moves away from the item (item was irrelevant)
+    /// - Zero: no update applied
+    ///
+    /// The effective learning rate is `|rating| * lr`, so a rating of `1.0`
+    /// is equivalent to one full implicit-access update, and `0.5` is half.
+    ///
+    /// The default implementation is a **no-op**. Only `LoraAdaptedEmbedder`
+    /// overrides this.
+    async fn update_lora_with_rating(
+        &self,
+        _v_query: &[f32],
+        _v_item: &[f32],
+        _rating: f32,
+        _user_id: Uuid,
+        _agent_id: Option<&str>,
+    ) {
+        // No-op by default.
+    }
 }

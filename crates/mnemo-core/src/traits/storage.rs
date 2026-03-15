@@ -729,6 +729,16 @@ pub trait LoraStore: Send + Sync {
         &self,
         user_id: Uuid,
     ) -> StorageResult<Vec<LoraWeights>>;
+
+    /// List all adapters the given agent has with any user.
+    ///
+    /// Used by the homeoadaptive stats endpoint so an agent can inspect the
+    /// distribution of user profiles it has accumulated.  Returns an empty
+    /// Vec when the agent has no trained adapters yet.
+    async fn list_lora_weights_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<Vec<LoraWeights>>;
 }
 
 // ─── Composite Traits ──────────────────────────────────────────────

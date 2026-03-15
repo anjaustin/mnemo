@@ -1,6 +1,7 @@
 # Spec 06 — TinyLoRA: Agent-Specific Memories of Shared Data
 
-**Status:** Complete  
+**Status:** Complete
+**Coined term:** *homeoadaptive* — see Homeoadaptive Convergence below  
 **Crate:** `crates/mnemo-lora/`  
 **Feature flag:** `MNEMO_LORA_ENABLED=true`
 
@@ -168,6 +169,39 @@ adapters from Redis per `(user_id, agent_id)`.
 - Per-session adapters (user+agent granularity is sufficient)
 - Adapter merging / ensemble (future work)
 - BLAS/LAPACK dependency (pure Rust, <1ms overhead for d=384, r=8)
+
+---
+
+## Homeoadaptive Convergence
+
+**Homeoadaptive** *(adj.)* — of an embedding system: self-regulating toward a stable
+operating point for each `(user, agent)` pair through continuous implicit and explicit
+feedback, such that successive retrievals converge on each agent's equilibrium
+representation of relevance without external configuration.
+
+Analogous to homeostasis in biological systems: the system corrects its state toward a
+*learned* set-point rather than a fixed one.
+
+**In TinyLoRA:**
+
+The B matrix begins at zero (identity residual). With each retrieval access or explicit
+rating, B is nudged to reduce the angular distance between the query embedding and the
+accessed fact embedding in the agent's adapted space. Over time:
+
+1. **Short term** — B encodes the agent's most recent relevance priors. Early retrievals
+   are near-identical to base embeddings; after ~10 interactions the adapter begins to
+   differentiate.
+
+2. **Medium term** — B approaches a fixed point as the agent's relevance priors stabilize
+   for this user. The Frobenius clamp (`||B||_F ≤ 10`) enforces boundedness and prevents
+   runaway drift.
+
+3. **Long term** — New signal continues to shift the set-point slowly (due to the small
+   learning rate `lr=0.005`), allowing gradual drift as the user's interests evolve,
+   while the clamp prevents catastrophic forgetting of the established prior.
+
+This three-phase convergence is what makes the system *homeoadaptive* rather than merely
+adaptive: it self-regulates toward an equilibrium specific to each `(user, agent)` pair.
 
 ---
 

@@ -84,6 +84,11 @@ where
         }
     }
 
+    /// Access the underlying embedder (e.g. for explicit feedback updates).
+    pub fn embedder(&self) -> &Arc<E> {
+        &self.embedder
+    }
+
     /// Create a retrieval engine with GNN re-ranking enabled.
     pub fn with_gnn(
         state_store: Arc<S>,

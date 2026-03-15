@@ -1,143 +1,153 @@
-# Spec 07 — AUMRL: Agentic-User-Moulded Representation Learner
+# Spec 07 — Homeoadaptive Extensions: Explicit Feedback + Agent-View Stats
 
-**Status:** Design  
-**Depends on:** Spec 06 (TinyLoRA infrastructure)  
-**Feature flag:** `MNEMO_AUMRL_ENABLED=true` (independent of `MNEMO_LORA_ENABLED`)
-
----
-
-## Problem Statement
-
-Spec 06 TinyLoRA adapts embeddings from the **user's perspective** — the adapter for
-`(user_id, agent_id)` captures what _this user_ finds relevant when interacting with
-_this agent_.
-
-AUMRL inverts the ownership: the adapter for `(agent_id, user_id)` captures what _this
-agent_ has learned about _this user's_ communication style, domain depth, vocabulary,
-and retrieval preferences. The agent accumulates a library of user profiles and applies
-them at query time — adapting its embedding space to each user it serves.
-
-**Key distinction:**
-
-| | TinyLoRA (Spec 06) | AUMRL (Spec 07) |
-|---|---|---|
-| Ownership | User owns adapter, scoped to agent | Agent owns adapter, scoped to user |
-| Redis key | `lora:{user_id}:{agent_id}` | `aumrl:{agent_id}:{user_id}` |
-| Training signal | Implicit (access patterns) | Explicit (user feedback ratings) |
-| Cross-user learning | Not possible (isolated per user) | Enabled (agent sees all its user profiles) |
-| Personalization target | What this user finds relevant | How this agent should represent queries for this user |
+**Status:** Complete  
+**Depends on:** Spec 06 (TinyLoRA infrastructure)
 
 ---
 
-## Design
+## Summary
 
-### Adapter Math
+Spec 07 extends TinyLoRA's homeoadaptive embedding personalization with two capabilities
+built entirely on the existing `(user_id, agent_id)` adapter infrastructure:
 
-Identical to Spec 06:
+1. **Explicit feedback loop** — `POST /api/v1/agents/:agent_id/feedback` accepts signed
+   relevance ratings for retrieved items and applies them as directed LoRA updates,
+   complementing Spec 06's implicit access-pattern signal.
 
-```
-v_adapted = v_base + scale * B · (A · v_base)
-A ∈ ℝ^{r×d}   (fixed random projection, seeded from agent_id + user_id hash)
-B ∈ ℝ^{d×r}   (zero init; updated from explicit feedback)
-scale = 0.125, rank = 8
-```
+2. **Agent-view stats** — `list_lora_weights_for_agent` lets an agent enumerate all
+   user adapters it has accumulated, enabling observability and future cross-user analysis.
 
-### Training Signal: Explicit Feedback
+---
 
-AUMRL uses explicit user feedback rather than implicit access patterns:
+## Background: The AUMRL Evaluation
 
-```
-POST /api/v1/agents/:agent_id/feedback
-{
-  "user": "alice",
-  "query_text": "...",
-  "retrieved_fact_ids": ["edge-uuid-1", "edge-uuid-2"],
-  "ratings": {"edge-uuid-1": 1.0, "edge-uuid-2": -0.5}
-}
-```
+An earlier proposal (AUMRL — Agentic-User-Moulded Representation Learner) proposed
+inverting the adapter key from `(user_id, agent_id)` to `(agent_id, user_id)` and
+calling this a distinct system. On evaluation, the distinction was cosmetic: the math,
+the struct, the Redis schema, and the update rule are identical regardless of key order.
+The only genuinely new ideas were:
 
-Rating semantics:
-- `1.0` = highly relevant (positive nudge toward query)
-- `-1.0` = irrelevant (nudge away)
-- `0.0` = neutral
+- Explicit feedback as a training signal (implemented here as D1)
+- An agent-scoped list query (implemented here as D2)
 
-Update rule per rated item:
-```
-lr_scaled = lr * |rating|
-sign = sign(rating)
-ΔB += sign * lr_scaled * outer(v_query - v_item_adapted, A · v_item)
-```
+The key-inversion framing was retired. AUMRL is not a separate system; it is a
+description of what TinyLoRA already does viewed from the agent's perspective.
 
-Implicit access patterns (from retrieval) remain as a secondary signal at half weight,
-so AUMRL adapters are not dependent on users actively providing ratings.
+---
 
-### Storage Schema
+## Coined Term: Homeoadaptive
 
-```
-Redis key: {prefix}aumrl:{agent_id}:{user_id}   → JSON AumrlWeights
-Redis key: {prefix}aumrl_idx:{agent_id}          → Set of known user slots
-```
+**Homeoadaptive** *(adj.)* — of an embedding system: self-regulating toward a stable
+operating point for each `(user, agent)` pair through continuous implicit and explicit
+feedback, such that successive retrievals converge on each agent's equilibrium
+representation of relevance without external configuration.
 
-`AumrlWeights` is structurally identical to `LoraWeights` with an additional `ratings_count` field.
+Analogous to homeostasis: the system corrects toward a *learned* set-point, not a
+fixed one. The B matrix's three-phase convergence (early differentiation → stabilization
+→ slow long-term drift) is what makes TinyLoRA homeoadaptive rather than merely adaptive.
 
-### API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/v1/agents/:agent_id/feedback` | Submit explicit relevance ratings |
-| `GET` | `/api/v1/agents/:agent_id/aumrl/stats` | List per-user adapter stats for this agent |
-| `GET` | `/api/v1/agents/:agent_id/aumrl/stats/:user` | Stats for one user's adapter |
-| `DELETE` | `/api/v1/agents/:agent_id/aumrl/:user` | Reset one user's adapter |
-| `DELETE` | `/api/v1/agents/:agent_id/aumrl` | Reset all user adapters for this agent |
-
-### Homeoadaptive Behavior
-
-The term "homeoadaptive" reflects that the embedding space self-regulates toward each
-user's equilibrium without explicit configuration. After sufficient interactions with
-a user, the agent's representation of that user's queries stabilizes (B approaches a
-fixed point given the user's consistent retrieval preferences), and further updates
-produce diminishing drift (Frobenius clamp enforces boundedness).
-
-### Cross-User Learning (Future)
-
-Because the agent owns adapters for all users, it can examine the distribution of B
-matrices across its user base. This enables:
-- **User clustering**: group users by embedding preference similarity
-- **Cold-start warm-up**: initialize a new user's adapter from the centroid of similar users
-- **Drift detection**: flag user profiles that diverge significantly from the agent's median
-
-This is not implemented in Spec 07 but is architecturally enabled by the inverted ownership.
+Coined in Mnemo v0.7.0 (Spec 06 + 07).
 
 ---
 
 ## Deliverables
 
-| ID | Description | File(s) |
-|---|---|---|
-| A1 | `AumrlStore` trait extending `LoraStore` with agent-scoped queries | `mnemo-core/src/traits/storage.rs` |
-| A2 | Redis impl of `AumrlStore` | `mnemo-storage/src/redis_store.rs` |
-| A3 | `AumrlAdaptedEmbedder<E, S>` in mnemo-lora | `crates/mnemo-lora/src/aumrl.rs` |
-| A4 | `POST /api/v1/agents/:agent_id/feedback` endpoint | `mnemo-server/src/routes.rs` |
-| A5 | Stats + reset endpoints | `mnemo-server/src/routes.rs` |
-| A6 | Wire AUMRL embedder into `LoraEmbedderHandle::Aumrl` variant | `mnemo-server/src/lora_handle.rs` |
-| A7 | Eval case pack | `eval/cases/aumrl_user_profiles.json` |
+### D1 — Explicit Feedback Endpoint
+
+**`POST /api/v1/agents/:agent_id/feedback`**
+
+Accepts `LoraFeedbackRequest`:
+```json
+{
+  "user": "alice@example.com",
+  "query_text": "What are our Q3 revenue projections?",
+  "ratings": {
+    "edge-uuid-1": 1.0,
+    "edge-uuid-2": -0.5
+  }
+}
+```
+
+For each non-zero rating:
+1. Look up the edge by UUID from the state store (skip if not found or wrong user)
+2. Re-embed the edge `fact` text using the base embedder
+3. Call `update_lora_with_rating(v_query, v_item, rating, user_id, agent_id)`
+
+The signed update rule in `LoraAdapter::update_with_rating`:
+```
+delta = sign(rating) * (v_query - v_item_adapted)
+ΔB   += |rating| * lr * outer(delta, A · v_item)
+B     = clamp_frobenius(B, 10.0)
+```
+
+Positive rating → adapter moves toward the item.
+Negative rating → adapter moves away from the item.
+Rating `0.0` → no-op.
+
+Response: `LoraFeedbackResponse` with `items_updated`, `total_update_count`,
+`b_frobenius_norm`.
+
+**When `MNEMO_LORA_ENABLED=false`**: accepts the request, returns `items_updated: 0`.
+
+### D2 — Agent-View List Query
+
+**`list_lora_weights_for_agent(agent_id: &str) -> Vec<LoraWeights>`**
+
+Added to the `LoraStore` trait and implemented in `RedisStateStore`.
+
+Key schema addition:
+```
+{prefix}lora_agent_idx:{agent_id}  →  Set<user_id string>
+```
+
+Maintained in parallel with the existing `lora_idx:{user_id}` user index:
+- `save_lora_weights` → also `SADD lora_agent_idx:{agent_id} {user_id}` (for concrete agents)
+- `delete_lora_weights` → also `SREM lora_agent_idx:{agent_id} {user_id}`
+- `list_lora_weights_for_agent` → `SMEMBERS lora_agent_idx:{agent_id}` → fetch each weight
+
+Stale index entries (adapter deleted but index not cleaned up) are pruned lazily during
+list operations.
+
+### D3 — `update_lora_with_rating` trait method + implementations
+
+Added to `EmbeddingProvider` (default no-op), `LoraAdaptedEmbedder<E,S>`, and
+`LoraEmbedderHandle`. The method signature:
+
+```rust
+async fn update_lora_with_rating(
+    &self,
+    v_query: &[f32],
+    v_item: &[f32],
+    rating: f32,         // [-1.0, 1.0]
+    user_id: Uuid,
+    agent_id: Option<&str>,
+)
+```
+
+`LoraAdapter::update_from_access` is refactored to delegate to
+`update_with_rating(v_query, v_item, 1.0)` — a positive-1.0 explicit rating — so
+implicit and explicit feedback share a single update kernel.
+
+### D4 — `RetrievalEngine::embedder()` accessor
+
+Added `pub fn embedder(&self) -> &Arc<E>` to `RetrievalEngine`, allowing the feedback
+route handler to access the embedder for rating-directed updates without adding a new
+engine method.
+
+---
+
+## Tests Added
+
+| Test | Crate | What it verifies |
+|------|-------|-----------------|
+| `test_update_with_zero_rating_is_noop` | mnemo-lora | Zero rating does not modify B or update_count |
+| `test_negative_rating_inverts_update` | mnemo-lora | Single-step ±1.0 ratings produce exactly opposite ΔB (before clamp) |
 
 ---
 
 ## Non-Goals
 
-- Federated cross-agent learning (agents sharing user profiles with each other)
-- Model distillation from user profiles (learning a new base model)
-- Real-time streaming feedback (batch updates on request, not per-token)
-
----
-
-## Implementation Notes
-
-- `AumrlAdaptedEmbedder` can be a thin wrapper over the same `LoraAdapter` struct — the
-  math is identical, only the key namespace and ownership semantics differ.
-- `LoraEmbedderHandle` in mnemo-server will gain an `Aumrl` variant when A6 is implemented.
-- AUMRL and TinyLoRA can coexist: both can be enabled simultaneously, applying different
-  adapter layers for different purposes (user-owned vs. agent-owned).
-- Explicit feedback endpoint must validate that `query_text` or `retrieved_fact_ids` are
-  non-empty; ratings without anchor text have no vector to update toward.
+- A separate key namespace for `(agent_id, user_id)` — redundant given existing infrastructure
+- Cross-user clustering from B matrices — future work, architecturally enabled by D2
+- Real-time streaming feedback — batch-on-request is sufficient
+- Feedback on entity or episode IDs (only edges are supported; they carry the `fact` text needed for re-embedding)

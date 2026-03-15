@@ -137,6 +137,42 @@ pub struct ResetLoraRequest {
     pub reset_global: bool,
 }
 
+/// Explicit relevance feedback for homeoadaptive adapter updates.
+///
+/// Submitted by an application after a retrieval+response cycle.  Each rating
+/// nudges the `(user_id, agent_id)` adapter toward or away from the query
+/// embedding, providing a stronger training signal than implicit access alone.
+///
+/// **Rating semantics:**
+/// - `1.0`  = highly relevant — adapter moves toward this item
+/// - `-1.0` = irrelevant     — adapter moves away from this item
+/// - `0.0`  = neutral        — no update applied for this item
+///
+/// Only items with `|rating| > 0.0` produce a weight update; neutral ratings
+/// are silently skipped to avoid noisy gradient accumulation.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LoraFeedbackRequest {
+    /// User identifier (email or UUID string).
+    pub user: String,
+    /// The query text that was used for retrieval.
+    pub query_text: String,
+    /// Per-item relevance ratings.  Keys are edge/entity/episode IDs (UUID strings).
+    /// Must contain at least one non-zero rating.
+    pub ratings: std::collections::HashMap<String, f32>,
+}
+
+/// Response from the explicit feedback endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LoraFeedbackResponse {
+    /// Number of items for which a weight update was applied.
+    pub items_updated: usize,
+    /// Total implicit-feedback updates applied to this adapter so far
+    /// (including this batch).
+    pub total_update_count: u64,
+    /// Frobenius norm of B after this update batch.
+    pub b_frobenius_norm: f32,
+}
+
 /// Response from the LoRA stats endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoraStatsResponse {

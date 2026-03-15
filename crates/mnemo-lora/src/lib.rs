@@ -95,6 +95,32 @@ impl LoraAdapter {
     /// B     = clamp(B, max_norm)
     /// ```
     pub fn update_from_access(&mut self, v_query: &[f32], v_item: &[f32]) {
+        self.update_with_rating(v_query, v_item, 1.0);
+    }
+
+    /// Apply an explicit-feedback update with a signed relevance rating.
+    ///
+    /// `rating` in `[-1.0, 1.0]`:
+    /// - Positive: adapter is nudged **toward** the item (item was relevant).
+    /// - Negative: adapter is nudged **away** from the item (item was irrelevant).
+    ///
+    /// The effective learning rate is `|rating| * LORA_LR`. A rating of `0.0`
+    /// is a no-op.
+    ///
+    /// **Update rule:**
+    /// ```text
+    /// h               = A · v_item
+    /// v_item_adapted  = v_item + scale * B · h
+    /// delta           = sign(rating) * (v_query - v_item_adapted)
+    /// ΔB             += |rating| * lr * outer(delta, h)
+    /// B               = clamp(B, max_norm)
+    /// ```
+    pub fn update_with_rating(&mut self, v_query: &[f32], v_item: &[f32], rating: f32) {
+        // Skip neutral ratings — no gradient to apply
+        if rating == 0.0 {
+            return;
+        }
+
         let w = &mut self.weights;
         let d = w.dims;
         let r = w.rank;
@@ -106,15 +132,19 @@ impl LoraAdapter {
         let u_item = math::mat_vec_d_times_r(&w.b_flat, &h, d, r);
         let v_item_adapted = math::add_scaled(v_item, &u_item, w.scale);
 
-        // delta = v_query - v_item_adapted  (direction we want to shrink)
+        // delta = sign(rating) * (v_query - v_item_adapted)
+        // Positive rating → move adapter toward query (shrink gap)
+        // Negative rating → move adapter away from query (widen gap)
+        let sign = rating.signum();
         let delta: Vec<f32> = v_query
             .iter()
             .zip(v_item_adapted.iter())
-            .map(|(q, a)| q - a)
+            .map(|(q, a)| sign * (q - a))
             .collect();
 
-        // ΔB += lr * outer(delta, h)  — shape d×r
-        math::outer_add(&mut w.b_flat, &delta, &h, LORA_LR, d, r);
+        // ΔB += |rating| * lr * outer(delta, h)  — shape d×r
+        let effective_lr = rating.abs() * LORA_LR;
+        math::outer_add(&mut w.b_flat, &delta, &h, effective_lr, d, r);
 
         // Clamp to prevent unbounded growth
         math::clamp_frobenius(&mut w.b_flat, B_MAX_NORM);
@@ -270,6 +300,43 @@ where
         }
     }
 
+    /// Apply an explicit-feedback update with a signed relevance rating.
+    ///
+    /// `rating` in `[-1.0, 1.0]`: positive = relevant, negative = irrelevant.
+    /// A rating of `0.0` is a no-op.  Persists to Redis after the update.
+    pub async fn update_with_rating(
+        &self,
+        v_query: &[f32],
+        v_item: &[f32],
+        rating: f32,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) {
+        if !self.enabled || rating == 0.0 {
+            return;
+        }
+
+        let key = Self::cache_key(user_id, agent_id);
+
+        let updated = {
+            let mut cache = self.cache.write().await;
+            let adapter = cache
+                .entry(key.clone())
+                .or_insert_with(|| LoraAdapter::new(user_id, agent_id.map(|s| s.to_string()), self.dims));
+
+            adapter.update_with_rating(v_query, v_item, rating);
+            adapter.clone()
+        };
+
+        if let Err(e) = self.store.save_lora_weights(&updated.weights).await {
+            tracing::warn!(
+                key = %updated.weights.key_string(),
+                error = %e,
+                "Failed to persist LoRA weights to Redis after explicit feedback"
+            );
+        }
+    }
+
     /// Evict a specific adapter from the in-memory cache.
     /// Called after a reset (DELETE) so the next request loads fresh state.
     pub async fn evict_cache(&self, user_id: Uuid, agent_id: Option<&str>) {
@@ -345,6 +412,20 @@ where
     ) {
         self.update_from_access(v_query, v_item, user_id, agent_id).await;
     }
+
+    /// Apply an explicit-feedback LoRA weight update with a signed rating.
+    ///
+    /// Delegates to [`LoraAdaptedEmbedder::update_with_rating`].
+    async fn update_lora_with_rating(
+        &self,
+        v_query: &[f32],
+        v_item: &[f32],
+        rating: f32,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) {
+        self.update_with_rating(v_query, v_item, rating, user_id, agent_id).await;
+    }
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────
@@ -408,6 +489,12 @@ mod tests {
         async fn list_lora_weights_for_user(
             &self,
             _user_id: Uuid,
+        ) -> StorageResult<Vec<LoraWeights>> {
+            Ok(Vec::new())
+        }
+        async fn list_lora_weights_for_agent(
+            &self,
+            _agent_id: &str,
         ) -> StorageResult<Vec<LoraWeights>> {
             Ok(Vec::new())
         }
@@ -576,5 +663,73 @@ mod tests {
         // v_before is identity (B=0), v_after has B non-zero → must differ
         let changed = v_before.iter().zip(v_after.iter()).any(|(a, b)| (a - b).abs() > 1e-7);
         assert!(changed, "adapter output should change after updates");
+    }
+
+    #[tokio::test]
+    async fn test_update_with_zero_rating_is_noop() {
+        let e = make_embedder(true);
+        let uid = Uuid::from_u128(6);
+        let query = vec![1.0f32; 16];
+        let item = vec![0.5f32; 16];
+
+        // Priming read so adapter is in cache
+        let _ = e.embed_for_agent("x", uid, Some("bot")).await.unwrap();
+
+        // Apply 10 zero-rating updates — should not change anything
+        for _ in 0..10 {
+            e.update_with_rating(&query, &item, 0.0, uid, Some("bot")).await;
+        }
+
+        let cache = e.cache.read().await;
+        let key = LoraAdaptedEmbedder::<ConstEmbedder, NoopLoraStore>::cache_key(uid, Some("bot"));
+        // Either the adapter was never inserted (all no-ops) or update_count == 0
+        if let Some(adapter) = cache.get(&key) {
+            assert_eq!(adapter.weights.update_count, 0, "zero-rating updates must not increment update_count");
+            let b_norm: f32 = adapter.weights.b_flat.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!(b_norm < 1e-8, "B must remain zero after zero-rating updates");
+        }
+    }
+
+    #[test]
+    fn test_negative_rating_inverts_update() {
+        // Verify that a single positive update and a single negative update of
+        // the same magnitude produce exactly opposite ΔB (before clamping).
+        // We test at the LoraAdapter level directly, comparing the B matrices
+        // after one step from the same zero-initialized state.
+        use mnemo_core::models::lora::LoraWeights;
+        let uid = Uuid::from_u128(7);
+        let dims = 16;
+        let query = vec![1.0f32; dims];
+        let item = vec![0.5f32; dims];
+
+        let weights_base = LoraWeights::initialize(uid, Some("bot".into()), dims);
+
+        let mut adapter_pos = LoraAdapter::from_weights(weights_base.clone());
+        let mut adapter_neg = LoraAdapter::from_weights(weights_base);
+
+        adapter_pos.update_with_rating(&query, &item, 1.0);
+        adapter_neg.update_with_rating(&query, &item, -1.0);
+
+        // After one step with ±1.0 and the same starting B=0, ΔB_pos = -ΔB_neg.
+        // i.e. b_pos + b_neg ≈ 0 element-wise.
+        let b_pos = &adapter_pos.weights.b_flat;
+        let b_neg = &adapter_neg.weights.b_flat;
+
+        // They must differ
+        let differ = b_pos.iter().zip(b_neg.iter()).any(|(p, n)| (p - n).abs() > 1e-8);
+        assert!(differ, "positive and negative single-step updates must produce different B");
+
+        // B_pos + B_neg should be zero (exact cancellation, no clamping after 1 step)
+        for (i, (p, n)) in b_pos.iter().zip(b_neg.iter()).enumerate() {
+            assert!(
+                (p + n).abs() < 1e-6,
+                "B[{i}] did not cancel: pos={p}, neg={n}, sum={}",
+                p + n
+            );
+        }
+
+        // update_count must be 1 for both
+        assert_eq!(adapter_pos.weights.update_count, 1);
+        assert_eq!(adapter_neg.weights.update_count, 1);
     }
 }

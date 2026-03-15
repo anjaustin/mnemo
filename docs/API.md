@@ -3958,11 +3958,19 @@ DELETE /api/v1/regions/:region_id/acl/:agent_id
 
 ---
 
-## TinyLoRA — Per-Agent Embedding Personalization
+## TinyLoRA — Homeoadaptive Embedding Personalization
 
 TinyLoRA adds per-`(user, agent)` learned linear transformations on top of the shared
 embedding space. Each adapter is a rank-8 LoRA residual that rotates base embeddings
 toward the agent's observed relevance history. Enable with `MNEMO_LORA_ENABLED=true`.
+
+**Homeoadaptive** *(adj.)* — of an embedding system: self-regulating toward a stable
+operating point for each `(user, agent)` pair through continuous implicit and explicit
+feedback, such that successive retrievals converge on each agent's equilibrium
+representation of relevance without external configuration. The B matrix begins at zero
+and is nudged toward a bounded fixed point by each access or rating; the Frobenius clamp
+(`||B||_F ≤ 10`) prevents runaway drift while the small learning rate (`lr=0.005`) allows
+gradual evolution as user interests shift.
 
 **Adaptation formula:**
 ```
@@ -4037,3 +4045,58 @@ given scope. After a reset, the next retrieval request will use a fresh identity
 | `scope` | string | `agent` (default) — agent-specific adapter only. `global` — user-level adapter. `all` — both. |
 
 **Response**: `204 No Content`
+
+---
+
+### Submit Explicit Relevance Feedback
+
+```
+POST /api/v1/agents/:agent_id/feedback
+```
+
+**Auth**: `write`
+
+Submit explicit relevance ratings for retrieved items, triggering a **homeoadaptive**
+adapter update. Each rating nudges the `(user, agent)` LoRA adapter toward highly-rated
+items and away from irrelevant ones — providing stronger signal than implicit access alone.
+
+The server resolves each item UUID to its stored edge fact text, re-embeds it, then
+applies a signed gradient update. Items that cannot be resolved (unknown ID, wrong user)
+are silently skipped.
+
+When `MNEMO_LORA_ENABLED=false`, this endpoint accepts the request and returns
+`items_updated: 0` without error — callers need not gate on the feature flag.
+
+**Request body**:
+```json
+{
+  "user": "alice@example.com",
+  "query_text": "What are our Q3 revenue projections?",
+  "ratings": {
+    "edge-uuid-1": 1.0,
+    "edge-uuid-2": -0.5,
+    "edge-uuid-3": 0.0
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user` | string | **Required.** User identifier (email or UUID). |
+| `query_text` | string | **Required.** The query text used for retrieval. |
+| `ratings` | object | **Required.** Edge/entity/episode UUIDs → rating in `[-1.0, 1.0]`. `1.0` = highly relevant, `-1.0` = irrelevant, `0.0` = neutral (skipped). At least one non-zero rating required. |
+
+**Response** `200 OK`:
+```json
+{
+  "items_updated": 2,
+  "total_update_count": 47,
+  "b_frobenius_norm": 3.12
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `items_updated` | Number of items for which a weight update was applied. |
+| `total_update_count` | Cumulative update steps on this adapter (implicit + explicit). |
+| `b_frobenius_norm` | Frobenius norm of B after this batch. Approaches 10.0 as the adapter saturates. |

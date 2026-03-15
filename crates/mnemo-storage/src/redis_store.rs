@@ -2978,7 +2978,12 @@ impl RegionStore for RedisStateStore {
 //
 // Key schema:
 //   {prefix}lora:{user_id}:{agent_id_or___global__}   → JSON LoraWeights
-//   {prefix}lora_idx:{user_id}                         → Set of agent_id keys
+//   {prefix}lora_idx:{user_id}                         → Set of agent_id slot strings
+//   {prefix}lora_agent_idx:{agent_id}                  → Set of user_id strings
+//
+// The agent index enables list_lora_weights_for_agent (homeoadaptive stats).
+// Only non-global adapters (those with a concrete agent_id) are tracked in
+// lora_agent_idx; the __global__ slot is user-level and not agent-scoped.
 //
 // No TTL — adapters persist until explicitly deleted or user is wiped.
 
@@ -3003,11 +3008,21 @@ impl LoraStore for RedisStateStore {
 
         self.set_json(&key, weights).await?;
 
-        // Track the slot in the user's index set so list_lora_weights_for_user works
         let mut conn = self.conn.clone();
+
+        // Track the slot in the user's index set so list_lora_weights_for_user works
         conn.sadd::<_, _, ()>(&idx_key, slot)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Also maintain the per-agent reverse index for list_lora_weights_for_agent.
+        // Only concrete agent adapters are indexed here; __global__ is user-level.
+        if let Some(agent_id) = &weights.agent_id {
+            let agent_idx_key = self.key(&["lora_agent_idx", agent_id]);
+            conn.sadd::<_, _, ()>(&agent_idx_key, weights.user_id.to_string())
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
         Ok(())
     }
 
@@ -3026,6 +3041,14 @@ impl LoraStore for RedisStateStore {
         conn.srem::<_, _, ()>(&idx_key, slot)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // Remove from agent reverse index when this is a concrete agent adapter
+        if let Some(aid) = agent_id {
+            let agent_idx_key = self.key(&["lora_agent_idx", aid]);
+            conn.srem::<_, _, ()>(&agent_idx_key, user_id.to_string())
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
         Ok(())
     }
 
@@ -3073,6 +3096,38 @@ impl LoraStore for RedisStateStore {
             let key = self.key(&["lora", &user_id.to_string(), slot]);
             if let Some(w) = self.get_json::<LoraWeights>(&key).await? {
                 results.push(w);
+            }
+        }
+        Ok(results)
+    }
+
+    async fn list_lora_weights_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> StorageResult<Vec<LoraWeights>> {
+        let agent_idx_key = self.key(&["lora_agent_idx", agent_id]);
+        let mut conn = self.conn.clone();
+
+        // Retrieve all user_ids that have an adapter for this agent
+        let user_id_strs: Vec<String> = conn
+            .smembers(&agent_idx_key)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut results = Vec::with_capacity(user_id_strs.len());
+        for uid_str in &user_id_strs {
+            // Skip malformed entries silently
+            if uid_str.parse::<Uuid>().is_err() {
+                continue;
+            }
+            let key = self.key(&["lora", uid_str, agent_id]);
+            if let Some(w) = self.get_json::<LoraWeights>(&key).await? {
+                results.push(w);
+            } else {
+                // Stale index entry (adapter was deleted but index not cleaned up) — prune it
+                conn.srem::<_, _, ()>(&agent_idx_key, uid_str)
+                    .await
+                    .map_err(|e| MnemoError::Redis(e.to_string()))?;
             }
         }
         Ok(results)
