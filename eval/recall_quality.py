@@ -384,17 +384,47 @@ class EvalResult:
         return p_quantile(self.latencies_ms, 0.50)
 
 
-def ingest_fact(base: str, user: str, text: str) -> str:
-    body = _post(base, "/api/v1/memory", {"user": user, "text": text})
-    return body.get("episode_id", "")
+def _create_user_session(base: str, external_id: str) -> tuple[str, str]:
+    """Create an isolated user + session via the canonical API path."""
+    body = _post(
+        base,
+        "/api/v1/users",
+        {"name": external_id, "external_id": external_id, "metadata": {}},
+    )
+    user_id = body["id"]
+    sess = _post(base, "/api/v1/sessions", {"user_id": user_id, "name": "default"})
+    return user_id, sess["id"]
 
 
-def query_context(base: str, user: str, query: str) -> tuple[str, float]:
+def _delete_user(base: str, user_id: str) -> None:
+    try:
+        req = urllib.request.Request(f"{base}/api/v1/users/{user_id}", method="DELETE")
+        with urllib.request.urlopen(req, timeout=10.0):
+            pass
+    except Exception:
+        pass
+
+
+def ingest_episode(
+    base: str, session_id: str, text: str, created_at: str | None = None
+) -> bool:
+    """Store one episode via /api/v1/sessions/{id}/episodes."""
+    payload: dict[str, Any] = {"type": "message", "role": "user", "content": text}
+    if created_at:
+        payload["created_at"] = created_at
+    try:
+        _post(base, f"/api/v1/sessions/{session_id}/episodes", payload)
+        return True
+    except Exception:
+        return False
+
+
+def query_context(base: str, user_id: str, query: str) -> tuple[str, float]:
     t0 = time.perf_counter()
     try:
         body = _post(
             base,
-            f"/api/v1/memory/{user}/context",
+            f"/api/v1/memory/{user_id}/context",
             {"query": query, "max_tokens": 2000, "min_relevance": 0.0},
         )
     except urllib.error.HTTPError as exc:
@@ -410,18 +440,40 @@ def query_context(base: str, user: str, query: str) -> tuple[str, float]:
 
 def run_factual_recall(base: str, ingest_wait_s: float = 5.0) -> EvalResult:
     result = EvalResult()
+
+    # Group facts by user so we create one session per user.
+    users: dict[str, tuple[str, str]] = {}  # name → (user_id, session_id)
+    users_to_clean: list[str] = []
+
+    print(f"  Creating {len(set(f.user for f in GOLD_FACTS))} test users...")
+    for fact in GOLD_FACTS:
+        if fact.user not in users:
+            ext_id = f"recall-{fact.user}-{uuid.uuid4().hex[:6]}"
+            try:
+                uid, sid = _create_user_session(base, ext_id)
+                users[fact.user] = (uid, sid)
+                users_to_clean.append(uid)
+            except Exception as exc:
+                print(f"    [WARN] user create failed for {fact.user}: {exc}")
+
     print(f"  Ingesting {len(GOLD_FACTS)} gold facts...")
     for fact in GOLD_FACTS:
-        ingest_fact(base, fact.user, fact.episode)
+        if fact.user not in users:
+            continue
+        _, session_id = users[fact.user]
+        ingest_episode(base, session_id, fact.episode)
+
     print(f"  Waiting {ingest_wait_s:.0f}s for ingest pipeline...")
     time.sleep(ingest_wait_s)
-    try:
-        query_context(base, GOLD_FACTS[0].user, GOLD_FACTS[0].query)
-    except Exception:
-        pass
+
     print(f"  Querying {len(GOLD_FACTS)} facts...")
     for fact in GOLD_FACTS:
-        context, latency_ms = query_context(base, fact.user, fact.query)
+        if fact.user not in users:
+            result.total += 1
+            result.misses.append(f"[{fact.user}] user create failed — skipped")
+            continue
+        user_id, _ = users[fact.user]
+        context, latency_ms = query_context(base, user_id, fact.query)
         result.total += 1
         result.latencies_ms.append(latency_ms)
         if fact.expected.lower() in context.lower():
@@ -430,38 +482,69 @@ def run_factual_recall(base: str, ingest_wait_s: float = 5.0) -> EvalResult:
             result.misses.append(
                 f"[{fact.user}] Q: {fact.query!r} -> expected {repr(fact.expected)}"
             )
+
+    # Cleanup
+    for uid in users_to_clean:
+        _delete_user(base, uid)
+
     return result
 
 
 def run_temporal_correctness(base: str, ingest_wait_s: float = 5.0) -> EvalResult:
     result = EvalResult()
+    users_to_clean: list[str] = []
+
     print(f"  Ingesting {len(TEMPORAL_FACTS)} temporal fact pairs...")
+    user_map: dict[str, tuple[str, str]] = {}
     for tf in TEMPORAL_FACTS:
-        ingest_fact(base, tf.user, tf.current_episode)
+        ext_id = f"recall-{tf.user}-{uuid.uuid4().hex[:6]}"
+        try:
+            uid, sid = _create_user_session(base, ext_id)
+            user_map[tf.user] = (uid, sid)
+            users_to_clean.append(uid)
+            ingest_episode(base, sid, tf.current_episode)
+        except Exception as exc:
+            print(f"    [WARN] temporal user create failed for {tf.user}: {exc}")
+
     time.sleep(min(ingest_wait_s, 10.0))
+
     print(f"  Querying {len(TEMPORAL_FACTS)} historical queries...")
     for tf in TEMPORAL_FACTS:
-        context, latency_ms = query_context(base, tf.user, tf.historical_query)
+        if tf.user not in user_map:
+            result.total += 1
+            result.misses.append(f"[{tf.user}] user create failed — skipped")
+            continue
+        user_id, _ = user_map[tf.user]
+        context, latency_ms = query_context(base, user_id, tf.historical_query)
         result.total += 1
         result.latencies_ms.append(latency_ms)
-        if context:
+        # BUG 9 FIX: check for the expected historical keyword, not just non-empty context.
+        if tf.expected_in_history.lower() in context.lower():
             result.hits += 1
         else:
             result.misses.append(
-                f"[{tf.user}] temporal query returned empty: {tf.historical_query!r}"
+                f"[{tf.user}] expected {repr(tf.expected_in_history)!r} in context; "
+                f"got: {context[:80]!r}"
             )
+
+    # Cleanup
+    for uid in users_to_clean:
+        _delete_user(base, uid)
+
     return result
 
 
 def probe_embeddings(base: str) -> bool:
-    probe_user = f"__embed_probe_{uuid.uuid4().hex[:8]}"
+    ext_id = f"embed-probe-{uuid.uuid4().hex[:8]}"
+    user_id = ""
     try:
-        ingest_fact(base, probe_user, "The probe entity is called Zephyr.")
+        user_id, session_id = _create_user_session(base, ext_id)
+        ingest_episode(base, session_id, "The probe entity is called Zephyr.")
         for _ in range(12):
             time.sleep(5.0)
             body = _post(
                 base,
-                f"/api/v1/memory/{probe_user}/context",
+                f"/api/v1/memory/{user_id}/context",
                 {"query": "What is Zephyr?", "max_tokens": 500, "min_relevance": 0.0},
             )
             if body.get("entities") or body.get("facts"):
@@ -469,6 +552,9 @@ def probe_embeddings(base: str) -> bool:
         return False
     except Exception:
         return False
+    finally:
+        if user_id:
+            _delete_user(base, user_id)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────

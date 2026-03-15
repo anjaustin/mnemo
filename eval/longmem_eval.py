@@ -33,13 +33,10 @@ from pathlib import Path
 from typing import Any
 
 # ─── Shared eval library ─────────────────────────────────────────────────────
-import os
-from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent))
 from lib import HttpClient, MemoryBackend, MnemoBackend, ResultWriter  # noqa: E402
 
-# Backwards-compatibility alias
+# Backwards-compatibility alias (used by external scripts that import from this module)
 Backend = MemoryBackend
 
 
@@ -52,19 +49,19 @@ class TaskResult:
     total: int
     passed: int
     errors: int
-    latencies_ms: list[int] = field(default_factory=list)
+    latencies_ms: list[float] = field(default_factory=list)
 
     @property
     def accuracy(self) -> float:
         return self.passed / self.total if self.total else 0.0
 
     @property
-    def p95_ms(self) -> int:
+    def p95_ms(self) -> float:
         if not self.latencies_ms:
-            return 0
+            return 0.0
         ordered = sorted(self.latencies_ms)
         idx = min(len(ordered) - 1, int(0.95 * (len(ordered) - 1)))
-        return int(ordered[idx])
+        return ordered[idx]
 
 
 # ─── Inline test cases (no external JSON required) ───────────────────────────
@@ -414,7 +411,7 @@ def _check_not_contains(text: str, tokens: list[str]) -> bool:
 
 
 def run_longmem_eval(
-    backend: MnemoBackend,
+    backend: MemoryBackend,
     cases: list[dict[str, Any]],
     verbose: bool = False,
 ) -> dict[str, TaskResult]:
@@ -434,13 +431,13 @@ def run_longmem_eval(
         session_id = ""
 
         try:
-            user_id, session_id = backend.create_user_session(external_id)
+            user_id, session_id = backend.setup_user(external_id)
 
             # Ingest memories
             all_ok = True
             for mem in case.get("memories", []):
-                ok = backend.remember(
-                    user_id, session_id, mem["content"], mem["created_at"]
+                ok = backend.ingest(
+                    user_id, session_id, mem["content"], mem.get("created_at")
                 )
                 if not ok:
                     all_ok = False
@@ -458,9 +455,7 @@ def run_longmem_eval(
 
             # Retrieve
             query = case["query"]
-            status, ctx_text, latency_ms = backend.retrieve(
-                user_id, session_id, query, tt
-            )
+            status, ctx_text, latency_ms = backend.query(user_id, session_id, query, tt)
             result.latencies_ms.append(latency_ms)
 
             if status != 200:
@@ -534,7 +529,7 @@ def check_gates(results: dict[str, TaskResult], verbose: bool = False) -> bool:
         status = "PASS" if ok else "FAIL"
         print(
             f"{tt:<18} {acc * 100:>9.1f}% {threshold * 100:>9.1f}% "
-            f"{r.p95_ms:>11}ms  {status}  ({r.passed}/{r.total}, errors={r.errors})"
+            f"{r.p95_ms:>10.0f}ms  {status}  ({r.passed}/{r.total}, errors={r.errors})"
         )
     print("-" * 60)
     print("ALL GATES PASS" if all_pass else "SOME GATES FAILED")

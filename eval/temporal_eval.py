@@ -76,9 +76,23 @@ class EvalResult:
 
 
 def extract_top_context_line(context_text: str) -> str:
+    """Return the first bullet line from the context text.
+
+    Mnemo formats context as '- [fact]' bullet lines.  If no bullet line is
+    found (e.g. plain prose or a different format), return the full text so
+    contains/not_contains checks still work — but log a brief prefix so callers
+    can see the fallback in verbose output.
+    """
     for line in context_text.splitlines():
-        if line.startswith("- ["):
-            return line
+        stripped = line.strip()
+        if stripped.startswith("- [") or stripped.startswith("- "):
+            return stripped
+    # Fallback: return the first non-empty line (not the whole blob).
+    # This prevents a stale token anywhere in a long context from
+    # inflating the stale-rate when the top result is actually correct.
+    for line in context_text.splitlines():
+        if line.strip():
+            return line.strip()
     return context_text
 
 

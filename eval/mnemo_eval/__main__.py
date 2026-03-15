@@ -41,74 +41,107 @@ if str(_EVAL_DIR) not in sys.path:
 
 # ── Available packs and their harness scripts ──────────────────────────────────
 
-#: Maps pack name → (harness_script, extra_args)
-#: harness_script is relative to eval/
+#: Maps pack name → harness config.
+#:
+#: "script"      : filename relative to eval/
+#: "description" : shown by --list-packs
+#: "args"        : additional fixed args always appended
+#: "url_flag"    : the flag that accepts the backend base URL
+#:                 (harnesses differ: --mnemo-base-url vs --server)
+#: "target_flag" : True if the harness accepts --target (default False)
+#: "verbose_flag": True if the harness accepts --verbose (default True)
 _PACKS: dict[str, dict[str, Any]] = {
     "temporal": {
         "script": "temporal_eval.py",
         "description": "27 temporal retrieval cases (recency, point-in-time, stale fact detection)",
         "args": [],
+        "url_flag": "--mnemo-base-url",
+        "target_flag": True,
+        "verbose_flag": True,
     },
     "scientific": {
         "script": "temporal_eval.py",
         "description": "10 scientific research cases (v2)",
         "args": ["--cases", str(_EVAL_DIR / "scientific_research_cases_v2.json")],
+        "url_flag": "--mnemo-base-url",
+        "target_flag": True,
+        "verbose_flag": True,
     },
     "longmem": {
         "script": "longmem_eval.py",
         "description": "LongMemEval: single-hop, multi-hop, temporal, preference, absent (5 task types)",
         "args": [],
+        "url_flag": "--mnemo-base-url",
+        "target_flag": False,  # longmem_eval.py has no --target flag
+        "verbose_flag": True,
     },
     "recall": {
         "script": "recall_quality.py",
         "description": "40 gold facts: factual recall accuracy, temporal correctness, p95 latency",
         "args": [],
+        "url_flag": "--server",  # recall_quality.py uses --server not --mnemo-base-url
+        "target_flag": False,
+        "verbose_flag": False,  # recall_quality.py has no --verbose flag
     },
     "latency": {
         "script": "latency_bench.py",
         "description": "E2E latency benchmarks at small/medium/large scale (10/100/1000 episodes)",
         "args": [],
+        "url_flag": "--mnemo-base-url",
+        "target_flag": False,
+        "verbose_flag": True,
     },
 }
 
 _ALL_PACKS = list(_PACKS.keys())
 
 
-def _build_backend_args(args: argparse.Namespace) -> list[str]:
-    """Translate CLI args into per-harness --target / --*-base-url / --*-api-key flags."""
+def _build_pack_args(pack_name: str, args: argparse.Namespace) -> list[str]:
+    """Build the harness-specific CLI args for *one* pack.
+
+    Each harness has its own flag conventions; use the per-pack metadata to
+    map the CLI's --backend / --base-url to the correct flags.
+    """
+    pack = _PACKS[pack_name]
     result: list[str] = []
 
+    url_flag = pack.get("url_flag", "--mnemo-base-url")
+    has_target = pack.get("target_flag", False)
+
     if args.backend == "mnemo":
-        result += ["--target", "mnemo"]
-        if args.base_url:
-            result += ["--mnemo-base-url", args.base_url]
+        if has_target:
+            result += ["--target", "mnemo"]
+        result += [url_flag, args.base_url]
 
     elif args.backend == "zep":
-        result += ["--target", "zep"]
-        if args.base_url:
-            result += ["--zep-base-url", args.base_url]
-        if args.zep_api_key:
-            result += ["--zep-api-key", args.zep_api_key]
+        if has_target:
+            result += ["--target", "zep"]
+            result += ["--zep-base-url", args.zep_base_url]
+            if args.zep_api_key:
+                result += ["--zep-api-key", args.zep_api_key]
+        else:
+            # Harness doesn't support Zep — skip it
+            print(
+                f"WARNING: pack '{pack_name}' does not support --backend zep; skipping.",
+                file=sys.stderr,
+            )
 
     elif args.backend == "both":
-        result += ["--target", "both"]
-        if args.base_url:
+        if has_target:
+            result += ["--target", "both"]
             result += ["--mnemo-base-url", args.base_url]
-        if args.zep_base_url:
             result += ["--zep-base-url", args.zep_base_url]
-        if args.zep_api_key:
-            result += ["--zep-api-key", args.zep_api_key]
+            if args.zep_api_key:
+                result += ["--zep-api-key", args.zep_api_key]
+        else:
+            # Fall back to Mnemo-only for harnesses that don't support --target
+            result += [url_flag, args.base_url]
 
     elif args.backend == "custom":
-        # Custom backends are not yet wired through the harness --target flag.
-        # They run by importing the backend module and passing it directly.
-        # For now, fall through to the script runner which will error if --target
-        # is required — users should run harness scripts directly with custom backends.
         print(
-            "WARNING: custom backends are not yet supported via the CLI entry point.\n"
-            "Run harnesses directly and pass your backend class:\n"
-            "  python eval/temporal_eval.py --target mnemo --mnemo-base-url http://...\n"
-            "  (After implementing CustomBackend and wiring it to a --target flag)\n",
+            f"WARNING: custom backends are not yet supported via the CLI entry point.\n"
+            f"Run harnesses directly:\n"
+            f"  python eval/{pack['script']} {url_flag} http://your-system\n",
             file=sys.stderr,
         )
 
@@ -136,7 +169,7 @@ def _run_pack(
         output_dir.mkdir(parents=True, exist_ok=True)
         cmd += ["--output", str(output_dir / f"{pack_name}_result.json")]
 
-    if verbose:
+    if verbose and pack.get("verbose_flag", True):
         cmd += ["--verbose"]
 
     print(f"\n{'=' * 60}")
@@ -240,7 +273,6 @@ def main() -> None:
     if args.zep_api_key is None:
         args.zep_api_key = os.environ.get("ZEP_API_KEY")
 
-    backend_args = _build_backend_args(args)
     output_dir = Path(args.output_dir) if args.output_dir else None
 
     print(f"mnemo-eval v{_version()}")
@@ -250,9 +282,10 @@ def main() -> None:
 
     exit_codes: list[int] = []
     for pack_name in selected_packs:
+        pack_backend_args = _build_pack_args(pack_name, args)
         code = _run_pack(
             pack_name=pack_name,
-            backend_args=backend_args,
+            backend_args=pack_backend_args,
             extra_args=[],
             output_dir=output_dir,
             verbose=args.verbose,
