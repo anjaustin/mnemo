@@ -23,6 +23,10 @@ on:
         required: false
         default: "https://api.getzep.com/api/v2"
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   mnemo-eval:
     runs-on: ubuntu-latest
@@ -92,11 +96,15 @@ jobs:
           MNEMO_EMBEDDING_MODEL: "AllMiniLML6V2"
           MNEMO_EMBEDDING_DIMENSIONS: "384"
         run: |
+          mkdir -p eval/results
           target/debug/mnemo-server >/tmp/mnemo_eval.log 2>&1 &
           SERVER_PID=$!
           sleep 3
-          python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080 | tee /tmp/mnemo_eval_table.txt
-          python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json --mnemo-base-url http://localhost:8080 --verbose | tee /tmp/mnemo_eval_scientific_v2_table.txt
+          python3 eval/temporal_eval.py --target mnemo --mnemo-base-url http://localhost:8080 \
+            --output eval/results/temporal_mnemo.json | tee /tmp/mnemo_eval_table.txt
+          python3 eval/temporal_eval.py --target mnemo --cases eval/scientific_research_cases_v2.json \
+            --mnemo-base-url http://localhost:8080 --verbose \
+            --output eval/results/scientific_mnemo.json | tee /tmp/mnemo_eval_scientific_v2_table.txt
           STATUS=$?
           kill $SERVER_PID || true
           wait $SERVER_PID 2>/dev/null || true
@@ -114,10 +122,12 @@ jobs:
           MNEMO_EMBEDDING_MODEL: "AllMiniLML6V2"
           MNEMO_EMBEDDING_DIMENSIONS: "384"
         run: |
+          mkdir -p eval/results
           target/debug/mnemo-server >/tmp/mnemo_longmem.log 2>&1 &
           SERVER_PID=$!
           sleep 3
-          python3 eval/longmem_eval.py --mnemo-base-url http://localhost:8080 --gate-only | tee /tmp/longmem_eval_table.txt
+          python3 eval/longmem_eval.py --mnemo-base-url http://localhost:8080 --gate-only \
+            --output eval/results/longmem_mnemo.json | tee /tmp/longmem_eval_table.txt
           STATUS=$?
           kill $SERVER_PID || true
           wait $SERVER_PID 2>/dev/null || true
@@ -152,6 +162,56 @@ jobs:
             exit $STATUS
           else
             python3 eval/temporal_eval.py --target zep --zep-base-url "${{ github.event.inputs.zep_base_url }}" --zep-api-key "$ZEP_API_KEY" | tee /tmp/zep_eval_table.txt
+          fi
+
+      # D1: Upload result files as CI artifacts (retained 90 days)
+      - name: Upload eval result artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ github.sha }}
+          path: eval/results/*.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+      # D2: Download baseline from the latest main-branch run and check for regressions.
+      # Skipped on the first run (no baseline artifact exists yet).
+      - name: Download baseline eval results
+        if: always() && github.ref != 'refs/heads/main'
+        id: download-baseline
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: benchmark-eval.yml
+          branch: main
+          name_is_regexp: true
+          name: eval-results-.*
+          path: /tmp/baseline-results
+          if_no_artifact_found: ignore
+
+      - name: Regression detection (compare.py)
+        if: always() && steps.download-baseline.outcome == 'success'
+        run: |
+          # Merge all baseline JSON files into a single dir for comparison
+          mkdir -p /tmp/baseline-flat
+          find /tmp/baseline-results -name '*.json' -exec cp {} /tmp/baseline-flat/ \;
+
+          REGRESSIONS=0
+          for current in eval/results/*.json; do
+            pack=$(basename "$current" .json | sed 's/_mnemo$//')
+            baseline=$(ls /tmp/baseline-flat/${pack}_mnemo.json 2>/dev/null || true)
+            if [ -z "$baseline" ]; then
+              echo "No baseline for $pack — skipping regression check"
+              continue
+            fi
+            echo "Comparing $pack: $baseline vs $current"
+            python3 eval/compare.py "$baseline" "$current" --fail-on-regression || REGRESSIONS=$((REGRESSIONS+1))
+          done
+
+          if [ "$REGRESSIONS" -gt 0 ]; then
+            echo "::error::$REGRESSIONS eval pack(s) regressed. See Step Summary for details."
+            exit 1
           fi
 
       - name: Publish benchmark summary

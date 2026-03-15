@@ -1,18 +1,51 @@
 #!/usr/bin/env python3
+"""Temporal retrieval evaluation harness.
+
+Tests that Mnemo (and optionally Zep) correctly:
+  - Returns the current fact for head-mode queries
+  - Returns the historical fact for as_of queries
+  - Does not surface stale (superseded) facts as primary results
+
+Run:
+    python eval/temporal_eval.py [--cases eval/temporal_cases.json] [--verbose]
+    python eval/temporal_eval.py --cases eval/cases/enterprise_crm.json
+
+Gates (enforced in CI via quality-gates.yml):
+    temporal_accuracy   >= 95%
+    stale_fact_rate     <= 5%
+    p95_latency_ms      <= 300ms
+
+Exit code: 0 if all gates pass, 1 if any fail.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import statistics
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Allow running as a script from repo root
+sys.path.insert(0, str(Path(__file__).parent))
+from lib import (  # noqa: E402
+    HttpClient,
+    MemoryBackend,
+    MnemoBackend,
+    ResultWriter,
+    ZepBackend,
+    p_quantile,
+)
+
+# Re-export for longmem_eval.py backwards compatibility
+Backend = MemoryBackend
+
+ACCURACY_GATE = 0.95
+STALE_GATE = 0.05
+P95_GATE_MS = 300.0
 
 
 @dataclass
@@ -23,7 +56,7 @@ class EvalResult:
     passed: int
     stale_failures: int
     errors: int
-    latencies_ms: list[int]
+    latencies_ms: list[float]
 
     @property
     def accuracy(self) -> float:
@@ -34,245 +67,32 @@ class EvalResult:
         return (self.stale_failures / self.total) if self.total else 0.0
 
     @property
-    def p50_ms(self) -> int:
-        if not self.latencies_ms:
-            return 0
-        return int(statistics.median(self.latencies_ms))
+    def p50_ms(self) -> float:
+        return p_quantile(self.latencies_ms, 0.50)
 
     @property
-    def p95_ms(self) -> int:
-        if not self.latencies_ms:
-            return 0
-        ordered = sorted(self.latencies_ms)
-        idx = min(len(ordered) - 1, int(0.95 * (len(ordered) - 1)))
-        return int(ordered[idx])
+    def p95_ms(self) -> float:
+        return p_quantile(self.latencies_ms, 0.95)
 
 
-class HttpClient:
-    def __init__(self, base_url: str, headers: dict[str, str] | None = None):
-        self.base_url = base_url.rstrip("/")
-        self.headers = headers or {}
-
-    def req(
-        self,
-        path: str,
-        method: str = "GET",
-        data: dict[str, Any] | None = None,
-        query: dict[str, Any] | None = None,
-    ) -> tuple[int, dict[str, Any]]:
-        body = None
-        headers = dict(self.headers)
-        if data is not None:
-            body = json.dumps(data).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-
-        url = f"{self.base_url}{path}"
-        if query:
-            url = f"{url}?{urllib.parse.urlencode(query)}"
-
-        request_obj = urllib.request.Request(
-            url, method=method, data=body, headers=headers
-        )
-
-        try:
-            with urllib.request.urlopen(request_obj, timeout=45) as resp:
-                payload = resp.read().decode("utf-8")
-                return resp.status, (json.loads(payload) if payload else {})
-        except urllib.error.HTTPError as exc:
-            payload = exc.read().decode("utf-8")
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError:
-                parsed = {"raw": payload}
-            return exc.code, parsed
-
-
-class Backend:
-    name: str
-
-    def remember(
-        self, user_id: str, session_id: str, content: str, created_at: str
-    ) -> bool:
-        raise NotImplementedError
-
-    def retrieve(
-        self, user_id: str, session_id: str, query: dict[str, Any], profile: str
-    ) -> tuple[int, str, int]:
-        raise NotImplementedError
-
-    def create_user_session(self, external_id: str) -> tuple[str, str]:
-        raise NotImplementedError
-
-    def cleanup(self, user_id: str, session_id: str) -> None:
-        raise NotImplementedError
-
-
-class MnemoBackend(Backend):
-    name = "mnemo"
-
-    def __init__(self, base_url: str):
-        self.http = HttpClient(base_url)
-
-    def create_user_session(self, external_id: str) -> tuple[str, str]:
-        status, user = self.http.req(
-            "/api/v1/users",
-            "POST",
-            {"name": external_id, "external_id": external_id, "metadata": {}},
-        )
-        if status != 201:
-            raise RuntimeError(f"mnemo user create failed: {status} {user}")
-        user_id = user["id"]
-
-        status, session = self.http.req(
-            "/api/v1/sessions",
-            "POST",
-            {"user_id": user_id, "name": "default"},
-        )
-        if status != 201:
-            raise RuntimeError(f"mnemo session create failed: {status} {session}")
-        return user_id, session["id"]
-
-    def remember(
-        self, user_id: str, session_id: str, content: str, created_at: str
-    ) -> bool:
-        status, _ = self.http.req(
-            f"/api/v1/sessions/{session_id}/episodes",
-            "POST",
-            {
-                "type": "message",
-                "role": "user",
-                "content": content,
-                "created_at": created_at,
-            },
-        )
-        return status == 201
-
-    def retrieve(
-        self, user_id: str, session_id: str, query: dict[str, Any], profile: str
-    ) -> tuple[int, str, int]:
-        payload: dict[str, Any] = {
-            "query": query["text"],
-            "session": "default",
-            "max_tokens": 600,
-        }
-
-        if profile == "temporal":
-            for key in ("mode", "time_intent", "as_of"):
-                if key in query:
-                    payload[key] = query[key]
-            payload["temporal_weight"] = 0.9
-
-        started = time.time()
-        status, response = self.http.req(
-            f"/api/v1/memory/{user_id}/context", "POST", payload
-        )
-        elapsed_ms = int((time.time() - started) * 1000)
-        if status != 200:
-            return status, "", elapsed_ms
-        return status, response.get("context", ""), elapsed_ms
-
-    def cleanup(self, user_id: str, session_id: str) -> None:
-        self.http.req(f"/api/v1/users/{user_id}", "DELETE")
-
-
-class ZepBackend(Backend):
-    name = "zep"
-
-    def __init__(self, base_url: str, api_key: str):
-        self.http = HttpClient(
-            base_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "x-api-key": api_key,
-            },
-        )
-
-    def create_user_session(self, external_id: str) -> tuple[str, str]:
-        status, user = self.http.req(
-            "/users",
-            "POST",
-            {
-                "user_id": external_id,
-                "first_name": external_id,
-                "last_name": "Eval",
-            },
-        )
-        if status not in (200, 201):
-            raise RuntimeError(f"zep user create failed: {status} {user}")
-
-        session_id = f"{external_id}-session"
-        status, session = self.http.req(
-            "/sessions",
-            "POST",
-            {
-                "session_id": session_id,
-                "user_id": external_id,
-            },
-        )
-        if status not in (200, 201):
-            raise RuntimeError(f"zep session create failed: {status} {session}")
-        return external_id, session_id
-
-    def remember(
-        self, user_id: str, session_id: str, content: str, created_at: str
-    ) -> bool:
-        status, _ = self.http.req(
-            f"/sessions/{session_id}/memory",
-            "POST",
-            {
-                "messages": [
-                    {
-                        "role": user_id,
-                        "role_type": "user",
-                        "content": content,
-                        "created_at": created_at,
-                    }
-                ],
-                "return_context": False,
-            },
-        )
-        return status in (200, 201)
-
-    def retrieve(
-        self, user_id: str, session_id: str, query: dict[str, Any], profile: str
-    ) -> tuple[int, str, int]:
-        # Zep Memory API derives relevance from latest session messages.
-        # We append the query text as a fresh user message, then fetch memory context.
-        self.http.req(
-            f"/sessions/{session_id}/memory",
-            "POST",
-            {
-                "messages": [
-                    {
-                        "role": user_id,
-                        "role_type": "user",
-                        "content": query["text"],
-                    }
-                ],
-                "return_context": False,
-            },
-        )
-
-        started = time.time()
-        status, response = self.http.req(f"/sessions/{session_id}/memory", "GET")
-        elapsed_ms = int((time.time() - started) * 1000)
-        if status != 200:
-            return status, "", elapsed_ms
-        return status, response.get("context", ""), elapsed_ms
-
-    def cleanup(self, user_id: str, session_id: str) -> None:
-        self.http.req(f"/sessions/{session_id}/memory", "DELETE")
-        self.http.req(f"/users/{user_id}", "DELETE")
+def extract_top_context_line(context_text: str) -> str:
+    for line in context_text.splitlines():
+        if line.startswith("- ["):
+            return line
+    return context_text
 
 
 def run_profile(
-    backend: Backend, cases: list[dict[str, Any]], profile: str, verbose: bool = False
+    backend: MemoryBackend,
+    cases: list[dict[str, Any]],
+    profile: str,
+    verbose: bool = False,
 ) -> EvalResult:
     total = len(cases)
     passed = 0
     stale_failures = 0
     errors = 0
-    latencies_ms: list[int] = []
+    latencies_ms: list[float] = []
 
     for case in cases:
         external_id = f"eval-{backend.name}-{profile}-{uuid.uuid4().hex[:8]}"
@@ -280,12 +100,12 @@ def run_profile(
         session_id = ""
 
         try:
-            user_id, session_id = backend.create_user_session(external_id)
+            user_id, session_id = backend.setup_user(external_id)
 
             memories_ok = True
             for memory in case.get("memories", []):
-                ok = backend.remember(
-                    user_id, session_id, memory["content"], memory["created_at"]
+                ok = backend.ingest(
+                    user_id, session_id, memory["content"], memory.get("created_at")
                 )
                 memories_ok = memories_ok and ok
 
@@ -293,19 +113,21 @@ def run_profile(
                 errors += 1
                 if verbose:
                     print(
-                        f"[case:{case.get('name', 'unknown')}] profile={profile} status=remember_failed"
+                        f"[case:{case.get('name', '?')}] profile={profile} status=remember_failed"
                     )
                 continue
 
-            status, context_text, latency_ms = backend.retrieve(
+            status, context_text, latency_ms = backend.query(
                 user_id, session_id, case["query"], profile
             )
             latencies_ms.append(latency_ms)
+
             if status != 200:
                 errors += 1
                 if verbose:
                     print(
-                        f"[case:{case.get('name', 'unknown')}] profile={profile} status=http_{status} latency_ms={latency_ms}"
+                        f"[case:{case.get('name', '?')}] profile={profile} "
+                        f"status=http_{status} latency_ms={latency_ms:.0f}"
                     )
                 continue
 
@@ -320,21 +142,28 @@ def run_profile(
                 passed += 1
                 if verbose:
                     print(
-                        f"[case:{case.get('name', 'unknown')}] profile={profile} status=pass latency_ms={latency_ms}"
+                        f"[case:{case.get('name', '?')}] profile={profile} "
+                        f"status=pass latency_ms={latency_ms:.0f}"
                     )
             elif verbose:
                 print(
-                    f"[case:{case.get('name', 'unknown')}] profile={profile} status=fail latency_ms={latency_ms} contains={contains} stale={stale} top={top_line!r}"
+                    f"[case:{case.get('name', '?')}] profile={profile} "
+                    f"status=fail latency_ms={latency_ms:.0f} "
+                    f"contains={contains} stale={stale} top={top_line!r}"
                 )
-        except Exception:
+
+        except Exception as exc:
             errors += 1
             if verbose:
                 print(
-                    f"[case:{case.get('name', 'unknown')}] profile={profile} status=exception"
+                    f"[case:{case.get('name', '?')}] profile={profile} EXCEPTION: {exc}"
                 )
         finally:
             if user_id and session_id:
-                backend.cleanup(user_id, session_id)
+                try:
+                    backend.cleanup(user_id, session_id)
+                except Exception:
+                    pass
 
     return EvalResult(
         system=backend.name,
@@ -347,22 +176,14 @@ def run_profile(
     )
 
 
-def extract_top_context_line(context_text: str) -> str:
-    for line in context_text.splitlines():
-        if line.startswith("- ["):
-            return line
-    return context_text
-
-
 def print_markdown(results: list[EvalResult]) -> None:
-    print(
-        "| System | Profile | Accuracy | Stale Fact Rate | Errors | p50 Latency (ms) | p95 Latency (ms) |"
-    )
+    print("| System | Profile | Accuracy | Stale Rate | Errors | p50 (ms) | p95 (ms) |")
     print("|---|---|---:|---:|---:|---:|---:|")
-    for result in results:
+    for r in results:
         print(
-            f"| {result.system} | {result.profile} | {result.accuracy * 100:.1f}% | "
-            f"{result.stale_rate * 100:.1f}% | {result.errors} | {result.p50_ms} | {result.p95_ms} |"
+            f"| {r.system} | {r.profile} | {r.accuracy * 100:.1f}% | "
+            f"{r.stale_rate * 100:.1f}% | {r.errors} | "
+            f"{r.p50_ms:.0f} | {r.p95_ms:.0f} |"
         )
 
 
@@ -376,7 +197,9 @@ def main() -> None:
         description="Run Mnemo/Zep temporal evaluation harness"
     )
     parser.add_argument(
-        "--cases", default=str(Path(__file__).with_name("temporal_cases.json"))
+        "--cases",
+        default=str(Path(__file__).with_name("temporal_cases.json")),
+        help="Path to JSON case pack",
     )
     parser.add_argument("--target", choices=["mnemo", "zep", "both"], default="mnemo")
     parser.add_argument("--mnemo-base-url", default="http://localhost:8080")
@@ -384,6 +207,11 @@ def main() -> None:
     parser.add_argument("--zep-api-key", default=None)
     parser.add_argument("--zep-api-key-file", default="zep_api.key")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to write D1 JSON result file (default: eval/results/auto-named)",
+    )
     args = parser.parse_args()
 
     with open(args.cases, "r", encoding="utf-8") as f:
@@ -398,14 +226,50 @@ def main() -> None:
 
     if args.target in ("zep", "both"):
         key = args.zep_api_key or os.environ.get("ZEP_API_KEY")
-        if not key:
+        if not key and os.path.exists(args.zep_api_key_file):
             key = load_key(args.zep_api_key_file)
+        if not key:
+            print("ERROR: ZEP_API_KEY not set", file=sys.stderr)
+            sys.exit(1)
         zep = ZepBackend(args.zep_base_url, key)
-        # Zep Memory API does not expose direct equivalents for Mnemo temporal controls.
-        # We run baseline-style retrieval for comparison.
         results.append(run_profile(zep, cases, "baseline", verbose=args.verbose))
 
     print_markdown(results)
+
+    # D1: Write structured result file
+    rw = ResultWriter("temporal_eval", results[0].system if results else "unknown")
+    all_pass = True
+    for r in results:
+        prefix = f"{r.system}_{r.profile}"
+        rw.metric(f"{prefix}_accuracy", r.accuracy)
+        rw.metric(f"{prefix}_stale_rate", r.stale_rate)
+        rw.metric(f"{prefix}_p50_ms", r.p50_ms)
+        rw.metric(f"{prefix}_p95_ms", r.p95_ms)
+        rw.metric(f"{prefix}_errors", float(r.errors))
+
+        if r.profile == "temporal":
+            rw.gate(f"{prefix}_accuracy", r.accuracy, ACCURACY_GATE)
+            rw.gate(
+                f"{prefix}_stale_rate",
+                r.stale_rate,
+                STALE_GATE,
+                passed=r.stale_rate <= STALE_GATE,
+            )
+            rw.gate(
+                f"{prefix}_p95_ms",
+                r.p95_ms,
+                P95_GATE_MS,
+                passed=r.p95_ms <= P95_GATE_MS,
+            )
+
+    for g in rw._result.gates.values():
+        if not g["passed"]:
+            all_pass = False
+
+    out_path = rw.write(Path(args.output) if args.output else None)
+    print(f"\nResult written to: {out_path}")
+
+    sys.exit(0 if all_pass else 1)
 
 
 if __name__ == "__main__":

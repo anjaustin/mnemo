@@ -1,0 +1,325 @@
+{
+  "version": "1.0",
+  "pack": "enterprise_crm",
+  "description": "Enterprise CRM memory pack — deal tracking, contact role changes, multi-stakeholder relationships, temporal queries, and absent-data detection.",
+  "cases": [
+    {
+      "name": "crm_deal_status_current",
+      "description": "Deal progression: latest status supersedes earlier ones",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Acme Corp Q1 deal: proposal sent, value $240K.", "created_at": "2025-01-15T09:00:00Z"},
+        {"content": "Acme Corp Q1 deal moved to negotiation stage.", "created_at": "2025-02-10T14:00:00Z"},
+        {"content": "Acme Corp Q1 deal is now closed-won at $220K.", "created_at": "2025-03-01T11:00:00Z"}
+      ],
+      "query": {"text": "What is the current status of the Acme Corp deal?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["closed-won"], "not_contains": ["negotiation", "proposal sent"]}
+    },
+    {
+      "name": "crm_deal_status_historical",
+      "description": "Deal stage as of a specific date",
+      "task_type": "temporal",
+      "memories": [
+        {"content": "Acme Corp Q1 deal: proposal sent, value $240K.", "created_at": "2025-01-15T09:00:00Z"},
+        {"content": "Acme Corp Q1 deal moved to negotiation stage.", "created_at": "2025-02-10T14:00:00Z"},
+        {"content": "Acme Corp Q1 deal is now closed-won at $220K.", "created_at": "2025-03-01T11:00:00Z"}
+      ],
+      "query": {"text": "What stage was the Acme Corp deal in as of February 2025?", "mode": "historical", "as_of": "2025-02-15T00:00:00Z", "time_intent": "historical"},
+      "expect": {"contains": ["negotiation"]}
+    },
+    {
+      "name": "crm_deal_at_risk",
+      "description": "Deal flagged as at risk, renewal tracking",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Globex renewal deal was on track for Q3 2025.", "created_at": "2025-04-01T10:00:00Z"},
+        {"content": "Globex renewal is now flagged as at risk — champion left the company.", "created_at": "2025-05-20T09:00:00Z"}
+      ],
+      "query": {"text": "What is the status of the Globex renewal?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["at risk"]}
+    },
+    {
+      "name": "crm_contact_role_change",
+      "description": "Contact promoted; new role should be retrieved",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Jordan Kim is a software engineer at Initech.", "created_at": "2024-06-01T00:00:00Z"},
+        {"content": "Jordan Kim was promoted to VP of Engineering at Initech.", "created_at": "2025-02-01T00:00:00Z"}
+      ],
+      "query": {"text": "What is Jordan Kim's current role?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["VP"], "not_contains": ["software engineer"]}
+    },
+    {
+      "name": "crm_contact_role_historical",
+      "description": "Contact's previous role before promotion",
+      "task_type": "temporal",
+      "memories": [
+        {"content": "Jordan Kim is a software engineer at Initech.", "created_at": "2024-06-01T00:00:00Z"},
+        {"content": "Jordan Kim was promoted to VP of Engineering at Initech.", "created_at": "2025-02-01T00:00:00Z"}
+      ],
+      "query": {"text": "What was Jordan Kim's role in 2024?", "mode": "historical", "as_of": "2024-12-01T00:00:00Z", "time_intent": "historical"},
+      "expect": {"contains": ["software engineer"]}
+    },
+    {
+      "name": "crm_multi_stakeholder_champion",
+      "description": "Identify deal champion from multiple contacts",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Pinnacle Health deal has three stakeholders: Dr. Rivera (economic buyer), Sam Osei (champion), and the legal team.", "created_at": "2025-03-10T09:00:00Z"}
+      ],
+      "query": {"text": "Who is the champion for the Pinnacle Health deal?"},
+      "expect": {"contains": ["Sam Osei"]}
+    },
+    {
+      "name": "crm_multi_stakeholder_buyer",
+      "description": "Identify economic buyer for a deal",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Pinnacle Health deal: Dr. Rivera is the economic buyer, Sam Osei is the champion.", "created_at": "2025-03-10T09:00:00Z"}
+      ],
+      "query": {"text": "Who signs the budget approval for the Pinnacle Health deal?"},
+      "expect": {"contains": ["Rivera"]}
+    },
+    {
+      "name": "crm_deal_value_change",
+      "description": "Deal value reduced during negotiation",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Initech deal initial value: $500K annual contract.", "created_at": "2025-01-05T09:00:00Z"},
+        {"content": "Initech deal discounted to $380K after procurement review.", "created_at": "2025-02-28T15:00:00Z"}
+      ],
+      "query": {"text": "What is the current value of the Initech deal?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["380K"], "not_contains": ["500K"]}
+    },
+    {
+      "name": "crm_next_steps",
+      "description": "Most recent next steps override earlier ones",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Next step for Umbrella Corp: schedule technical demo.", "created_at": "2025-02-01T10:00:00Z"},
+        {"content": "Umbrella Corp demo completed. Next step: send security questionnaire.", "created_at": "2025-02-20T16:00:00Z"},
+        {"content": "Umbrella Corp security review done. Next step: contract redlines.", "created_at": "2025-03-05T11:00:00Z"}
+      ],
+      "query": {"text": "What are the next steps for the Umbrella Corp deal?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["contract"], "not_contains": ["technical demo", "security questionnaire"]}
+    },
+    {
+      "name": "crm_close_date_change",
+      "description": "Deal close date pushed back",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Soylent Industries deal expected close: end of Q1 2025.", "created_at": "2025-01-20T09:00:00Z"},
+        {"content": "Soylent Industries deal slipped — new expected close is end of Q2 2025.", "created_at": "2025-03-15T09:00:00Z"}
+      ],
+      "query": {"text": "When is the Soylent Industries deal expected to close?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Q2"], "not_contains": ["Q1"]}
+    },
+    {
+      "name": "crm_account_tier_upgrade",
+      "description": "Account tier upgraded; query should return new tier",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Initech is a Standard tier customer.", "created_at": "2024-06-01T00:00:00Z"},
+        {"content": "Initech upgraded to Enterprise tier after contract renewal.", "created_at": "2025-01-15T00:00:00Z"}
+      ],
+      "query": {"text": "What tier is Initech?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Enterprise"], "not_contains": ["Standard tier"]}
+    },
+    {
+      "name": "crm_contact_company_change",
+      "description": "Contact moved to a different company",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Alex Mercer works at Globex as head of procurement.", "created_at": "2024-09-01T00:00:00Z"},
+        {"content": "Alex Mercer left Globex and joined Initech as Chief Procurement Officer.", "created_at": "2025-03-01T00:00:00Z"}
+      ],
+      "query": {"text": "Where does Alex Mercer work now?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Initech"], "not_contains": ["Globex"]}
+    },
+    {
+      "name": "crm_signed_contract_present",
+      "description": "Contract exists — should be found",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Acme Corp signed the master service agreement on March 3, 2025.", "created_at": "2025-03-03T12:00:00Z"}
+      ],
+      "query": {"text": "Does Acme Corp have a signed contract?"},
+      "expect": {"contains": ["signed"]}
+    },
+    {
+      "name": "crm_signed_contract_absent",
+      "description": "Contract status was never stored — system must not hallucinate",
+      "task_type": "absent",
+      "memories": [
+        {"content": "Pinnacle Health is in the proposal stage.", "created_at": "2025-04-01T09:00:00Z"}
+      ],
+      "query": {"text": "Does Pinnacle Health have a signed contract?"},
+      "expect": {"absent_tokens": ["signed contract", "signed on", "executed agreement", "countersigned"]}
+    },
+    {
+      "name": "crm_revenue_absent",
+      "description": "Revenue figure was never stored",
+      "task_type": "absent",
+      "memories": [
+        {"content": "Globex is a logistics company headquartered in Springfield.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is Globex's annual revenue?"},
+      "expect": {"absent_tokens": ["$", "million", "billion", "revenue is", "annual revenue"]}
+    },
+    {
+      "name": "crm_deal_owner",
+      "description": "Deal owner retrieval",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "The Umbrella Corp expansion deal is owned by sales rep Priya Nair.", "created_at": "2025-02-15T09:00:00Z"}
+      ],
+      "query": {"text": "Who owns the Umbrella Corp deal?"},
+      "expect": {"contains": ["Priya Nair"]}
+    },
+    {
+      "name": "crm_deal_owner_change",
+      "description": "Deal re-assigned to a different owner",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Soylent Industries deal owned by Marcus Webb.", "created_at": "2025-01-10T09:00:00Z"},
+        {"content": "Soylent Industries deal re-assigned from Marcus Webb to Fatima Al-Rashid after team restructuring.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "Who is the current owner of the Soylent Industries deal?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Fatima"], "not_contains": ["Marcus Webb"]}
+    },
+    {
+      "name": "crm_competitor_in_deal",
+      "description": "Competitor mentioned in deal notes",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Initech is evaluating Mnemo vs Zep for their AI memory layer. Zep was shortlisted first.", "created_at": "2025-02-01T09:00:00Z"}
+      ],
+      "query": {"text": "Which competitor is Initech considering?"},
+      "expect": {"contains": ["Zep"]}
+    },
+    {
+      "name": "crm_competitor_dropped",
+      "description": "Competitor dropped from evaluation",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Initech was evaluating both Zep and Mem0.", "created_at": "2025-02-01T09:00:00Z"},
+        {"content": "Initech dropped Mem0 from evaluation; now only comparing with Zep.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "Which competitors is Initech still evaluating?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Zep"], "not_contains": ["Mem0"]}
+    },
+    {
+      "name": "crm_meeting_cadence",
+      "description": "Most recent meeting notes",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Acme Corp meeting Jan 20: discussed pricing, asked for pilot.", "created_at": "2025-01-20T15:00:00Z"},
+        {"content": "Acme Corp meeting Feb 14: pilot approved, security review next.", "created_at": "2025-02-14T15:00:00Z"},
+        {"content": "Acme Corp meeting Mar 3: security review passed, contract sent.", "created_at": "2025-03-03T15:00:00Z"}
+      ],
+      "query": {"text": "What was discussed in the most recent Acme Corp meeting?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["contract"], "not_contains": ["pricing", "pilot approved"]}
+    },
+    {
+      "name": "crm_use_case_single_hop",
+      "description": "Primary use case for a prospect",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Pinnacle Health wants to use Mnemo for patient-facing AI assistant memory across multi-session care journeys.", "created_at": "2025-03-10T09:00:00Z"}
+      ],
+      "query": {"text": "What is the primary use case for Pinnacle Health?"},
+      "expect": {"contains": ["patient"]}
+    },
+    {
+      "name": "crm_budget_cycle",
+      "description": "Budget approval cycle for a deal",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Globex budget cycle closes at end of Q2. All purchases >$100K require CFO sign-off.", "created_at": "2025-02-01T09:00:00Z"}
+      ],
+      "query": {"text": "When does Globex's budget cycle close?"},
+      "expect": {"contains": ["Q2"]}
+    },
+    {
+      "name": "crm_trial_outcome",
+      "description": "Trial outcome recorded",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Umbrella Corp completed a 30-day trial. Outcome: 94% retrieval accuracy, team satisfied.", "created_at": "2025-02-28T17:00:00Z"}
+      ],
+      "query": {"text": "How did Umbrella Corp's trial go?"},
+      "expect": {"contains": ["94%"]}
+    },
+    {
+      "name": "crm_pain_point",
+      "description": "Key pain point for a prospect",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Soylent Industries key pain point: agents lose context between user sessions, causing repeated onboarding questions.", "created_at": "2025-01-25T10:00:00Z"}
+      ],
+      "query": {"text": "What is Soylent Industries' main problem we're solving?"},
+      "expect": {"contains": ["context"]}
+    },
+    {
+      "name": "crm_integration_requirement",
+      "description": "Technical integration requirement",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Initech requires SOC 2 Type II compliance and data residency in the EU for their Mnemo deployment.", "created_at": "2025-03-05T09:00:00Z"}
+      ],
+      "query": {"text": "What compliance requirements does Initech have?"},
+      "expect": {"contains": ["SOC 2"]}
+    },
+    {
+      "name": "crm_churn_risk",
+      "description": "Customer flagged as churn risk",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Acme Corp renewal was on track, usage growing.", "created_at": "2025-01-01T09:00:00Z"},
+        {"content": "Acme Corp flagged as churn risk — new CTO is evaluating alternatives.", "created_at": "2025-04-01T09:00:00Z"}
+      ],
+      "query": {"text": "Is Acme Corp at risk of churning?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["churn risk"]}
+    },
+    {
+      "name": "crm_expansion_opportunity",
+      "description": "Expansion opportunity identified",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Globex expansion opportunity: their European team wants to deploy 5 additional AI agents, estimated $80K additional ARR.", "created_at": "2025-03-20T10:00:00Z"}
+      ],
+      "query": {"text": "What expansion opportunity exists at Globex?"},
+      "expect": {"contains": ["European"]}
+    },
+    {
+      "name": "crm_nps_score",
+      "description": "Customer NPS score",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Umbrella Corp Q1 NPS survey: score of 72. Key feedback: excellent temporal recall, UI could be cleaner.", "created_at": "2025-04-05T09:00:00Z"}
+      ],
+      "query": {"text": "What NPS score did Umbrella Corp give us?"},
+      "expect": {"contains": ["72"]}
+    },
+    {
+      "name": "crm_implementation_lead",
+      "description": "Customer implementation lead",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Pinnacle Health implementation is led by their ML engineer Tariq Osman.", "created_at": "2025-03-15T09:00:00Z"}
+      ],
+      "query": {"text": "Who is leading the Pinnacle Health implementation?"},
+      "expect": {"contains": ["Tariq"]}
+    },
+    {
+      "name": "crm_decision_timeline",
+      "description": "Decision timeline for a prospect",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Soylent Industries expects to make a vendor decision by June 30, 2025.", "created_at": "2025-04-01T09:00:00Z"}
+      ],
+      "query": {"text": "When will Soylent Industries make their decision?"},
+      "expect": {"contains": ["June"]}
+    }
+  ]
+}

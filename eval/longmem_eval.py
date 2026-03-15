@@ -29,13 +29,18 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-# ─── Re-use HttpClient and Backend ABC from temporal_eval ────────────────────
+# ─── Shared eval library ─────────────────────────────────────────────────────
 import os
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(__file__))
-from temporal_eval import Backend, HttpClient, MnemoBackend  # noqa: E402
+sys.path.insert(0, str(Path(__file__).parent))
+from lib import HttpClient, MemoryBackend, MnemoBackend, ResultWriter  # noqa: E402
+
+# Backwards-compatibility alias
+Backend = MemoryBackend
 
 
 # ─── Result types ─────────────────────────────────────────────────────────────
@@ -550,6 +555,11 @@ def main() -> None:
         action="store_true",
         help="Exit 0 if all gates pass, 1 if any fail",
     )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to write D1 JSON result file (default: eval/results/auto-named)",
+    )
     args = parser.parse_args()
 
     cases = list(CASES)
@@ -573,10 +583,17 @@ def main() -> None:
 
     all_pass = check_gates(results, verbose=args.verbose)
 
-    if args.gate_only:
-        sys.exit(0 if all_pass else 1)
-    else:
-        sys.exit(0 if all_pass else 1)
+    # D1: Write structured result file
+    rw = ResultWriter("longmem_eval", backend.name)
+    for tt, threshold in GATES.items():
+        r = results[tt]
+        rw.gate(f"longmem_{tt}", r.accuracy, threshold)
+        rw.metric(f"longmem_{tt}_p95_ms", float(r.p95_ms))
+        rw.metric(f"longmem_{tt}_errors", float(r.errors))
+    out_path = rw.write(Path(args.output) if args.output else None)
+    print(f"\nResult written to: {out_path}")
+
+    sys.exit(0 if all_pass else 1)
 
 
 if __name__ == "__main__":

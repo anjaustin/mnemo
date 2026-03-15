@@ -1,0 +1,180 @@
+{
+  "version": "1.0",
+  "pack": "context_assembly",
+  "description": "Context assembly pack — token budget compliance, query-type-adaptive retrieval, structured response validation, and summarisation quality. Requires Spec 04 context assembly features.",
+  "note": "Cases test retrieval quality properties: correct prioritization, key-fact preservation, and stale-fact exclusion. They run against the standard context endpoint and validate the text response.",
+  "cases": [
+    {
+      "name": "ca_factual_query_returns_fact",
+      "description": "Factual lookup returns the specific fact, not tangential context",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "The Eiffel Tower is 330 metres tall including the antenna.", "created_at": "2025-01-01T09:00:00Z"},
+        {"content": "The Eiffel Tower was built by Gustave Eiffel and opened in 1889.", "created_at": "2025-01-01T09:01:00Z"},
+        {"content": "Paris has a population of approximately 2.1 million in the city proper.", "created_at": "2025-01-01T09:02:00Z"}
+      ],
+      "query": {"text": "How tall is the Eiffel Tower?"},
+      "expect": {"contains": ["330"]}
+    },
+    {
+      "name": "ca_current_fact_not_stale",
+      "description": "Context assembly must not include superseded (stale) fact",
+      "task_type": "preference",
+      "memories": [
+        {"content": "The quarterly budget is $120K.", "created_at": "2025-01-01T09:00:00Z"},
+        {"content": "Budget revised upward to $175K for Q2 following board approval.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is the current quarterly budget?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["175K"], "not_contains": ["120K"]}
+    },
+    {
+      "name": "ca_key_fact_preserved_under_budget",
+      "description": "Most relevant fact retained even when context is long",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Product launch date is October 15, 2025.", "created_at": "2025-03-01T09:00:00Z"},
+        {"content": "Marketing team has prepared 12 blog posts, 3 webinars, and a press release for the launch.", "created_at": "2025-03-02T09:00:00Z"},
+        {"content": "Engineering signed off on production readiness on March 10.", "created_at": "2025-03-10T09:00:00Z"},
+        {"content": "Legal reviewed terms of service and approved the launch plan.", "created_at": "2025-03-12T09:00:00Z"},
+        {"content": "Sales team has 40 launch day demos scheduled.", "created_at": "2025-03-13T09:00:00Z"}
+      ],
+      "query": {"text": "When is the product launch?"},
+      "expect": {"contains": ["October 15"]}
+    },
+    {
+      "name": "ca_temporal_query_resolved",
+      "description": "Temporal query type detected and correct historical fact returned",
+      "task_type": "temporal",
+      "memories": [
+        {"content": "API rate limit was 100 requests per minute.", "created_at": "2024-06-01T09:00:00Z"},
+        {"content": "API rate limit increased to 500 requests per minute after infrastructure upgrade.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What was the API rate limit in mid-2024?", "mode": "historical", "as_of": "2024-09-01T00:00:00Z", "time_intent": "historical"},
+      "expect": {"contains": ["100"]}
+    },
+    {
+      "name": "ca_preference_query_current",
+      "description": "Preference query returns most recently stated preference",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Team prefers Slack for communication.", "created_at": "2024-01-01T09:00:00Z"},
+        {"content": "Team migrated from Slack to Microsoft Teams for enterprise compliance.", "created_at": "2025-02-01T09:00:00Z"}
+      ],
+      "query": {"text": "What tool does the team use for communication?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Teams"], "not_contains": ["Slack"]}
+    },
+    {
+      "name": "ca_multi_fact_summary",
+      "description": "Multiple related facts assembled coherently",
+      "task_type": "multi_hop",
+      "memories": [
+        {"content": "Project Nova team size: 8 engineers.", "created_at": "2025-02-01T09:00:00Z"},
+        {"content": "Project Nova budget: $2.4M for 2025.", "created_at": "2025-02-01T09:01:00Z"},
+        {"content": "Project Nova deadline: December 31, 2025.", "created_at": "2025-02-01T09:02:00Z"}
+      ],
+      "query": {"text": "What are the key parameters of Project Nova?"},
+      "expect": {"contains": ["Nova"]}
+    },
+    {
+      "name": "ca_absent_query_no_hallucination",
+      "description": "Absent information: context must not hallucinate missing data",
+      "task_type": "absent",
+      "memories": [
+        {"content": "The office is located in Austin, Texas.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is the office WiFi password?"},
+      "expect": {"absent_tokens": ["password is", "WiFi:", "network key", "passphrase"]}
+    },
+    {
+      "name": "ca_recency_wins",
+      "description": "Most recent fact ranked higher than older contradicting fact",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Server region: us-east-1.", "created_at": "2024-03-01T09:00:00Z"},
+        {"content": "Server region migrated to eu-west-1 for data residency compliance.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "Which region is the server deployed in?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["eu-west-1"], "not_contains": ["us-east-1"]}
+    },
+    {
+      "name": "ca_confidence_filtering",
+      "description": "High-confidence fact returned ahead of low-confidence speculation",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Confirmed: deployment happens at 14:00 UTC on Friday.", "created_at": "2025-03-10T09:00:00Z"},
+        {"content": "Unconfirmed rumour: deployment might be postponed to Saturday.", "created_at": "2025-03-11T09:00:00Z"}
+      ],
+      "query": {"text": "When is the deployment scheduled?"},
+      "expect": {"contains": ["14:00"]}
+    },
+    {
+      "name": "ca_entity_focus",
+      "description": "Query about a specific entity returns only facts about that entity",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "Alice is the lead architect on Project Nova.", "created_at": "2025-01-15T09:00:00Z"},
+        {"content": "Bob is the product manager on Project Orion.", "created_at": "2025-01-15T09:01:00Z"},
+        {"content": "Carol is the engineering lead on Project Nova.", "created_at": "2025-01-15T09:02:00Z"}
+      ],
+      "query": {"text": "Who is the lead architect on Project Nova?"},
+      "expect": {"contains": ["Alice"]}
+    },
+    {
+      "name": "ca_structured_response_sections",
+      "description": "Context contains facts from multiple stored sections",
+      "task_type": "multi_hop",
+      "memories": [
+        {"content": "Risk assessment: the primary risk is timeline slippage due to dependency on external vendor.", "created_at": "2025-02-01T09:00:00Z"},
+        {"content": "Mitigation plan: weekly vendor syncs and fallback to internal tooling by week 6.", "created_at": "2025-02-01T09:01:00Z"}
+      ],
+      "query": {"text": "What is the risk and mitigation plan for the project?"},
+      "expect": {"contains": ["vendor"]}
+    },
+    {
+      "name": "ca_no_irrelevant_facts",
+      "description": "Unrelated facts must not pollute the context response",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "The team uses Python 3.12 for all backend services.", "created_at": "2025-01-01T09:00:00Z"},
+        {"content": "The cafeteria serves lunch from 12:00 to 14:00.", "created_at": "2025-01-01T09:01:00Z"},
+        {"content": "Python 3.12 introduces improved error messages and type parameter syntax.", "created_at": "2025-01-01T09:02:00Z"}
+      ],
+      "query": {"text": "What Python version does the team use?"},
+      "expect": {"contains": ["3.12"], "not_contains": ["cafeteria"]}
+    },
+    {
+      "name": "ca_timeline_reconstruction",
+      "description": "Events assembled in chronological order",
+      "task_type": "multi_hop",
+      "memories": [
+        {"content": "Phase 1 completed: requirements gathered.", "created_at": "2025-01-15T09:00:00Z"},
+        {"content": "Phase 2 completed: architecture designed.", "created_at": "2025-02-01T09:00:00Z"},
+        {"content": "Phase 3 in progress: implementation started.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "What phase is the project currently in?"},
+      "expect": {"contains": ["Phase 3"]}
+    },
+    {
+      "name": "ca_max_tokens_compliance",
+      "description": "Context response stays within a short token budget",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "The answer is 42.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is the answer?"},
+      "expect": {"contains": ["42"]}
+    },
+    {
+      "name": "ca_version_specificity",
+      "description": "Specific version retrieved, not generic version references",
+      "task_type": "preference",
+      "memories": [
+        {"content": "Library version: 1.0.0 (initial release).", "created_at": "2024-06-01T09:00:00Z"},
+        {"content": "Library updated to version 1.5.2 with breaking changes in the auth module.", "created_at": "2024-12-01T09:00:00Z"},
+        {"content": "Library updated to version 2.0.0 — full rewrite with new API surface.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is the current library version?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["2.0.0"], "not_contains": ["1.0.0", "1.5.2"]}
+    }
+  ]
+}

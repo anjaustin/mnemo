@@ -1,0 +1,244 @@
+{
+  "version": "1.0",
+  "pack": "multi_agent",
+  "description": "Multi-agent topology pack — agent memory isolation, delegation, cross-agent contradiction detection, and provenance queries. Requires Spec 02 agent scoping. Cases without scoping requirements run as single-agent equivalents.",
+  "note": "Cases marked scoped_only=true require the agent scoping API (Spec 02) and cannot run against a single-agent backend. They will be skipped by harnesses that do not support multi-agent mode.",
+  "cases": [
+    {
+      "name": "ma_agent_stores_fact_retrieves",
+      "description": "Agent A stores a fact and retrieves it",
+      "task_type": "single_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha processed customer order #ORD-9912 for $450 on March 1.", "created_at": "2025-03-01T10:00:00Z"}
+      ],
+      "query": {"text": "What was the value of order ORD-9912?"},
+      "expect": {"contains": ["450"]}
+    },
+    {
+      "name": "ma_supervisor_context",
+      "description": "Supervisor agent stores context that worker agents should reference",
+      "task_type": "single_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Supervisor directive: all customer refund requests must be escalated to Tier 2 if value exceeds $500.", "created_at": "2025-03-01T08:00:00Z"},
+        {"content": "Worker Agent Beta processed a refund request of $620 for customer C-1042.", "created_at": "2025-03-01T10:00:00Z"}
+      ],
+      "query": {"text": "Should the $620 refund for C-1042 be escalated?"},
+      "expect": {"contains": ["escalat"]}
+    },
+    {
+      "name": "ma_agent_contradiction_detection",
+      "description": "Two agents report contradictory facts about the same entity",
+      "task_type": "multi_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha reports: Customer C-2001 account status is active.", "created_at": "2025-03-01T09:00:00Z"},
+        {"content": "Agent Beta reports: Customer C-2001 account has been suspended due to payment failure.", "created_at": "2025-03-01T09:30:00Z"}
+      ],
+      "query": {"text": "What is the status of customer C-2001's account?"},
+      "expect": {"contains": ["suspend"]}
+    },
+    {
+      "name": "ma_provenance_which_agent",
+      "description": "Provenance: identify which agent reported a fact",
+      "task_type": "single_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Gamma reported that inventory for SKU-4421 dropped below reorder threshold at 09:15 UTC.", "created_at": "2025-03-14T09:15:00Z"}
+      ],
+      "query": {"text": "Which agent reported the low inventory for SKU-4421?"},
+      "expect": {"contains": ["Gamma"]}
+    },
+    {
+      "name": "ma_temporal_agent_override",
+      "description": "Newer agent report supersedes older one",
+      "task_type": "preference",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha (09:00): Flight AA-441 is on time.", "created_at": "2025-03-14T09:00:00Z"},
+        {"content": "Agent Beta (11:30): Flight AA-441 is delayed by 2 hours due to ATC hold.", "created_at": "2025-03-14T11:30:00Z"}
+      ],
+      "query": {"text": "What is the current status of flight AA-441?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["delayed"], "not_contains": ["on time"]}
+    },
+    {
+      "name": "ma_worker_sees_global_policy",
+      "description": "Worker agent can access supervisor-level policy",
+      "task_type": "single_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Global policy: maximum discount allowed without manager approval is 15%.", "created_at": "2025-01-01T08:00:00Z"},
+        {"content": "Sales Agent Delta is negotiating a deal with a requested 12% discount.", "created_at": "2025-03-10T10:00:00Z"}
+      ],
+      "query": {"text": "Can Delta approve the 12% discount without escalating?"},
+      "expect": {"contains": ["15%"]}
+    },
+    {
+      "name": "ma_cross_agent_entity_enrichment",
+      "description": "Agent A stores partial entity; Agent B enriches it",
+      "task_type": "multi_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha: new prospect Meridian Health entered the pipeline.", "created_at": "2025-02-01T09:00:00Z"},
+        {"content": "Agent Beta: Meridian Health has 3000 employees and is headquartered in Boston.", "created_at": "2025-02-05T09:00:00Z"}
+      ],
+      "query": {"text": "Where is Meridian Health headquartered?"},
+      "expect": {"contains": ["Boston"]}
+    },
+    {
+      "name": "ma_agent_specific_fact_absent",
+      "description": "Fact only in scope for Agent A — cross-agent isolation check",
+      "task_type": "absent",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha's private API key expires on 2025-12-31.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is Agent Alpha's API key?"},
+      "expect": {"absent_tokens": ["api key is", "key: mnm-", "token:", "secret:", "Bearer "]}
+    },
+    {
+      "name": "ma_task_handoff",
+      "description": "Task passed from one agent to another with context",
+      "task_type": "multi_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha completed triage of ticket T-8821: customer reports slow dashboard. Handed off to Agent Beta for investigation.", "created_at": "2025-03-10T10:00:00Z"},
+        {"content": "Agent Beta investigated T-8821: root cause is a missing database index on the sessions table.", "created_at": "2025-03-10T11:30:00Z"}
+      ],
+      "query": {"text": "What is the root cause of ticket T-8821?"},
+      "expect": {"contains": ["index"]}
+    },
+    {
+      "name": "ma_agent_disagreement_resolution",
+      "description": "Most authoritative (latest) agent report wins",
+      "task_type": "preference",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha (early report): Server CPU usage at 45%, system healthy.", "created_at": "2025-03-14T08:00:00Z"},
+        {"content": "Agent Beta (monitoring): Server CPU spiked to 98%, alert triggered.", "created_at": "2025-03-14T09:45:00Z"},
+        {"content": "Agent Gamma (ops response): CPU usage returned to normal at 52% after process restart.", "created_at": "2025-03-14T10:15:00Z"}
+      ],
+      "query": {"text": "What is the current server CPU status?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["52%"], "not_contains": ["98%", "45%"]}
+    },
+    {
+      "name": "ma_audit_trail",
+      "description": "Audit trail: sequence of agent actions on an entity",
+      "task_type": "multi_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha created order ORD-5500 for customer C-3001.", "created_at": "2025-03-10T09:00:00Z"},
+        {"content": "Agent Beta validated payment for order ORD-5500.", "created_at": "2025-03-10T09:05:00Z"},
+        {"content": "Agent Gamma dispatched order ORD-5500 for shipping.", "created_at": "2025-03-10T10:00:00Z"}
+      ],
+      "query": {"text": "What happened with order ORD-5500?"},
+      "expect": {"contains": ["dispatch"]}
+    },
+    {
+      "name": "ma_agent_scope_isolation_absent",
+      "description": "Fact stored by Agent B should not appear in Agent A's isolated scope — tests scoping boundary",
+      "task_type": "absent",
+      "scoped_only": true,
+      "memories": [
+        {"content": "Agent Beta's internal log: processing batch JOB-1234, 500 records.", "created_at": "2025-03-14T09:00:00Z"}
+      ],
+      "query": {"text": "What batch job is Agent Beta processing?"},
+      "expect": {"absent_tokens": ["JOB-1234", "500 records", "batch"]}
+    },
+    {
+      "name": "ma_delegation_read_access",
+      "description": "Agent A delegates read access to Agent B; B can query A's memory",
+      "task_type": "single_hop",
+      "scoped_only": true,
+      "memories": [
+        {"content": "Agent Alpha customer preference: preferred contact time is Tuesday mornings.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "When does the customer prefer to be contacted?"},
+      "expect": {"contains": ["Tuesday"]}
+    },
+    {
+      "name": "ma_no_upward_delegation",
+      "description": "Worker memory must not be visible to supervisor by default",
+      "task_type": "absent",
+      "scoped_only": true,
+      "memories": [
+        {"content": "Worker Agent Delta draft: preliminary pricing model shows 40% margin possibility.", "created_at": "2025-03-10T09:00:00Z"}
+      ],
+      "query": {"text": "What is Worker Delta's preliminary pricing model?"},
+      "expect": {"absent_tokens": ["40%", "margin", "pricing model", "preliminary"]}
+    },
+    {
+      "name": "ma_shared_knowledge_base",
+      "description": "Shared knowledge base accessible to all agents",
+      "task_type": "single_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Company policy: all customer data must be encrypted at rest and in transit. PII retention period is 90 days.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is the PII retention policy?"},
+      "expect": {"contains": ["90 days"]}
+    },
+    {
+      "name": "ma_conflicting_inventory",
+      "description": "Two agents give conflicting inventory counts — latest wins",
+      "task_type": "preference",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha: SKU-7701 stock count is 250 units.", "created_at": "2025-03-14T08:00:00Z"},
+        {"content": "Agent Beta (warehouse scan): SKU-7701 actual stock count is 203 units after discrepancy found.", "created_at": "2025-03-14T09:30:00Z"}
+      ],
+      "query": {"text": "How many units of SKU-7701 are in stock?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["203"], "not_contains": ["250"]}
+    },
+    {
+      "name": "ma_agent_specialization",
+      "description": "Retrieve fact from the agent specialised in that domain",
+      "task_type": "multi_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Legal Agent: contract clause 7.3 limits liability to 1x annual contract value.", "created_at": "2025-02-01T09:00:00Z"},
+        {"content": "Finance Agent: annual contract value for Acme Corp is $180K.", "created_at": "2025-02-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is the maximum liability exposure for the Acme Corp contract?"},
+      "expect": {"contains": ["180K"]}
+    },
+    {
+      "name": "ma_cross_session_context",
+      "description": "Agent maintains context across separate sessions with the same user",
+      "task_type": "single_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Session 1: user mentioned they are evaluating memory systems for a healthcare AI chatbot.", "created_at": "2025-03-01T10:00:00Z"},
+        {"content": "Session 2: user asked about HIPAA compliance requirements.", "created_at": "2025-03-07T10:00:00Z"}
+      ],
+      "query": {"text": "What use case is this user building?"},
+      "expect": {"contains": ["healthcare"]}
+    },
+    {
+      "name": "ma_escalation_trigger",
+      "description": "Agent recognises escalation trigger from stored policy",
+      "task_type": "multi_hop",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Escalation policy: any customer complaint mentioning legal action must be escalated to the legal team within 1 hour.", "created_at": "2025-01-01T08:00:00Z"},
+        {"content": "Customer C-9001 sent a message: 'If this is not resolved I will consult my lawyer.'", "created_at": "2025-03-14T14:00:00Z"}
+      ],
+      "query": {"text": "Does the message from C-9001 require escalation?"},
+      "expect": {"contains": ["legal"]}
+    },
+    {
+      "name": "ma_version_tracking",
+      "description": "Agent tracks successive versions of a document",
+      "task_type": "preference",
+      "scoped_only": false,
+      "memories": [
+        {"content": "Agent Alpha: deployed service mesh config v1.2.0.", "created_at": "2025-02-01T09:00:00Z"},
+        {"content": "Agent Alpha: deployed service mesh config v1.3.1, fixed memory leak.", "created_at": "2025-03-01T09:00:00Z"},
+        {"content": "Agent Alpha: deployed service mesh config v2.0.0 with breaking API changes.", "created_at": "2025-03-14T09:00:00Z"}
+      ],
+      "query": {"text": "What is the current version of the service mesh config?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["v2.0.0"], "not_contains": ["v1.2.0", "v1.3.1"]}
+    }
+  ]
+}

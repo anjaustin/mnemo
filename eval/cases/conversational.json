@@ -1,0 +1,277 @@
+{
+  "version": "1.0",
+  "pack": "conversational",
+  "description": "Conversational assistant memory pack — user preference tracking, correction handling, multi-turn context, long-gap recall, and correction-then-correction sequences.",
+  "cases": [
+    {
+      "name": "conv_preference_current",
+      "description": "User preference most recently stated",
+      "task_type": "preference",
+      "memories": [
+        {"content": "I prefer Italian food for dinner.", "created_at": "2025-01-10T18:00:00Z"},
+        {"content": "Actually I've been craving Thai food lately, I prefer Thai now.", "created_at": "2025-03-01T18:00:00Z"}
+      ],
+      "query": {"text": "What food does this user prefer for dinner?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Thai"], "not_contains": ["Italian"]}
+    },
+    {
+      "name": "conv_correction_city",
+      "description": "User corrects city mentioned in previous turn",
+      "task_type": "preference",
+      "memories": [
+        {"content": "I mentioned I'm flying into Seattle next month.", "created_at": "2025-03-01T10:00:00Z"},
+        {"content": "Actually I misspoke — I meant Portland, not Seattle.", "created_at": "2025-03-01T10:02:00Z"}
+      ],
+      "query": {"text": "Which city is the user flying into?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Portland"], "not_contains": ["Seattle"]}
+    },
+    {
+      "name": "conv_correction_name",
+      "description": "User corrects a name they gave incorrectly",
+      "task_type": "preference",
+      "memories": [
+        {"content": "My manager is called David.", "created_at": "2025-02-01T09:00:00Z"},
+        {"content": "Sorry, I got that wrong — my manager's name is Daniel, not David.", "created_at": "2025-02-01T09:03:00Z"}
+      ],
+      "query": {"text": "What is the user's manager's name?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Daniel"], "not_contains": ["David"]}
+    },
+    {
+      "name": "conv_long_gap_recall",
+      "description": "Fact stored 50+ episodes ago must still be retrievable",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "My IBAN is a secret but my loyalty card number is LY-88741.", "created_at": "2025-01-01T10:00:00Z"},
+        {"content": "Today I went for a run.", "created_at": "2025-01-05T10:00:00Z"},
+        {"content": "Had a great meeting with the team.", "created_at": "2025-01-10T10:00:00Z"},
+        {"content": "Finished reading a book about Roman history.", "created_at": "2025-01-15T10:00:00Z"},
+        {"content": "Cooked pasta for dinner.", "created_at": "2025-01-20T10:00:00Z"},
+        {"content": "Went to the dentist today.", "created_at": "2025-01-25T10:00:00Z"},
+        {"content": "Cleaned the house and reorganised the kitchen.", "created_at": "2025-01-30T10:00:00Z"},
+        {"content": "Watched a documentary about deep sea creatures.", "created_at": "2025-02-04T10:00:00Z"},
+        {"content": "Called my mother to catch up.", "created_at": "2025-02-09T10:00:00Z"},
+        {"content": "Started a new project at work.", "created_at": "2025-02-14T10:00:00Z"}
+      ],
+      "query": {"text": "What is the user's loyalty card number?"},
+      "expect": {"contains": ["LY-88741"]}
+    },
+    {
+      "name": "conv_multi_turn_reference",
+      "description": "Query references an entity established in an earlier turn",
+      "task_type": "multi_hop",
+      "memories": [
+        {"content": "My project is called Aurora and it's a mobile app.", "created_at": "2025-02-01T10:00:00Z"},
+        {"content": "Aurora needs to launch before the annual conference in September.", "created_at": "2025-02-15T10:00:00Z"}
+      ],
+      "query": {"text": "When does the user's mobile app project need to launch?"},
+      "expect": {"contains": ["September"]}
+    },
+    {
+      "name": "conv_dietary_restriction",
+      "description": "Dietary restriction that should persist across sessions",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I am vegan and have been for two years.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What are this user's dietary restrictions?"},
+      "expect": {"contains": ["vegan"]}
+    },
+    {
+      "name": "conv_dietary_restriction_change",
+      "description": "Dietary restriction changed to a different one",
+      "task_type": "preference",
+      "memories": [
+        {"content": "I am vegan.", "created_at": "2024-06-01T09:00:00Z"},
+        {"content": "I'm no longer strictly vegan — I eat vegetarian now but include eggs and dairy.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What diet does this user follow now?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["vegetarian"], "not_contains": ["vegan"]}
+    },
+    {
+      "name": "conv_location_preference",
+      "description": "User states home city",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I live in Chicago but I work remotely from coffee shops.", "created_at": "2025-02-10T09:00:00Z"}
+      ],
+      "query": {"text": "What city does this user live in?"},
+      "expect": {"contains": ["Chicago"]}
+    },
+    {
+      "name": "conv_scheduling_preference",
+      "description": "User states meeting time preference",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I prefer scheduling calls in the morning before 11am — I'm not sharp in the afternoon.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "When does the user prefer to schedule calls?"},
+      "expect": {"contains": ["morning"]}
+    },
+    {
+      "name": "conv_tool_preference_change",
+      "description": "User switches from one tool to another",
+      "task_type": "preference",
+      "memories": [
+        {"content": "I use Notion for all my notes and project planning.", "created_at": "2024-10-01T09:00:00Z"},
+        {"content": "I switched from Notion to Obsidian — Obsidian's graph view is much better for my workflow.", "created_at": "2025-02-01T09:00:00Z"}
+      ],
+      "query": {"text": "Which note-taking tool does this user prefer?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["Obsidian"], "not_contains": ["Notion"]}
+    },
+    {
+      "name": "conv_goal_tracking",
+      "description": "User's stated goal for the quarter",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "My goal for Q2 is to ship the Aurora mobile app and hit 1000 beta users.", "created_at": "2025-04-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is the user's goal for Q2?"},
+      "expect": {"contains": ["Aurora"]}
+    },
+    {
+      "name": "conv_correction_then_correction",
+      "description": "User corrects themselves twice — final correction should win",
+      "task_type": "preference",
+      "memories": [
+        {"content": "My flight leaves at 7pm.", "created_at": "2025-03-10T09:00:00Z"},
+        {"content": "Actually the flight is at 8pm.", "created_at": "2025-03-10T09:01:00Z"},
+        {"content": "Wait, I checked the ticket — it's 6:45pm.", "created_at": "2025-03-10T09:02:00Z"}
+      ],
+      "query": {"text": "What time is the user's flight?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["6:45"], "not_contains": ["8pm", "7pm"]}
+    },
+    {
+      "name": "conv_account_absent",
+      "description": "Bank account number was never stored",
+      "task_type": "absent",
+      "memories": [
+        {"content": "I bank with Chase.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "What is the user's bank account number?"},
+      "expect": {"absent_tokens": ["account number", "account is", "routing number", "IBAN", "sort code"]}
+    },
+    {
+      "name": "conv_relationship_status",
+      "description": "User mentions relationship status",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "My partner Sam and I just celebrated our third anniversary.", "created_at": "2025-02-14T10:00:00Z"}
+      ],
+      "query": {"text": "Does this user have a partner?"},
+      "expect": {"contains": ["Sam"]}
+    },
+    {
+      "name": "conv_language_learning",
+      "description": "Language the user is learning",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I've been learning Japanese for about eight months using Anki cards.", "created_at": "2025-01-15T09:00:00Z"}
+      ],
+      "query": {"text": "What language is this user learning?"},
+      "expect": {"contains": ["Japanese"]}
+    },
+    {
+      "name": "conv_reading_preference",
+      "description": "User's reading preference updated",
+      "task_type": "preference",
+      "memories": [
+        {"content": "I mostly read science fiction.", "created_at": "2024-08-01T09:00:00Z"},
+        {"content": "I've gotten really into historical fiction lately. Hilary Mantel's Wolf Hall series is incredible.", "created_at": "2025-02-01T09:00:00Z"}
+      ],
+      "query": {"text": "What genre does this user like to read?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["historical fiction"], "not_contains": ["science fiction"]}
+    },
+    {
+      "name": "conv_hobby_tracking",
+      "description": "Hobby mentioned in an early session",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I started pottery classes last year and I make bowls and mugs mostly.", "created_at": "2024-09-01T09:00:00Z"}
+      ],
+      "query": {"text": "Does this user have any craft hobbies?"},
+      "expect": {"contains": ["pottery"]}
+    },
+    {
+      "name": "conv_work_style",
+      "description": "User's preferred work style",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I work best in deep focus blocks of 90 minutes with no interruptions. I use the Pomodoro technique adapted to longer sessions.", "created_at": "2025-01-20T09:00:00Z"}
+      ],
+      "query": {"text": "How does this user prefer to structure their work sessions?"},
+      "expect": {"contains": ["90 minutes"]}
+    },
+    {
+      "name": "conv_health_condition",
+      "description": "Health information shared by user",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I have a mild lactose intolerance so I use oat milk.", "created_at": "2025-01-05T09:00:00Z"}
+      ],
+      "query": {"text": "Does this user have any dietary health conditions?"},
+      "expect": {"contains": ["lactose"]}
+    },
+    {
+      "name": "conv_project_status",
+      "description": "Current project status after update",
+      "task_type": "preference",
+      "memories": [
+        {"content": "The Aurora project is in early design phase.", "created_at": "2025-01-15T10:00:00Z"},
+        {"content": "Aurora has moved into development — we finished all the wireframes.", "created_at": "2025-02-28T10:00:00Z"},
+        {"content": "Aurora is now in beta testing with 200 users.", "created_at": "2025-04-01T10:00:00Z"}
+      ],
+      "query": {"text": "What stage is the Aurora project in?", "mode": "head", "time_intent": "current"},
+      "expect": {"contains": ["beta"], "not_contains": ["design", "development"]}
+    },
+    {
+      "name": "conv_income_absent",
+      "description": "Income never mentioned — must not hallucinate",
+      "task_type": "absent",
+      "memories": [
+        {"content": "I work as a freelance designer.", "created_at": "2025-01-01T09:00:00Z"}
+      ],
+      "query": {"text": "How much does this user earn?"},
+      "expect": {"absent_tokens": ["$", "per year", "income is", "salary", "earning"]}
+    },
+    {
+      "name": "conv_tech_stack",
+      "description": "User's tech stack mentioned casually",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "At work we use Next.js for the frontend, FastAPI for the backend, and Postgres for the database.", "created_at": "2025-02-10T09:00:00Z"}
+      ],
+      "query": {"text": "What database does this user's team use?"},
+      "expect": {"contains": ["Postgres"]}
+    },
+    {
+      "name": "conv_personal_milestone",
+      "description": "Personal milestone mentioned once",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I just got my motorcycle licence last weekend. Really proud of that.", "created_at": "2025-03-08T10:00:00Z"}
+      ],
+      "query": {"text": "What did this user recently accomplish?"},
+      "expect": {"contains": ["motorcycle"]}
+    },
+    {
+      "name": "conv_future_plan",
+      "description": "User's stated future plan",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I'm planning to move to Barcelona in September 2025 to work remotely from Spain.", "created_at": "2025-03-01T09:00:00Z"}
+      ],
+      "query": {"text": "Where is this user planning to move?"},
+      "expect": {"contains": ["Barcelona"]}
+    },
+    {
+      "name": "conv_frustration_context",
+      "description": "User expressed frustration about a specific thing",
+      "task_type": "single_hop",
+      "memories": [
+        {"content": "I'm really frustrated with my current IDE — VS Code keeps crashing when I open large files.", "created_at": "2025-02-20T09:00:00Z"}
+      ],
+      "query": {"text": "What tool is giving this user trouble?"},
+      "expect": {"contains": ["VS Code"]}
+    }
+  ]
+}
