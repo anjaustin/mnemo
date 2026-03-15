@@ -18,8 +18,12 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["Nike"],
-      "not_contains": ["prefer Adidas running shoes"]
+      "contains": [
+        "Nike"
+      ],
+      "not_contains": [
+        "prefer Adidas running shoes"
+      ]
     }
   },
   {
@@ -42,8 +46,12 @@
       "time_intent": "historical"
     },
     "expect": {
-      "contains": ["Adidas"],
-      "not_contains": ["prefer Nike"]
+      "contains": [
+        "Adidas"
+      ],
+      "not_contains": [
+        "prefer Nike"
+      ]
     }
   },
   {
@@ -65,13 +73,17 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["thread head mode"],
-      "not_contains": ["debugging Redis indexing"]
+      "contains": [
+        "thread head mode"
+      ],
+      "not_contains": [
+        "debugging Redis indexing"
+      ]
     }
   },
   {
     "name": "job_change_current",
-    "description": "D1: Employment change — current job replaces old one",
+    "description": "D1: Employment change \u2014 current job replaces old one",
     "memories": [
       {
         "content": "Alice works at Acme Corporation as a senior engineer.",
@@ -88,8 +100,12 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["Globex"],
-      "not_contains": ["Acme Corporation"]
+      "contains": [
+        "Globex"
+      ],
+      "not_contains": [
+        "Acme Corporation"
+      ]
     }
   },
   {
@@ -112,8 +128,12 @@
       "time_intent": "historical"
     },
     "expect": {
-      "contains": ["Acme"],
-      "not_contains": ["Globex"]
+      "contains": [
+        "Acme"
+      ],
+      "not_contains": [
+        "Globex"
+      ]
     }
   },
   {
@@ -135,13 +155,15 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["July 14, 1990"],
+      "contains": [
+        "July 14, 1990"
+      ],
       "not_contains": []
     }
   },
   {
     "name": "belief_change_rapid_successive",
-    "description": "D1: Three rapid successive changes — only the most recent one is current",
+    "description": "D1: Three rapid successive changes \u2014 only the most recent one is current",
     "memories": [
       {
         "content": "My favorite programming language is Python.",
@@ -162,8 +184,12 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["Python"],
-      "not_contains": ["prefer Rust"]
+      "contains": [
+        "Python"
+      ],
+      "not_contains": [
+        "prefer Rust"
+      ]
     }
   },
   {
@@ -190,7 +216,9 @@
       "time_intent": "historical"
     },
     "expect": {
-      "contains": ["Rust"],
+      "contains": [
+        "Rust"
+      ],
       "not_contains": []
     }
   },
@@ -213,8 +241,12 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["Austin"],
-      "not_contains": ["Seattle"]
+      "contains": [
+        "Austin"
+      ],
+      "not_contains": [
+        "Seattle"
+      ]
     }
   },
   {
@@ -237,13 +269,17 @@
       "time_intent": "historical"
     },
     "expect": {
-      "contains": ["Seattle"],
-      "not_contains": ["Austin"]
+      "contains": [
+        "Seattle"
+      ],
+      "not_contains": [
+        "Austin"
+      ]
     }
   },
   {
     "name": "project_status_current",
-    "description": "D1/D3: Project status update — current status supersedes completed one",
+    "description": "D1/D3: Project status update \u2014 current status supersedes completed one",
     "memories": [
       {
         "content": "Project Orion is in the planning phase.",
@@ -264,13 +300,17 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["maintenance"],
-      "not_contains": ["planning phase"]
+      "contains": [
+        "maintenance"
+      ],
+      "not_contains": [
+        "planning phase"
+      ]
     }
   },
   {
     "name": "diet_preference_change",
-    "description": "D1: Diet change — current diet replaces old one",
+    "description": "D1: Diet change \u2014 current diet replaces old one",
     "memories": [
       {
         "content": "Sarah follows a vegetarian diet.",
@@ -287,16 +327,20 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["meat"],
-      "not_contains": ["vegetarian diet"]
+      "contains": [
+        "meat"
+      ],
+      "not_contains": [
+        "vegetarian diet"
+      ]
     }
   },
   {
     "name": "stable_nationality_always_present",
-    "description": "D2 Stable: Nationality is a stable fact — always surfaced regardless of retrieval age",
+    "description": "D2 Stable: Nationality is a stable fact \u2014 always surfaced regardless of retrieval age",
     "memories": [
       {
-        "content": "Carlos is a Brazilian citizen born in São Paulo.",
+        "content": "Carlos is a Brazilian citizen born in S\u00e3o Paulo.",
         "created_at": "2020-05-01T10:00:00Z"
       },
       {
@@ -310,7 +354,9 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["Brazilian"],
+      "contains": [
+        "Brazilian"
+      ],
       "not_contains": []
     }
   },
@@ -333,8 +379,12 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["500"],
-      "not_contains": ["100 requests per minute"]
+      "contains": [
+        "500"
+      ],
+      "not_contains": [
+        "100 requests per minute"
+      ]
     }
   },
   {
@@ -356,7 +406,9 @@
       "time_intent": "recent"
     },
     "expect": {
-      "contains": ["payment gateway"],
+      "contains": [
+        "payment gateway"
+      ],
       "not_contains": []
     }
   },
@@ -383,13 +435,15 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["light roast"],
+      "contains": [
+        "light roast"
+      ],
       "not_contains": []
     }
   },
   {
     "name": "two_subjects_independent_changes",
-    "description": "D1: Both subjects have changes — each is queried independently",
+    "description": "D1: Both subjects have changes \u2014 each is queried independently",
     "memories": [
       {
         "content": "Alice works at TechCorp.",
@@ -410,13 +464,17 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["StartupXYZ"],
-      "not_contains": ["TechCorp"]
+      "contains": [
+        "StartupXYZ"
+      ],
+      "not_contains": [
+        "TechCorp"
+      ]
     }
   },
   {
     "name": "role_promotion_current",
-    "description": "D1: Role promotion — current title replaces old one",
+    "description": "D1: Role promotion \u2014 current title replaces old one",
     "memories": [
       {
         "content": "Jordan is a software engineer at the company.",
@@ -437,13 +495,18 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["engineering manager"],
-      "not_contains": ["software engineer", "tech lead"]
+      "contains": [
+        "engineering manager"
+      ],
+      "not_contains": [
+        "software engineer",
+        "tech lead"
+      ]
     }
   },
   {
     "name": "product_version_current",
-    "description": "D1: Software version — most recent version supersedes all prior",
+    "description": "D1: Software version \u2014 most recent version supersedes all prior",
     "memories": [
       {
         "content": "Mnemo is currently at version 0.6.0.",
@@ -464,8 +527,12 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["0.9.0"],
-      "not_contains": ["0.6.0"]
+      "contains": [
+        "0.9.0"
+      ],
+      "not_contains": [
+        "0.6.0"
+      ]
     }
   },
   {
@@ -492,13 +559,17 @@
       "time_intent": "historical"
     },
     "expect": {
-      "contains": ["0.6.0"],
-      "not_contains": ["0.9.0"]
+      "contains": [
+        "0.6.0"
+      ],
+      "not_contains": [
+        "0.9.0"
+      ]
     }
   },
   {
     "name": "relationship_status_change",
-    "description": "D1: Relationship status — current state supersedes prior one",
+    "description": "D1: Relationship status \u2014 current state supersedes prior one",
     "memories": [
       {
         "content": "Team Atlas is in conflict with Team Phoenix over API ownership.",
@@ -515,13 +586,17 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["shared ownership"],
-      "not_contains": ["in conflict"]
+      "contains": [
+        "shared ownership"
+      ],
+      "not_contains": [
+        "in conflict"
+      ]
     }
   },
   {
     "name": "budget_change_current",
-    "description": "D1: Budget change — current budget replaces old one",
+    "description": "D1: Budget change \u2014 current budget replaces old one",
     "memories": [
       {
         "content": "The marketing budget for Q1 2026 is $50,000.",
@@ -538,13 +613,17 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["75,000"],
-      "not_contains": ["50,000"]
+      "contains": [
+        "75,000"
+      ],
+      "not_contains": [
+        "50,000"
+      ]
     }
   },
   {
     "name": "tech_stack_migration",
-    "description": "D1: Technology migration — new stack supersedes old one",
+    "description": "D1: Technology migration \u2014 new stack supersedes old one",
     "memories": [
       {
         "content": "The backend is built with Django and PostgreSQL.",
@@ -561,13 +640,17 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["Rust"],
-      "not_contains": ["Django"]
+      "contains": [
+        "Rust"
+      ],
+      "not_contains": [
+        "Django"
+      ]
     }
   },
   {
     "name": "goal_change_current",
-    "description": "D1: Goal change — most recent goal replaces old one",
+    "description": "D1: Goal change \u2014 most recent goal replaces old one",
     "memories": [
       {
         "content": "My primary goal this year is to lose 10 pounds.",
@@ -584,13 +667,17 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["half marathon"],
-      "not_contains": ["lose 10 pounds"]
+      "contains": [
+        "half marathon"
+      ],
+      "not_contains": [
+        "lose 10 pounds"
+      ]
     }
   },
   {
     "name": "config_value_current",
-    "description": "D1: Configuration change — current setting supersedes prior one",
+    "description": "D1: Configuration change \u2014 current setting supersedes prior one",
     "memories": [
       {
         "content": "The maximum upload file size is set to 10MB.",
@@ -607,13 +694,17 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["100MB"],
-      "not_contains": ["10MB"]
+      "contains": [
+        "100MB"
+      ],
+      "not_contains": [
+        "10MB"
+      ]
     }
   },
   {
     "name": "founder_stable_fact",
-    "description": "D2 Stable: Company founding year is stable — always surfaced",
+    "description": "D2 Stable: Company founding year is stable \u2014 always surfaced",
     "memories": [
       {
         "content": "Mnemo was founded in 2024 by a team of AI engineers.",
@@ -630,13 +721,15 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["2024"],
+      "contains": [
+        "2024"
+      ],
       "not_contains": []
     }
   },
   {
     "name": "feature_flag_toggle",
-    "description": "D1: Feature flag toggle — current state supersedes prior",
+    "description": "D1: Feature flag toggle \u2014 current state supersedes prior",
     "memories": [
       {
         "content": "The dark mode feature flag is disabled by default.",
@@ -653,8 +746,129 @@
       "time_intent": "current"
     },
     "expect": {
-      "contains": ["enabled"],
-      "not_contains": ["disabled"]
+      "contains": [
+        "enabled"
+      ],
+      "not_contains": [
+        "disabled"
+      ]
+    }
+  },
+  {
+    "name": "graph_traversal_stale_exclusion",
+    "description": "D1 (Spec 08): fact invalidated before as_of must be excluded even when reached via graph traversal",
+    "memories": [
+      {
+        "content": "Sarah is the VP of Engineering at Acme Corp.",
+        "created_at": "2023-06-01T00:00:00Z"
+      },
+      {
+        "content": "Sarah has been promoted to CTO at Acme Corp, replacing her VP of Engineering role.",
+        "created_at": "2024-02-01T00:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What is Sarah's role at Acme Corp as of 2023?",
+      "mode": "historical",
+      "as_of": "2023-10-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": [
+        "VP"
+      ],
+      "not_contains": [
+        "CTO"
+      ]
+    }
+  },
+  {
+    "name": "future_episode_exclusion",
+    "description": "D2 (Spec 08): episode created after as_of must not appear in historical query result",
+    "memories": [
+      {
+        "content": "The project status is: on track for Q2 delivery.",
+        "created_at": "2024-03-01T00:00:00Z"
+      },
+      {
+        "content": "Project delayed \u2014 new target is Q4 due to scope changes.",
+        "created_at": "2025-08-01T00:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "What was the project status in early 2024?",
+      "mode": "historical",
+      "as_of": "2024-06-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": [
+        "Q2"
+      ],
+      "not_contains": [
+        "delayed",
+        "Q4"
+      ]
+    }
+  },
+  {
+    "name": "valid_historical_present_current_absent",
+    "description": "D1+D2 (Spec 08): fact valid at as_of must appear; same fact superseded after as_of must appear in historical but not current query",
+    "memories": [
+      {
+        "content": "Maria lives in Berlin.",
+        "created_at": "2023-01-01T00:00:00Z"
+      },
+      {
+        "content": "Maria relocated to Amsterdam.",
+        "created_at": "2025-01-01T00:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "Where did Maria live in 2023?",
+      "mode": "historical",
+      "as_of": "2023-09-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": [
+        "Berlin"
+      ],
+      "not_contains": [
+        "Amsterdam"
+      ]
+    }
+  },
+  {
+    "name": "multi_episode_as_of_boundary",
+    "description": "D2 (Spec 08): with multiple episodes spanning years, as_of cutoff must select only episodes before the boundary date",
+    "memories": [
+      {
+        "content": "Team size: 5 engineers.",
+        "created_at": "2022-01-01T00:00:00Z"
+      },
+      {
+        "content": "Team grew to 12 engineers after Series A.",
+        "created_at": "2023-06-01T00:00:00Z"
+      },
+      {
+        "content": "Team now 30 engineers following Series B hiring.",
+        "created_at": "2025-01-01T00:00:00Z"
+      }
+    ],
+    "query": {
+      "text": "How many engineers were on the team in mid-2023?",
+      "mode": "historical",
+      "as_of": "2023-09-01T00:00:00Z",
+      "time_intent": "historical"
+    },
+    "expect": {
+      "contains": [
+        "12"
+      ],
+      "not_contains": [
+        "30"
+      ]
     }
   }
 ]

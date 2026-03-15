@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "commit": "86f21bd",
+  "branch": "main",
+  "timestamp": "2026-03-15T05:18:20.976029+00:00",
+  "workflow": "longmem_eval",
+  "system": "mnemo",
+  "metrics": {
+    "longmem_single_hop": 1.0,
+    "longmem_single_hop_p95_ms": 40.007169,
+    "longmem_single_hop_errors": 0.0,
+    "longmem_multi_hop": 1.0,
+    "longmem_multi_hop_p95_ms": 29.201219,
+    "longmem_multi_hop_errors": 0.0,
+    "longmem_temporal": 1.0,
+    "longmem_temporal_p95_ms": 41.083822,
+    "longmem_temporal_errors": 0.0,
+    "longmem_preference": 1.0,
+    "longmem_preference_p95_ms": 46.818299,
+    "longmem_preference_errors": 0.0,
+    "longmem_absent": 1.0,
+    "longmem_absent_p95_ms": 30.618858,
+    "longmem_absent_errors": 0.0
+  },
+  "gates": {
+    "longmem_single_hop": {
+      "value": 1.0,
+      "threshold": 0.8,
+      "passed": true
+    },
+    "longmem_multi_hop": {
+      "value": 1.0,
+      "threshold": 0.7,
+      "passed": true
+    },
+    "longmem_temporal": {
+      "value": 1.0,
+      "threshold": 0.75,
+      "passed": true
+    },
+    "longmem_preference": {
+      "value": 1.0,
+      "threshold": 0.8,
+      "passed": true
+    },
+    "longmem_absent": {
+      "value": 1.0,
+      "threshold": 0.9,
+      "passed": true
+    }
+  }
+}

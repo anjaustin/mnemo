@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "commit": "86f21bd",
+  "branch": "main",
+  "timestamp": "2026-03-15T05:18:00.160771+00:00",
+  "workflow": "temporal_eval",
+  "system": "mnemo",
+  "metrics": {
+    "mnemo_temporal_accuracy": 0.851852,
+    "mnemo_temporal_stale_rate": 0.037037,
+    "mnemo_temporal_p50_ms": 43.991507,
+    "mnemo_temporal_p95_ms": 66.179546,
+    "mnemo_temporal_errors": 0.0,
+    "mnemo_baseline_accuracy": 0.777778,
+    "mnemo_baseline_stale_rate": 0.111111,
+    "mnemo_baseline_p50_ms": 37.172181,
+    "mnemo_baseline_p95_ms": 59.137075,
+    "mnemo_baseline_errors": 0.0
+  },
+  "gates": {
+    "mnemo_temporal_accuracy": {
+      "value": 0.851852,
+      "threshold": 0.95,
+      "passed": false
+    },
+    "mnemo_temporal_stale_rate": {
+      "value": 0.037037,
+      "threshold": 0.05,
+      "passed": true
+    },
+    "mnemo_temporal_p95_ms": {
+      "value": 66.179546,
+      "threshold": 300.0,
+      "passed": true
+    }
+  }
+}

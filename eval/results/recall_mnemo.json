@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "commit": "86f21bd",
+  "branch": "main",
+  "timestamp": "2026-03-15T05:20:11.494014+00:00",
+  "workflow": "recall_quality",
+  "system": "mnemo",
+  "metrics": {
+    "recall_accuracy": 0.875,
+    "temporal_accuracy": 0.666667,
+    "p95_latency_ms": 56.413512,
+    "recall_p50_ms": 39.683597,
+    "recall_p95_ms": 56.259961
+  },
+  "gates": {
+    "recall_accuracy": {
+      "value": 0.875,
+      "threshold": 0.1,
+      "passed": true
+    },
+    "temporal_accuracy": {
+      "value": 0.666667,
+      "threshold": 0.9,
+      "passed": false
+    },
+    "p95_latency_ms": {
+      "value": 56.413512,
+      "threshold": 500.0,
+      "passed": true
+    }
+  }
+}
