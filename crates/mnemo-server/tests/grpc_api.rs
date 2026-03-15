@@ -220,6 +220,7 @@ async fn seed_user_session(store: &RedisStateStore) -> (Uuid, Uuid) {
         .create_session(CreateSessionRequest {
             id: Some(session_id),
             user_id: user.id,
+            agent_id: None,
             name: None,
             metadata: serde_json::json!({}),
         })
@@ -516,12 +517,14 @@ async fn test_grpc_query_edges() {
             confidence: 0.95,
             valid_at: None,
             classification: Classification::default(),
+            temporal_scope: None,
         },
         user_id,
         src_id,
         tgt_id,
         ep_id,
         chrono::Utc::now(),
+        None,
     );
     let edge_id = edge.id;
     store.create_edge(edge).await.unwrap();

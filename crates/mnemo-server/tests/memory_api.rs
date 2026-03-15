@@ -969,12 +969,14 @@ async fn test_time_travel_trace_reports_fact_shift_and_timeline() {
                 confidence: 0.85,
                 valid_at: Some(jan),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             adidas.id,
             episode_1,
             jan,
+            None,
         ))
         .await
         .unwrap();
@@ -991,12 +993,14 @@ async fn test_time_travel_trace_reports_fact_shift_and_timeline() {
                 confidence: 0.87,
                 valid_at: Some(mar),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             nike.id,
             episode_2,
             mar,
+            None,
         ))
         .await
         .unwrap();
@@ -1245,12 +1249,14 @@ async fn test_conflict_radar_detects_active_fact_conflict() {
                 confidence: 0.8,
                 valid_at: Some(now - chrono::Duration::days(2)),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             adidas.id,
             episode_id,
             now,
+            None,
         ))
         .await
         .unwrap();
@@ -1264,12 +1270,14 @@ async fn test_conflict_radar_detects_active_fact_conflict() {
                 confidence: 0.85,
                 valid_at: Some(now - chrono::Duration::days(1)),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             nike.id,
             episode_id,
             now,
+            None,
         ))
         .await
         .unwrap();
@@ -1375,12 +1383,14 @@ async fn test_causal_recall_chains_returns_fact_lineage() {
                 confidence: 0.92,
                 valid_at: Some(Utc::now()),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             nike.id,
             episode_id,
             Utc::now(),
+            None,
         ))
         .await
         .unwrap();
@@ -3168,12 +3178,14 @@ async fn test_memory_webhooks_capture_conflict_detected_event() {
                 confidence: 0.8,
                 valid_at: Some(now - chrono::Duration::days(2)),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             adidas.id,
             episode_id,
             now,
+            None,
         ))
         .await
         .unwrap();
@@ -3187,12 +3199,14 @@ async fn test_memory_webhooks_capture_conflict_detected_event() {
                 confidence: 0.82,
                 valid_at: Some(now - chrono::Duration::days(1)),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             nike.id,
             episode_id,
             now,
+            None,
         ))
         .await
         .unwrap();
@@ -4647,12 +4661,14 @@ async fn test_time_travel_trace_contract_retrieval_policy_combinations() {
                 confidence: 0.85,
                 valid_at: Some(jan),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             adidas.id,
             episode_1,
             jan,
+            None,
         ))
         .await
         .unwrap();
@@ -4669,12 +4685,14 @@ async fn test_time_travel_trace_contract_retrieval_policy_combinations() {
                 confidence: 0.87,
                 valid_at: Some(mar),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             src.id,
             nike.id,
             episode_1,
             mar,
+            None,
         ))
         .await
         .unwrap();
@@ -7001,6 +7019,7 @@ async fn setup_graph_data(state_store: &Arc<RedisStateStore>) -> (Uuid, [Uuid; 4
             invalid_at: None,
             ingested_at: now,
             source_episode_id: Uuid::now_v7(),
+            source_agent_id: None,
             invalidated_by_episode_id: None,
             confidence: 0.9,
             corroboration_count: 1,
@@ -7008,6 +7027,9 @@ async fn setup_graph_data(state_store: &Arc<RedisStateStore>) -> (Uuid, [Uuid; 4
             classification: mnemo_core::models::classification::Classification::default(),
             created_at: now,
             updated_at: now,
+            temporal_scope: None,
+            access_count: 0,
+            last_accessed_at: None,
         };
         state_store.create_edge(edge).await.unwrap();
     }
@@ -8375,12 +8397,14 @@ async fn test_coherence_healthy_graph_scores_well() {
                 confidence: 0.9,
                 valid_at: Some(now - chrono::Duration::days(10)),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             alice.id,
             acme.id,
             episode_id,
             now,
+            None,
         ))
         .await
         .unwrap();
@@ -8394,12 +8418,14 @@ async fn test_coherence_healthy_graph_scores_well() {
                 confidence: 0.95,
                 valid_at: Some(now - chrono::Duration::days(30)),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             acme.id,
             nyc.id,
             episode_id,
             now,
+            None,
         ))
         .await
         .unwrap();
@@ -8498,12 +8524,14 @@ async fn test_coherence_detects_fact_conflicts() {
                 confidence: 0.9,
                 valid_at: Some(now - chrono::Duration::days(5)),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             alice.id,
             acme.id,
             episode_id,
             now,
+            None,
         ))
         .await
         .unwrap();
@@ -8517,12 +8545,14 @@ async fn test_coherence_detects_fact_conflicts() {
                 confidence: 0.7,
                 valid_at: Some(now - chrono::Duration::days(2)),
                 classification: Default::default(),
+                temporal_scope: None,
             },
             user_id,
             alice.id,
             globex.id,
             episode_id,
             now,
+            None,
         ))
         .await
         .unwrap();
@@ -9485,12 +9515,14 @@ async fn classify01a_edge_defaults_to_internal() {
             confidence: 0.9,
             valid_at: None,
             classification: Default::default(),
+            temporal_scope: None,
         },
         user_id,
         src_entity,
         tgt_entity,
         Uuid::now_v7(),
         now,
+        None,
     );
     let created = state_store.create_edge(edge).await.unwrap();
 
@@ -9594,12 +9626,14 @@ async fn classify01d_patch_edge_classification() {
             confidence: 0.8,
             valid_at: None,
             classification: Default::default(),
+            temporal_scope: None,
         },
         Uuid::now_v7(),
         Uuid::now_v7(),
         Uuid::now_v7(),
         Uuid::now_v7(),
         now,
+        None,
     );
     let created = state_store.create_edge(edge).await.unwrap();
 
@@ -9652,12 +9686,14 @@ async fn classify01e_edge_filter_max_classification() {
                 confidence: 0.9,
                 valid_at: None,
                 classification: class,
+                temporal_scope: None,
             },
             user_id,
             src,
             tgt,
             Uuid::now_v7(),
             now,
+            None,
         );
         edge.classification = class;
         state_store.create_edge(edge).await.unwrap();
@@ -9822,6 +9858,7 @@ async fn classify01h_extraction_classification_flows_through() {
         confidence: 0.95,
         valid_at: None,
         classification: Classification::Restricted,
+        temporal_scope: None,
     };
     let edge = Edge::from_extraction(
         &rel,
@@ -9830,6 +9867,7 @@ async fn classify01h_extraction_classification_flows_through() {
         Uuid::from_u128(3),
         Uuid::from_u128(4),
         chrono::Utc::now(),
+        None,
     );
     assert_eq!(
         edge.classification,
@@ -10299,12 +10337,14 @@ async fn view02a_context_view_filters_entities_by_classification() {
             confidence: 0.9,
             valid_at: None,
             classification: Classification::Public,
+            temporal_scope: None,
         },
         user_id,
         public_entity.id,
         target_entity.id,
         ep_id,
         now,
+        None,
     );
     store.create_edge(public_edge).await.unwrap();
 
@@ -10317,12 +10357,14 @@ async fn view02a_context_view_filters_entities_by_classification() {
             confidence: 0.9,
             valid_at: None,
             classification: Classification::Confidential,
+            temporal_scope: None,
         },
         user_id,
         confidential_entity.id,
         Uuid::from_u128(101),
         ep_id,
         now,
+        None,
     );
     store.create_edge(confidential_edge).await.unwrap();
 
@@ -10448,12 +10490,14 @@ async fn view02b_context_view_blocks_edge_labels() {
             confidence: 0.9,
             valid_at: None,
             classification: Classification::Internal,
+            temporal_scope: None,
         },
         user_id,
         entity.id,
         target1.id,
         ep_id,
         now,
+        None,
     );
     store.create_edge(salary_edge).await.unwrap();
 
@@ -10466,12 +10510,14 @@ async fn view02b_context_view_blocks_edge_labels() {
             confidence: 0.9,
             valid_at: None,
             classification: Classification::Internal,
+            temporal_scope: None,
         },
         user_id,
         entity.id,
         target2.id,
         ep_id,
         now,
+        None,
     );
     store.create_edge(role_edge).await.unwrap();
 
@@ -10681,12 +10727,14 @@ async fn view02e_view_max_facts_caps_count() {
                 confidence: 0.9,
                 valid_at: None,
                 classification: Classification::Public,
+                temporal_scope: None,
             },
             user_id,
             entity.id,
             target.id,
             ep_id,
             now,
+            None,
         );
         store.create_edge(edge).await.unwrap();
     }
@@ -10863,12 +10911,14 @@ async fn view02g_no_view_scoped_key_still_filters() {
             confidence: 0.9,
             valid_at: None,
             classification: Classification::Internal,
+            temporal_scope: None,
         },
         user_id,
         internal_entity.id,
         target.id,
         ep_id,
         now,
+        None,
     );
     store.create_edge(internal_edge).await.unwrap();
 
@@ -11468,12 +11518,14 @@ async fn gr03a_redact_rule_removes_matching_facts() {
             confidence: 0.9,
             valid_at: None,
             classification: Classification::Internal,
+            temporal_scope: None,
         },
         user_id,
         person.id,
         company.id,
         ep_id,
         now,
+        None,
     );
     store.create_edge(salary_edge).await.unwrap();
 
@@ -11486,12 +11538,14 @@ async fn gr03a_redact_rule_removes_matching_facts() {
             confidence: 0.9,
             valid_at: None,
             classification: Classification::Internal,
+            temporal_scope: None,
         },
         user_id,
         person.id,
         company.id,
         ep_id,
         now,
+        None,
     );
     store.create_edge(works_edge).await.unwrap();
 
@@ -11594,12 +11648,14 @@ async fn gr03b_warn_rule_adds_warnings_to_response() {
             confidence: 0.9,
             valid_at: None,
             classification: Classification::Confidential,
+            temporal_scope: None,
         },
         user_id,
         entity.id,
         target.id,
         ep_id,
         now,
+        None,
     );
     store.create_edge(edge).await.unwrap();
 

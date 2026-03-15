@@ -353,23 +353,23 @@ impl LlmProvider for AnthropicProvider {
                     })
                     .collect(),
                 relationships: parsed
-                .relationships
-                .into_iter()
-                .map(|r| ExtractedRelationship {
-                    source_name: r.source,
-                    target_name: r.target,
-                    label: r.label,
-                    fact: r.fact,
-                    confidence: r.confidence,
-                    valid_at: None,
-                    classification: r
-                        .classification
-                        .as_deref()
-                        .map(Classification::from_str_flexible)
-                        .unwrap_or_default(),
-                    temporal_scope: None,
-                })
-                .collect(),
+                    .relationships
+                    .into_iter()
+                    .map(|r| ExtractedRelationship {
+                        source_name: r.source,
+                        target_name: r.target,
+                        label: r.label,
+                        fact: r.fact,
+                        confidence: r.confidence,
+                        valid_at: None,
+                        classification: r
+                            .classification
+                            .as_deref()
+                            .map(Classification::from_str_flexible)
+                            .unwrap_or_default(),
+                        temporal_scope: None,
+                    })
+                    .collect(),
             },
             usage,
         ))

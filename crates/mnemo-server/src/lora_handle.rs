@@ -78,12 +78,8 @@ impl EmbeddingProvider for LoraEmbedderHandle {
         agent_id: Option<&str>,
     ) -> LlmResult<Vec<Vec<f32>>> {
         match self {
-            LoraEmbedderHandle::Base(e) => {
-                e.embed_batch_for_agent(texts, user_id, agent_id).await
-            }
-            LoraEmbedderHandle::Lora(e) => {
-                e.embed_batch_for_agent(texts, user_id, agent_id).await
-            }
+            LoraEmbedderHandle::Base(e) => e.embed_batch_for_agent(texts, user_id, agent_id).await,
+            LoraEmbedderHandle::Lora(e) => e.embed_batch_for_agent(texts, user_id, agent_id).await,
         }
     }
 

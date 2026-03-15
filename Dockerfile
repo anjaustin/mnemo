@@ -37,9 +37,10 @@ COPY crates/mnemo-llm/Cargo.toml crates/mnemo-llm/Cargo.toml
 COPY crates/mnemo-proto/Cargo.toml crates/mnemo-proto/Cargo.toml
 COPY crates/mnemo-mcp/Cargo.toml crates/mnemo-mcp/Cargo.toml
 COPY crates/mnemo-gnn/Cargo.toml crates/mnemo-gnn/Cargo.toml
+COPY crates/mnemo-lora/Cargo.toml crates/mnemo-lora/Cargo.toml
 
 # Create stub source files for dependency caching
-RUN for crate in mnemo-core mnemo-server mnemo-storage mnemo-graph mnemo-ingest mnemo-retrieval mnemo-llm mnemo-proto mnemo-mcp mnemo-gnn; do \
+RUN for crate in mnemo-core mnemo-server mnemo-storage mnemo-graph mnemo-ingest mnemo-retrieval mnemo-llm mnemo-proto mnemo-mcp mnemo-gnn mnemo-lora; do \
       mkdir -p "crates/$crate/src" && \
       echo "fn main() {}" > "crates/$crate/src/lib.rs"; \
     done

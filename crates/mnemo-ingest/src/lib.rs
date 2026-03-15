@@ -153,7 +153,13 @@ pub type DigestCache = Arc<RwLock<HashMap<Uuid, MemoryDigest>>>;
 /// and generates memory digests in the background.
 pub struct IngestWorker<S, V, L, E>
 where
-    S: EpisodeStore + EntityStore + EdgeStore + SessionStore + DigestStore + SpanStore + BeliefChangeStore,
+    S: EpisodeStore
+        + EntityStore
+        + EdgeStore
+        + SessionStore
+        + DigestStore
+        + SpanStore
+        + BeliefChangeStore,
     V: VectorStore,
     L: LlmProvider,
     E: EmbeddingProvider,
@@ -817,11 +823,17 @@ where
             // Check for existing valid edges with the same source+label but a
             // *different* target — these represent a potential belief change.
             {
-                let all_outgoing = self.state_store.get_outgoing_edges(src).await.unwrap_or_default();
-                for existing in all_outgoing
-                    .iter()
-                    .filter(|e| e.label == rel.label && e.user_id == episode.user_id && e.is_valid() && e.target_entity_id != tgt)
-                {
+                let all_outgoing = self
+                    .state_store
+                    .get_outgoing_edges(src)
+                    .await
+                    .unwrap_or_default();
+                for existing in all_outgoing.iter().filter(|e| {
+                    e.label == rel.label
+                        && e.user_id == episode.user_id
+                        && e.is_valid()
+                        && e.target_entity_id != tgt
+                }) {
                     let tgt_name_new = rel.target_name.clone();
                     let tgt_name_old = self
                         .state_store
@@ -884,11 +896,7 @@ where
 
             let emb = self
                 .embedder
-                .embed_for_agent(
-                    &created.fact,
-                    episode.user_id,
-                    episode.agent_id.as_deref(),
-                )
+                .embed_for_agent(&created.fact, episode.user_id, episode.agent_id.as_deref())
                 .await?;
             self.vector_store
                 .upsert_edge_embedding(

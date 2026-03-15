@@ -911,8 +911,8 @@ impl BeliefChangeStore for RedisStateStore {
     async fn record_belief_change(&self, change: BeliefChange) -> StorageResult<()> {
         let key = self.key(&["belief_changes", &change.user_id.to_string()]);
         let score = change.detected_at.timestamp_millis() as f64;
-        let json = serde_json::to_string(&change)
-            .map_err(|e| MnemoError::Serialization(e.to_string()))?;
+        let json =
+            serde_json::to_string(&change).map_err(|e| MnemoError::Serialization(e.to_string()))?;
         let mut conn = self.conn.clone();
         conn.zadd::<_, _, _, ()>(&key, json, score)
             .await
@@ -961,10 +961,7 @@ impl AgentStore for RedisStateStore {
                 // Update description in core if provided
                 if let Some(desc) = description {
                     if let serde_json::Value::Object(ref mut map) = existing.core {
-                        map.insert(
-                            "description".to_string(),
-                            serde_json::Value::String(desc),
-                        );
+                        map.insert("description".to_string(), serde_json::Value::String(desc));
                     }
                     existing.updated_at = chrono::Utc::now();
                     self.set_json(&key, &existing).await?;
@@ -2999,10 +2996,7 @@ impl LoraStore for RedisStateStore {
     }
 
     async fn save_lora_weights(&self, weights: &LoraWeights) -> StorageResult<()> {
-        let slot = weights
-            .agent_id
-            .as_deref()
-            .unwrap_or("__global__");
+        let slot = weights.agent_id.as_deref().unwrap_or("__global__");
         let key = self.key(&["lora", &weights.user_id.to_string(), slot]);
         let idx_key = self.key(&["lora_idx", &weights.user_id.to_string()]);
 
@@ -3079,10 +3073,7 @@ impl LoraStore for RedisStateStore {
         Ok(())
     }
 
-    async fn list_lora_weights_for_user(
-        &self,
-        user_id: Uuid,
-    ) -> StorageResult<Vec<LoraWeights>> {
+    async fn list_lora_weights_for_user(&self, user_id: Uuid) -> StorageResult<Vec<LoraWeights>> {
         let idx_key = self.key(&["lora_idx", &user_id.to_string()]);
         let mut conn = self.conn.clone();
 
@@ -3101,10 +3092,7 @@ impl LoraStore for RedisStateStore {
         Ok(results)
     }
 
-    async fn list_lora_weights_for_agent(
-        &self,
-        agent_id: &str,
-    ) -> StorageResult<Vec<LoraWeights>> {
+    async fn list_lora_weights_for_agent(&self, agent_id: &str) -> StorageResult<Vec<LoraWeights>> {
         let agent_idx_key = self.key(&["lora_agent_idx", agent_id]);
         let mut conn = self.conn.clone();
 

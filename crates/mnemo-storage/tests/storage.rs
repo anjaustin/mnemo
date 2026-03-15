@@ -45,6 +45,7 @@ fn test_episode_req(content: &str) -> CreateEpisodeRequest {
         content: content.to_string(),
         role: Some(MessageRole::User),
         name: Some("TestUser".into()),
+        agent_id: None,
         metadata: serde_json::json!({}),
         created_at: None,
     }
@@ -100,6 +101,7 @@ async fn test_session_crud_lifecycle() {
         .create_session(CreateSessionRequest {
             id: None,
             user_id: user.id,
+            agent_id: None,
             name: Some("Test Session".into()),
             metadata: serde_json::json!({}),
         })
@@ -137,6 +139,7 @@ async fn test_episode_pending_queue() {
         .create_session(CreateSessionRequest {
             id: None,
             user_id: user.id,
+            agent_id: None,
             name: None,
             metadata: serde_json::json!({}),
         })
@@ -149,6 +152,7 @@ async fn test_episode_pending_queue() {
             test_episode_req("Hello from integration test!"),
             session.id,
             user.id,
+            None,
         )
         .await
         .unwrap();
@@ -248,12 +252,14 @@ async fn test_edge_conflict_detection() {
             confidence: 0.9,
             valid_at: None,
             classification: Default::default(),
+            temporal_scope: None,
         },
         user.id,
         entity_a.id,
         entity_b.id,
         Uuid::now_v7(),
         chrono::Utc::now(),
+        None,
     );
     let created_edge = store.create_edge(edge1).await.unwrap();
     assert!(created_edge.is_valid());
@@ -282,6 +288,7 @@ async fn test_episode_requeue() {
         .create_session(CreateSessionRequest {
             id: None,
             user_id: user.id,
+            agent_id: None,
             name: None,
             metadata: serde_json::json!({}),
         })
@@ -289,7 +296,7 @@ async fn test_episode_requeue() {
         .unwrap();
 
     let episode = store
-        .create_episode(test_episode_req("Requeue test"), session.id, user.id)
+        .create_episode(test_episode_req("Requeue test"), session.id, user.id, None)
         .await
         .unwrap();
 

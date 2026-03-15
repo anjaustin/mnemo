@@ -459,8 +459,7 @@ mod tests {
     async fn test_falsify_tools_call_without_arguments_field() {
         let server = test_server();
         // Entirely missing arguments field
-        let msg =
-            r#"{"jsonrpc":"2.0","id":104,"method":"tools/call","params":{"name":"health"}}"#;
+        let msg = r#"{"jsonrpc":"2.0","id":104,"method":"tools/call","params":{"name":"health"}}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert!(

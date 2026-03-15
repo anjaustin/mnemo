@@ -754,9 +754,7 @@ async fn handle_revoke(server: &McpServer, args: &Value) -> ToolCallResult {
     let region_id = match args.get("region_id").and_then(|v| v.as_str()) {
         Some(id) if !id.trim().is_empty() => id,
         _ => {
-            return ToolCallResult::error(
-                "'region_id' argument is required and must be non-empty",
-            )
+            return ToolCallResult::error("'region_id' argument is required and must be non-empty")
         }
     };
 
@@ -878,10 +876,7 @@ mod tests {
     fn test_deprecated_name_resolution() {
         assert_eq!(resolve_deprecated_name("mnemo_remember"), Some("remember"));
         assert_eq!(resolve_deprecated_name("mnemo_recall"), Some("recall"));
-        assert_eq!(
-            resolve_deprecated_name("mnemo_graph_query"),
-            Some("graph")
-        );
+        assert_eq!(resolve_deprecated_name("mnemo_graph_query"), Some("graph"));
         assert_eq!(
             resolve_deprecated_name("mnemo_agent_identity"),
             Some("identity")
@@ -1040,8 +1035,7 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result =
-            dispatch_tool(&server, "remember", &serde_json::json!({"text": ""})).await;
+        let result = dispatch_tool(&server, "remember", &serde_json::json!({"text": ""})).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("non-empty"));
     }
@@ -1053,8 +1047,7 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result =
-            dispatch_tool(&server, "recall", &serde_json::json!({"query": "  "})).await;
+        let result = dispatch_tool(&server, "recall", &serde_json::json!({"query": "  "})).await;
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -1065,12 +1058,8 @@ mod tests {
             api_key: None,
             default_user: None, // no default
         });
-        let result = dispatch_tool(
-            &server,
-            "remember",
-            &serde_json::json!({"text": "hello"}),
-        )
-        .await;
+        let result =
+            dispatch_tool(&server, "remember", &serde_json::json!({"text": "hello"})).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("MNEMO_MCP_DEFAULT_USER"));
     }
@@ -1100,21 +1089,13 @@ mod tests {
             default_user: None,
         });
         // Missing agent_id
-        let result = dispatch_tool(
-            &server,
-            "identity",
-            &serde_json::json!({"action": "get"}),
-        )
-        .await;
+        let result =
+            dispatch_tool(&server, "identity", &serde_json::json!({"action": "get"})).await;
         assert_eq!(result.is_error, Some(true));
 
         // Missing action
-        let result = dispatch_tool(
-            &server,
-            "identity",
-            &serde_json::json!({"agent_id": "abc"}),
-        )
-        .await;
+        let result =
+            dispatch_tool(&server, "identity", &serde_json::json!({"agent_id": "abc"})).await;
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -1338,12 +1319,8 @@ mod tests {
             api_key: None,
             default_user: Some("test-user".to_string()),
         });
-        let result = dispatch_tool(
-            &server,
-            "digest",
-            &serde_json::json!({"action": "delete"}),
-        )
-        .await;
+        let result =
+            dispatch_tool(&server, "digest", &serde_json::json!({"action": "delete"})).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("Unknown action"));
     }
@@ -1413,12 +1390,7 @@ mod tests {
             default_user: Some("test-user".to_string()),
         });
         // text is a number, not a string
-        let result = dispatch_tool(
-            &server,
-            "remember",
-            &serde_json::json!({"text": 12345}),
-        )
-        .await;
+        let result = dispatch_tool(&server, "remember", &serde_json::json!({"text": 12345})).await;
         assert_eq!(result.is_error, Some(true));
     }
 

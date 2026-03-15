@@ -166,8 +166,11 @@ where
         block.query_type = Some(format!("{:?}", query_classification.query_type).to_lowercase());
 
         // D3: explanation collector — only allocated when explain=true
-        let mut collector: Option<ExplanationCollector> =
-            if request.explain { Some(ExplanationCollector::new()) } else { None };
+        let mut collector: Option<ExplanationCollector> = if request.explain {
+            Some(ExplanationCollector::new())
+        } else {
+            None
+        };
 
         let temporal_intent = resolve_temporal_intent(request.time_intent, &query_text);
         let temporal_filter = request.as_of.or(request.temporal_filter);
@@ -318,16 +321,14 @@ where
 
                 // D3: apply reinforcement boost to relevance score
                 let base_relevance = *rrf_score as f32;
-                let reinforced_relevance = apply_reinforcement(
-                    base_relevance,
-                    edge.access_count,
-                    edge.last_accessed_at,
-                );
+                let reinforced_relevance =
+                    apply_reinforcement(base_relevance, edge.access_count, edge.last_accessed_at);
 
                 // D2: scope label for FactSummary
-                let scope_label = edge.temporal_scope.as_ref().map(|s| {
-                    serde_json::to_string(s).unwrap_or_default()
-                });
+                let scope_label = edge
+                    .temporal_scope
+                    .as_ref()
+                    .map(|s| serde_json::to_string(s).unwrap_or_default());
 
                 block.facts.push(FactSummary {
                     id: edge.id,
@@ -396,9 +397,10 @@ where
                 let graph_base = entity_summary.relevance * 0.8;
                 let graph_relevance =
                     apply_reinforcement(graph_base, edge.access_count, edge.last_accessed_at);
-                let scope_label = edge.temporal_scope.as_ref().map(|s| {
-                    serde_json::to_string(s).unwrap_or_default()
-                });
+                let scope_label = edge
+                    .temporal_scope
+                    .as_ref()
+                    .map(|s| serde_json::to_string(s).unwrap_or_default());
 
                 block.facts.push(FactSummary {
                     id: edge.id,
@@ -489,12 +491,8 @@ where
             request.temporal_weight
         } else {
             match query_classification.query_type {
-                QueryType::Temporal => {
-                    Some(request.temporal_weight.unwrap_or(0.55_f32).max(0.55))
-                }
-                QueryType::Factual => {
-                    Some(request.temporal_weight.unwrap_or(0.20_f32).min(0.20))
-                }
+                QueryType::Temporal => Some(request.temporal_weight.unwrap_or(0.55_f32).max(0.55)),
+                QueryType::Factual => Some(request.temporal_weight.unwrap_or(0.20_f32).min(0.20)),
                 _ => request.temporal_weight,
             }
         };
@@ -511,8 +509,8 @@ where
 
         // D1: For Absent queries, check if any facts were found at all and
         //     add an open_question signal (consumed by D2 build_structured).
-        let absent_signal = matches!(query_classification.query_type, QueryType::Absent)
-            && block.facts.is_empty();
+        let absent_signal =
+            matches!(query_classification.query_type, QueryType::Absent) && block.facts.is_empty();
 
         // ── D3: Reinforcement — async access recording ─────────
         // Bump access_count + last_accessed_at for each fact returned in this
@@ -522,11 +520,8 @@ where
         // update the per-agent adapter toward the query vector. This is a
         // background update on the retrieval path; errors do not fail the query.
         {
-            let facts_for_feedback: Vec<(Uuid, String)> = block
-                .facts
-                .iter()
-                .map(|f| (f.id, f.fact.clone()))
-                .collect();
+            let facts_for_feedback: Vec<(Uuid, String)> =
+                block.facts.iter().map(|f| (f.id, f.fact.clone())).collect();
 
             for (id, fact_text) in &facts_for_feedback {
                 let _ = self.state_store.record_edge_access(*id).await;
@@ -534,11 +529,7 @@ where
                 // LoRA implicit feedback: re-embed the accessed fact and
                 // nudge the adapter toward the query embedding.
                 if let Some(ref q_vec) = adapted_query_embedding_for_lora {
-                    match self
-                        .embedder
-                        .embed(fact_text)
-                        .await
-                    {
+                    match self.embedder.embed(fact_text).await {
                         Ok(item_vec) => {
                             // update_lora_from_access is a no-op on plain EmbeddingProvider;
                             // LoraAdaptedEmbedder overrides it to apply the Hebbian update.
@@ -892,17 +883,24 @@ fn apply_temporal_scoring(
     // D2: collect expired TimeBounded fact IDs to remove before scoring
     let expired_ids: std::collections::HashSet<Uuid> = {
         use mnemo_core::models::edge::FactTemporalScope;
-        if matches!(temporal_intent, TemporalIntent::Current | TemporalIntent::Auto) {
-            block.facts.iter().filter_map(|f| {
-                if let Some(scope_json) = &f.temporal_scope {
-                    if let Ok(scope) = serde_json::from_str::<FactTemporalScope>(scope_json) {
-                        if !scope.is_current_at(now) {
-                            return Some(f.id);
+        if matches!(
+            temporal_intent,
+            TemporalIntent::Current | TemporalIntent::Auto
+        ) {
+            block
+                .facts
+                .iter()
+                .filter_map(|f| {
+                    if let Some(scope_json) = &f.temporal_scope {
+                        if let Ok(scope) = serde_json::from_str::<FactTemporalScope>(scope_json) {
+                            if !scope.is_current_at(now) {
+                                return Some(f.id);
+                            }
                         }
                     }
-                }
-                None
-            }).collect()
+                    None
+                })
+                .collect()
         } else {
             std::collections::HashSet::new()
         }
@@ -911,7 +909,11 @@ fn apply_temporal_scoring(
 
     for fact in &mut block.facts {
         // D2: Stable facts resist temporal decay — keep them at full relevance
-        let is_stable = fact.temporal_scope.as_deref().map(|s| s.contains("stable")).unwrap_or(false);
+        let is_stable = fact
+            .temporal_scope
+            .as_deref()
+            .map(|s| s.contains("stable"))
+            .unwrap_or(false);
         if is_stable {
             continue; // skip temporal adjustment for stable facts
         }
@@ -961,7 +963,10 @@ fn apply_temporal_scoring(
     // the episode is older than ~97 days.  Episodes within ~3 months still
     // qualify (score ≥ 0.01).  For Historical/Auto intents this filter does
     // not apply (temporal score semantics are different).
-    if matches!(temporal_intent, TemporalIntent::Current | TemporalIntent::Recent) {
+    if matches!(
+        temporal_intent,
+        TemporalIntent::Current | TemporalIntent::Recent
+    ) {
         let mut i = 0;
         block.episodes.retain(|_| {
             let keep = episode_temporal_scores
@@ -1613,16 +1618,27 @@ mod tests {
             created_at: as_of - Duration::days(540),
             relevance: 0.5,
         };
-        let score_near = score_episode_temporal(&near, TemporalIntent::Historical, Some(as_of), as_of);
-        let score_far = score_episode_temporal(&far, TemporalIntent::Historical, Some(as_of), as_of);
+        let score_near =
+            score_episode_temporal(&near, TemporalIntent::Historical, Some(as_of), as_of);
+        let score_far =
+            score_episode_temporal(&far, TemporalIntent::Historical, Some(as_of), as_of);
         assert!(
             score_near > score_far * 4.0,
             "near episode (90d, score={:.4}) should be >4× far episode (540d, score={:.4})",
-            score_near, score_far
+            score_near,
+            score_far
         );
         // Verify neither is collapsed to zero — differentiation is meaningful
-        assert!(score_near > 0.5, "90-day episode should score above 0.5, got {:.4}", score_near);
-        assert!(score_far > 0.001, "540-day episode should not collapse to zero, got {:.4}", score_far);
+        assert!(
+            score_near > 0.5,
+            "90-day episode should score above 0.5, got {:.4}",
+            score_near
+        );
+        assert!(
+            score_far > 0.001,
+            "540-day episode should not collapse to zero, got {:.4}",
+            score_far
+        );
     }
 
     #[test]
@@ -1646,12 +1662,15 @@ mod tests {
             created_at: "2024-01-01T12:00:00Z".parse().unwrap(),
             relevance: 0.5,
         };
-        let score_rust = score_episode_temporal(&rust_ep, TemporalIntent::Historical, Some(as_of), as_of);
-        let score_python = score_episode_temporal(&python_ep, TemporalIntent::Historical, Some(as_of), as_of);
+        let score_rust =
+            score_episode_temporal(&rust_ep, TemporalIntent::Historical, Some(as_of), as_of);
+        let score_python =
+            score_episode_temporal(&python_ep, TemporalIntent::Historical, Some(as_of), as_of);
         assert!(
             score_rust > score_python,
             "Rust (92d from as_of, {:.4}) should score higher than Python (517d, {:.4})",
-            score_rust, score_python
+            score_rust,
+            score_python
         );
     }
 
@@ -1670,7 +1689,7 @@ mod tests {
             session_id: Uuid::now_v7(),
             role: None,
             preview: "Alice joined StartupXYZ.".into(),
-            created_at: now - Duration::days(74),  // ~2 months — score≈0.030
+            created_at: now - Duration::days(74), // ~2 months — score≈0.030
             relevance: 0.005,
         });
         block.episodes.push(EpisodeSummary {
@@ -1678,7 +1697,7 @@ mod tests {
             session_id: Uuid::now_v7(),
             role: None,
             preview: "Alice works at TechCorp.".into(),
-            created_at: now - Duration::days(760),  // ~2 years — score≈0
+            created_at: now - Duration::days(760), // ~2 years — score≈0
             relevance: 0.004,
         });
 
@@ -1686,9 +1705,14 @@ mod tests {
 
         // Only the episode within ~97 days survives the stale filter
         assert_eq!(
-            block.episodes.len(), 1,
+            block.episodes.len(),
+            1,
             "stale episode (760d) should be dropped; remaining: {:?}",
-            block.episodes.iter().map(|e| &e.preview).collect::<Vec<_>>()
+            block
+                .episodes
+                .iter()
+                .map(|e| &e.preview)
+                .collect::<Vec<_>>()
         );
         assert!(
             block.episodes[0].preview.contains("StartupXYZ"),
@@ -1714,7 +1738,12 @@ mod tests {
             });
         }
         apply_temporal_scoring(&mut block, TemporalIntent::Current, None, None);
-        assert_eq!(block.episodes.len(), 3, "all recent episodes should survive; got {:?}", block.episodes.len());
+        assert_eq!(
+            block.episodes.len(),
+            3,
+            "all recent episodes should survive; got {:?}",
+            block.episodes.len()
+        );
     }
 
     #[test]
@@ -1735,9 +1764,18 @@ mod tests {
             relevance: 0.5,
         });
 
-        apply_temporal_scoring(&mut block, TemporalIntent::Historical, Some(as_of), Some(0.9));
+        apply_temporal_scoring(
+            &mut block,
+            TemporalIntent::Historical,
+            Some(as_of),
+            Some(0.9),
+        );
 
         // Must survive — it's close to as_of and Historical filter is not applied
-        assert_eq!(block.episodes.len(), 1, "historical intent must not filter episodes by recency");
+        assert_eq!(
+            block.episodes.len(),
+            1,
+            "historical intent must not filter episodes by recency"
+        );
     }
 }

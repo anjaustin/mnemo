@@ -24,6 +24,7 @@ use mnemo_core::models::guardrail::{
     EvalContext, EvaluateGuardrailsRequest, EvaluateGuardrailsResponse, GuardrailRule,
     GuardrailTrigger,
 };
+use mnemo_core::models::lora::{LoraFeedbackRequest, LoraFeedbackResponse, LoraStatsResponse};
 use mnemo_core::models::region::{
     validate_agent_id, validate_region_name, CreateRegionRequest, GrantRegionAccessRequest,
     MemoryRegion, MemoryRegionAcl, UpdateRegionRequest,
@@ -50,7 +51,6 @@ use mnemo_core::models::{
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
-use mnemo_core::models::lora::{LoraFeedbackRequest, LoraFeedbackResponse, LoraStatsResponse};
 use mnemo_core::traits::llm::EmbeddingProvider;
 use mnemo_core::traits::storage::{
     AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
@@ -103,12 +103,20 @@ struct ListResponse<T: Serialize> {
 impl<T: Serialize> ListResponse<T> {
     fn new(data: Vec<T>) -> Self {
         let count = data.len();
-        Self { data, count, next_cursor: None }
+        Self {
+            data,
+            count,
+            next_cursor: None,
+        }
     }
 
     fn with_cursor(data: Vec<T>, next_cursor: Option<String>) -> Self {
         let count = data.len();
-        Self { data, count, next_cursor }
+        Self {
+            data,
+            count,
+            next_cursor,
+        }
     }
 }
 
@@ -1163,7 +1171,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/users/:user/coherence", get(get_user_coherence))
         .route("/api/v1/memory/:user/stale", get(get_stale_facts))
         .route("/api/v1/memory/:user/revalidate", post(revalidate_fact))
-        .route("/api/v1/memory/:user/belief_changes", get(get_belief_changes))
+        .route(
+            "/api/v1/memory/:user/belief_changes",
+            get(get_belief_changes),
+        )
         .route(
             "/api/v1/memory/:user/clarifications",
             get(list_clarifications).post(generate_clarifications),
@@ -1251,7 +1262,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/import/chat-history", post(import_chat_history))
         .route("/api/v1/import/jobs/:job_id", get(get_import_job))
         // Agent registration lifecycle (Spec 02 D3)
-        .route("/api/v1/agents", post(register_agent).get(list_agents_handler))
+        .route(
+            "/api/v1/agents",
+            post(register_agent).get(list_agents_handler),
+        )
         .route(
             "/api/v1/agents/:agent_id",
             get(get_agent_handler).delete(delete_agent_handler),
@@ -1339,10 +1353,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/agents/:agent_id/lora/users",
             get(list_agent_lora_users),
         )
-        .route(
-            "/api/v1/agents/:agent_id/lora",
-            delete(delete_agent_lora),
-        )
+        .route("/api/v1/agents/:agent_id/lora", delete(delete_agent_lora))
         .route(
             "/api/v1/agents/:agent_id/feedback",
             post(post_agent_lora_feedback),
@@ -7717,7 +7728,11 @@ async fn register_agent(
         .state_store
         .register_agent(&agent_id, req.description)
         .await?;
-    let status = if is_new { StatusCode::CREATED } else { StatusCode::OK };
+    let status = if is_new {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
     Ok((status, Json(profile)))
 }
 
@@ -10019,13 +10034,11 @@ fn fallback_temporal_score(
 fn fallback_keyword_score(query: &str, content: &str) -> f64 {
     // Common English stop-words to skip so short function-words don't dominate.
     const STOPWORDS: &[&str] = &[
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "shall",
-        "should", "may", "might", "can", "could", "of", "in", "on", "at",
-        "to", "for", "with", "by", "from", "as", "or", "and", "but", "not",
-        "what", "when", "where", "who", "how", "why", "which", "that", "this",
-        "it", "its", "he", "she", "they", "we", "i", "you", "my", "your",
-        "his", "her", "their", "our", "their", "s",
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "shall", "should", "may", "might", "can", "could",
+        "of", "in", "on", "at", "to", "for", "with", "by", "from", "as", "or", "and", "but", "not",
+        "what", "when", "where", "who", "how", "why", "which", "that", "this", "it", "its", "he",
+        "she", "they", "we", "i", "you", "my", "your", "his", "her", "their", "our", "their", "s",
     ];
 
     let content_lower = content.to_lowercase();
@@ -13242,7 +13255,12 @@ async fn evaluate_guardrails(
     caller.require_role(ApiKeyRole::Read)?;
 
     let rules = match body.user_id {
-        Some(uid) => state.state_store.list_guardrails_for_user(uid, None).await?,
+        Some(uid) => {
+            state
+                .state_store
+                .list_guardrails_for_user(uid, None)
+                .await?
+        }
         None => state.state_store.list_guardrails().await?,
     };
 
@@ -13294,11 +13312,7 @@ async fn get_agent_lora_stats(
 
     // User-level (global) adapter if requested
     if include_global {
-        if let Some(weights) = state
-            .state_store
-            .get_lora_weights(user.id, None)
-            .await?
-        {
+        if let Some(weights) = state.state_store.get_lora_weights(user.id, None).await? {
             stats_list.push(LoraStatsResponse::from(&weights));
         }
     }
@@ -13346,10 +13360,7 @@ async fn delete_agent_lora(
             }
         }
         "global" => {
-            state
-                .state_store
-                .delete_lora_weights(user.id, None)
-                .await?;
+            state.state_store.delete_lora_weights(user.id, None).await?;
             if let Some(lora) = &state.lora_embedder {
                 lora.evict_cache(user.id, None).await;
             }
@@ -13359,10 +13370,7 @@ async fn delete_agent_lora(
                 .state_store
                 .delete_lora_weights(user.id, Some(&agent_id))
                 .await?;
-            state
-                .state_store
-                .delete_lora_weights(user.id, None)
-                .await?;
+            state.state_store.delete_lora_weights(user.id, None).await?;
             if let Some(lora) = &state.lora_embedder {
                 lora.evict_cache(user.id, Some(&agent_id)).await;
                 lora.evict_cache(user.id, None).await;
@@ -13457,12 +13465,7 @@ async fn post_agent_lora_feedback(
         };
 
         // Embed the item's fact text (base embedding, no adaptation)
-        let v_item = match state
-            .retrieval
-            .embedder()
-            .embed(&edge.fact)
-            .await
-        {
+        let v_item = match state.retrieval.embedder().embed(&edge.fact).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(id = %item_id, error = %e, "feedback: failed to embed item fact");
@@ -13528,10 +13531,8 @@ async fn list_agent_lora_users(
         .await?;
 
     // Convert to stats and sort by last_updated descending
-    let mut stats: Vec<LoraStatsResponse> = weights_list
-        .iter()
-        .map(LoraStatsResponse::from)
-        .collect();
+    let mut stats: Vec<LoraStatsResponse> =
+        weights_list.iter().map(LoraStatsResponse::from).collect();
     stats.sort_by(|a, b| b.last_updated.cmp(&a.last_updated));
 
     Ok((StatusCode::OK, Json(stats)))

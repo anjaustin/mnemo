@@ -50,6 +50,7 @@ impl MockLlm {
                 confidence: 0.95,
                 valid_at: None,
                 classification: Default::default(),
+                temporal_scope: None,
             }],
         }
     }
@@ -333,6 +334,7 @@ async fn setup_user_session(store: &RedisStateStore) -> (Uuid, Uuid) {
         .create_session(CreateSessionRequest {
             id: None,
             user_id: user.id,
+            agent_id: None,
             name: None,
             metadata: serde_json::json!({}),
         })

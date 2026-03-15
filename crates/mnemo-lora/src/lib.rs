@@ -244,12 +244,7 @@ where
     }
 
     /// Apply adaptation and return the adapted vector.
-    async fn adapt_vec(
-        &self,
-        base: Vec<f32>,
-        user_id: Uuid,
-        agent_id: Option<&str>,
-    ) -> Vec<f32> {
+    async fn adapt_vec(&self, base: Vec<f32>, user_id: Uuid, agent_id: Option<&str>) -> Vec<f32> {
         if !self.enabled {
             return base;
         }
@@ -281,9 +276,9 @@ where
         // Get current adapter, update it, write back to cache + Redis
         let updated = {
             let mut cache = self.cache.write().await;
-            let adapter = cache
-                .entry(key.clone())
-                .or_insert_with(|| LoraAdapter::new(user_id, agent_id.map(|s| s.to_string()), self.dims));
+            let adapter = cache.entry(key.clone()).or_insert_with(|| {
+                LoraAdapter::new(user_id, agent_id.map(|s| s.to_string()), self.dims)
+            });
 
             adapter.update_from_access(v_query, v_item);
             adapter.clone()
@@ -320,9 +315,9 @@ where
 
         let updated = {
             let mut cache = self.cache.write().await;
-            let adapter = cache
-                .entry(key.clone())
-                .or_insert_with(|| LoraAdapter::new(user_id, agent_id.map(|s| s.to_string()), self.dims));
+            let adapter = cache.entry(key.clone()).or_insert_with(|| {
+                LoraAdapter::new(user_id, agent_id.map(|s| s.to_string()), self.dims)
+            });
 
             adapter.update_with_rating(v_query, v_item, rating);
             adapter.clone()
@@ -410,7 +405,8 @@ where
         user_id: Uuid,
         agent_id: Option<&str>,
     ) {
-        self.update_from_access(v_query, v_item, user_id, agent_id).await;
+        self.update_from_access(v_query, v_item, user_id, agent_id)
+            .await;
     }
 
     /// Apply an explicit-feedback LoRA weight update with a signed rating.
@@ -424,7 +420,8 @@ where
         user_id: Uuid,
         agent_id: Option<&str>,
     ) {
-        self.update_with_rating(v_query, v_item, rating, user_id, agent_id).await;
+        self.update_with_rating(v_query, v_item, rating, user_id, agent_id)
+            .await;
     }
 }
 
@@ -502,7 +499,10 @@ mod tests {
 
     fn make_embedder(enabled: bool) -> LoraAdaptedEmbedder<ConstEmbedder, NoopLoraStore> {
         LoraAdaptedEmbedder::new(
-            Arc::new(ConstEmbedder { value: 0.5, dims: 16 }),
+            Arc::new(ConstEmbedder {
+                value: 0.5,
+                dims: 16,
+            }),
             Arc::new(NoopLoraStore),
             enabled,
         )
@@ -512,7 +512,10 @@ mod tests {
     async fn test_disabled_passthrough() {
         let e = make_embedder(false);
         let uid = Uuid::from_u128(1);
-        let v = e.embed_for_agent("hello", uid, Some("agent1")).await.unwrap();
+        let v = e
+            .embed_for_agent("hello", uid, Some("agent1"))
+            .await
+            .unwrap();
         assert_eq!(v, vec![0.5f32; 16], "disabled → must be identity");
     }
 
@@ -521,7 +524,10 @@ mod tests {
         // B=0 → residual=0 → output == base
         let e = make_embedder(true);
         let uid = Uuid::from_u128(2);
-        let v = e.embed_for_agent("hello", uid, Some("agent1")).await.unwrap();
+        let v = e
+            .embed_for_agent("hello", uid, Some("agent1"))
+            .await
+            .unwrap();
         // Fresh adapter has B=0, so adapted == base
         assert_eq!(v, vec![0.5f32; 16], "fresh adapter must be identity");
     }
@@ -559,7 +565,8 @@ mod tests {
         let _ = e.embed_for_agent("x", uid, Some("bot")).await.unwrap();
 
         // Apply update
-        e.update_from_access(&v_query, &v_item, uid, Some("bot")).await;
+        e.update_from_access(&v_query, &v_item, uid, Some("bot"))
+            .await;
 
         // The cached adapter should now have update_count=1
         let cache = e.cache.read().await;
@@ -588,13 +595,8 @@ mod tests {
             let e2 = e.clone();
             handles.push(task::spawn(async move {
                 for _ in 0..10 {
-                    e2.update_from_access(
-                        &vec![1.0f32; 16],
-                        &vec![0.5f32; 16],
-                        uid,
-                        Some(agent),
-                    )
-                    .await;
+                    e2.update_from_access(&vec![1.0f32; 16], &vec![0.5f32; 16], uid, Some(agent))
+                        .await;
                 }
             }));
         }
@@ -652,16 +654,30 @@ mod tests {
         // After updates B should be non-zero → adapted output differs from base
         let v_after = {
             let cache = e.cache.read().await;
-            let key = LoraAdaptedEmbedder::<ConstEmbedder, NoopLoraStore>::cache_key(uid, Some("bot"));
+            let key =
+                LoraAdaptedEmbedder::<ConstEmbedder, NoopLoraStore>::cache_key(uid, Some("bot"));
             let adapter = cache.get(&key).unwrap();
             // Verify B is non-zero
-            let b_norm: f32 = adapter.weights.b_flat.iter().map(|x| x * x).sum::<f32>().sqrt();
-            assert!(b_norm > 1e-8, "B must be non-zero after updates, norm={}", b_norm);
+            let b_norm: f32 = adapter
+                .weights
+                .b_flat
+                .iter()
+                .map(|x| x * x)
+                .sum::<f32>()
+                .sqrt();
+            assert!(
+                b_norm > 1e-8,
+                "B must be non-zero after updates, norm={}",
+                b_norm
+            );
             adapter.apply(&vec![0.5f32; 16])
         };
 
         // v_before is identity (B=0), v_after has B non-zero → must differ
-        let changed = v_before.iter().zip(v_after.iter()).any(|(a, b)| (a - b).abs() > 1e-7);
+        let changed = v_before
+            .iter()
+            .zip(v_after.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-7);
         assert!(changed, "adapter output should change after updates");
     }
 
@@ -677,16 +693,29 @@ mod tests {
 
         // Apply 10 zero-rating updates — should not change anything
         for _ in 0..10 {
-            e.update_with_rating(&query, &item, 0.0, uid, Some("bot")).await;
+            e.update_with_rating(&query, &item, 0.0, uid, Some("bot"))
+                .await;
         }
 
         let cache = e.cache.read().await;
         let key = LoraAdaptedEmbedder::<ConstEmbedder, NoopLoraStore>::cache_key(uid, Some("bot"));
         // Either the adapter was never inserted (all no-ops) or update_count == 0
         if let Some(adapter) = cache.get(&key) {
-            assert_eq!(adapter.weights.update_count, 0, "zero-rating updates must not increment update_count");
-            let b_norm: f32 = adapter.weights.b_flat.iter().map(|x| x * x).sum::<f32>().sqrt();
-            assert!(b_norm < 1e-8, "B must remain zero after zero-rating updates");
+            assert_eq!(
+                adapter.weights.update_count, 0,
+                "zero-rating updates must not increment update_count"
+            );
+            let b_norm: f32 = adapter
+                .weights
+                .b_flat
+                .iter()
+                .map(|x| x * x)
+                .sum::<f32>()
+                .sqrt();
+            assert!(
+                b_norm < 1e-8,
+                "B must remain zero after zero-rating updates"
+            );
         }
     }
 
@@ -716,8 +745,14 @@ mod tests {
         let b_neg = &adapter_neg.weights.b_flat;
 
         // They must differ
-        let differ = b_pos.iter().zip(b_neg.iter()).any(|(p, n)| (p - n).abs() > 1e-8);
-        assert!(differ, "positive and negative single-step updates must produce different B");
+        let differ = b_pos
+            .iter()
+            .zip(b_neg.iter())
+            .any(|(p, n)| (p - n).abs() > 1e-8);
+        assert!(
+            differ,
+            "positive and negative single-step updates must produce different B"
+        );
 
         // B_pos + B_neg should be zero (exact cancellation, no clamping after 1 step)
         for (i, (p, n)) in b_pos.iter().zip(b_neg.iter()).enumerate() {

@@ -304,10 +304,7 @@ pub trait EdgeStore: Send + Sync {
 #[allow(async_fn_in_trait)]
 pub trait BeliefChangeStore: Send + Sync {
     /// Persist a detected belief change.
-    async fn record_belief_change(
-        &self,
-        change: BeliefChange,
-    ) -> StorageResult<()>;
+    async fn record_belief_change(&self, change: BeliefChange) -> StorageResult<()>;
 
     /// List belief changes for a user, optionally filtered by `since`.
     async fn list_belief_changes(
@@ -715,30 +712,21 @@ pub trait LoraStore: Send + Sync {
 
     /// Delete the LoRA adapter for a specific `(user_id, agent_id)`.
     /// `agent_id = None` deletes the user-level adapter.
-    async fn delete_lora_weights(
-        &self,
-        user_id: Uuid,
-        agent_id: Option<&str>,
-    ) -> StorageResult<()>;
+    async fn delete_lora_weights(&self, user_id: Uuid, agent_id: Option<&str>)
+        -> StorageResult<()>;
 
     /// Delete all LoRA adapters for a user (called on user deletion / GDPR wipe).
     async fn delete_all_lora_weights_for_user(&self, user_id: Uuid) -> StorageResult<()>;
 
     /// List all adapters for a user (used by stats endpoint).
-    async fn list_lora_weights_for_user(
-        &self,
-        user_id: Uuid,
-    ) -> StorageResult<Vec<LoraWeights>>;
+    async fn list_lora_weights_for_user(&self, user_id: Uuid) -> StorageResult<Vec<LoraWeights>>;
 
     /// List all adapters the given agent has with any user.
     ///
     /// Used by the homeoadaptive stats endpoint so an agent can inspect the
     /// distribution of user profiles it has accumulated.  Returns an empty
     /// Vec when the agent has no trained adapters yet.
-    async fn list_lora_weights_for_agent(
-        &self,
-        agent_id: &str,
-    ) -> StorageResult<Vec<LoraWeights>>;
+    async fn list_lora_weights_for_agent(&self, agent_id: &str) -> StorageResult<Vec<LoraWeights>>;
 }
 
 // ─── Composite Traits ──────────────────────────────────────────────
