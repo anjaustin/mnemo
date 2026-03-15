@@ -1,0 +1,204 @@
+//! LoRA adapter weight storage model.
+//!
+//! Each `LoraWeights` record stores the two low-rank projection matrices
+//! (A and B) for a specific `(user_id, agent_id)` pair.  A `None` agent_id
+//! means a user-level adapter shared by all agents for that user.
+//!
+//! **Matrix shapes** (d=embedding dimensions, r=rank, typically r=8):
+//! - `a_matrix`: r × d  (down-projection)
+//! - `b_matrix`: d × r  (up-projection)
+//!
+//! **Adaptation formula:**
+//! `v_adapted = v_base + scale * B · (A · v_base)`
+//!
+//! B is zero-initialized → adapter is identity at start.
+//! A is Kaiming-initialized → bounded initial projection.
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// Persisted LoRA adapter weights for one `(user_id, agent_id)` pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoraWeights {
+    /// User who owns this adapter.
+    pub user_id: Uuid,
+    /// Agent this adapter belongs to.  `None` = user-level adapter (no agent).
+    pub agent_id: Option<String>,
+    /// Down-projection matrix A, shape r×d, stored as a flat Vec (row-major).
+    /// Element `[i][j]` = `a_matrix[i * dims + j]`.
+    pub a_flat: Vec<f32>,
+    /// Up-projection matrix B, shape d×r, stored as a flat Vec (row-major).
+    /// Element `[i][j]` = `b_flat[i * rank + j]`.
+    pub b_flat: Vec<f32>,
+    /// Fixed scale factor: `alpha / rank` (default 0.125 for rank=8, alpha=1.0).
+    pub scale: f32,
+    /// Embedding dimension `d` (must match the base embedder's output).
+    pub dims: usize,
+    /// LoRA rank `r`.
+    pub rank: usize,
+    /// Number of implicit-feedback update steps applied.
+    pub update_count: u64,
+    /// Unix timestamp (seconds) of the most recent update.
+    pub last_updated: i64,
+}
+
+impl LoraWeights {
+    /// Default rank used when creating a fresh adapter.
+    pub const DEFAULT_RANK: usize = 8;
+
+    /// Default scale: `alpha / rank = 1.0 / 8.0`.
+    pub const DEFAULT_SCALE: f32 = 1.0 / Self::DEFAULT_RANK as f32;
+
+    /// Create a new adapter with the identity residual (B=0, A=Kaiming).
+    ///
+    /// The adapter starts as a pure pass-through: `v_adapted = v_base + 0`.
+    /// Updates gradually shift A and B to encode the agent's relevance priors.
+    pub fn initialize(user_id: Uuid, agent_id: Option<String>, dims: usize) -> Self {
+        let rank = Self::DEFAULT_RANK;
+        let scale = Self::DEFAULT_SCALE;
+
+        // B = 0 (standard LoRA init — zero residual at start)
+        let b_flat = vec![0.0f32; dims * rank];
+
+        // A = Kaiming uniform: range [-k, k] where k = sqrt(1 / dims)
+        // Deterministic seed so the same (user, agent) always gets the same A.
+        // This is intentional: A is not trained, only B is.
+        let k = (1.0_f32 / dims as f32).sqrt();
+        let a_flat: Vec<f32> = (0..rank * dims)
+            .map(|i| {
+                // Deterministic pseudo-random using a hash of the index
+                let x = (i as f32 * 2654435761.0_f32) % (1 << 24) as f32;
+                let normalized = x / (1 << 24) as f32; // [0, 1)
+                (normalized * 2.0 - 1.0) * k // [-k, k]
+            })
+            .collect();
+
+        let now = chrono::Utc::now().timestamp();
+
+        Self {
+            user_id,
+            agent_id,
+            a_flat,
+            b_flat,
+            scale,
+            dims,
+            rank,
+            update_count: 0,
+            last_updated: now,
+        }
+    }
+
+    /// Return a human-readable key for logging.
+    pub fn key_string(&self) -> String {
+        match &self.agent_id {
+            Some(id) => format!("{}:{}", self.user_id, id),
+            None => format!("{}:__global__", self.user_id),
+        }
+    }
+}
+
+/// Request to reset (delete) an agent's LoRA adapter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetLoraRequest {
+    /// If true, reset the user-level (agentless) adapter too.
+    pub reset_global: bool,
+}
+
+/// Response from the LoRA stats endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LoraStatsResponse {
+    pub user_id: Uuid,
+    pub agent_id: Option<String>,
+    pub update_count: u64,
+    pub last_updated: i64,
+    pub dims: usize,
+    pub rank: usize,
+    pub scale: f32,
+    /// Frobenius norm of B (proxy for how much the adapter has diverged from identity).
+    pub b_frobenius_norm: f32,
+}
+
+impl From<&LoraWeights> for LoraStatsResponse {
+    fn from(w: &LoraWeights) -> Self {
+        let b_norm = w.b_flat.iter().map(|x| x * x).sum::<f32>().sqrt();
+        Self {
+            user_id: w.user_id,
+            agent_id: w.agent_id.clone(),
+            update_count: w.update_count,
+            last_updated: w.last_updated,
+            dims: w.dims,
+            rank: w.rank,
+            scale: w.scale,
+            b_frobenius_norm: b_norm,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_initialize_zero_b() {
+        let w = LoraWeights::initialize(Uuid::from_u128(1), Some("agent1".into()), 384);
+        assert_eq!(w.b_flat.len(), 384 * 8);
+        assert!(
+            w.b_flat.iter().all(|&x| x == 0.0),
+            "B must be zero-initialized"
+        );
+    }
+
+    #[test]
+    fn test_initialize_nonzero_a() {
+        let w = LoraWeights::initialize(Uuid::from_u128(1), Some("agent1".into()), 384);
+        assert_eq!(w.a_flat.len(), 8 * 384);
+        let nonzero = w.a_flat.iter().filter(|&&x| x != 0.0).count();
+        assert!(nonzero > 0, "A should have non-zero entries");
+    }
+
+    #[test]
+    fn test_initialize_dims_and_rank() {
+        let w = LoraWeights::initialize(Uuid::from_u128(2), None, 384);
+        assert_eq!(w.dims, 384);
+        assert_eq!(w.rank, 8);
+        assert!((w.scale - 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_key_string_with_agent() {
+        let uid = Uuid::from_u128(1);
+        let w = LoraWeights::initialize(uid, Some("my-agent".into()), 384);
+        assert!(w.key_string().ends_with(":my-agent"));
+    }
+
+    #[test]
+    fn test_key_string_global() {
+        let uid = Uuid::from_u128(1);
+        let w = LoraWeights::initialize(uid, None, 384);
+        assert!(w.key_string().ends_with(":__global__"));
+    }
+
+    #[test]
+    fn test_stats_response_zero_norm_for_fresh_adapter() {
+        let w = LoraWeights::initialize(Uuid::from_u128(1), Some("agent".into()), 384);
+        let stats = LoraStatsResponse::from(&w);
+        assert!(
+            stats.b_frobenius_norm < 1e-6,
+            "Fresh adapter B norm must be 0"
+        );
+    }
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        let w = LoraWeights::initialize(Uuid::from_u128(42), Some("bot".into()), 384);
+        let json = serde_json::to_string(&w).unwrap();
+        let w2: LoraWeights = serde_json::from_str(&json).unwrap();
+        assert_eq!(w.dims, w2.dims);
+        assert_eq!(w.rank, w2.rank);
+        assert_eq!(w.b_flat.len(), w2.b_flat.len());
+        assert_eq!(w.a_flat.len(), w2.a_flat.len());
+        for i in 0..w.a_flat.len() {
+            assert!((w.a_flat[i] - w2.a_flat[i]).abs() < 1e-7);
+        }
+    }
+}

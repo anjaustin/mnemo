@@ -21,6 +21,7 @@ use mnemo_core::models::{
     entity::Entity,
     episode::{CreateEpisodeRequest, Episode, ListEpisodesParams, ProcessingStatus},
     guardrail::GuardrailRule,
+    lora::LoraWeights,
     region::{MemoryRegion, MemoryRegionAcl},
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     span::LlmSpan,
@@ -2970,5 +2971,110 @@ impl RegionStore for RedisStateStore {
         }
 
         Ok(regions)
+    }
+}
+
+// ─── LoraStore impl ────────────────────────────────────────────────
+//
+// Key schema:
+//   {prefix}lora:{user_id}:{agent_id_or___global__}   → JSON LoraWeights
+//   {prefix}lora_idx:{user_id}                         → Set of agent_id keys
+//
+// No TTL — adapters persist until explicitly deleted or user is wiped.
+
+impl LoraStore for RedisStateStore {
+    async fn get_lora_weights(
+        &self,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) -> StorageResult<Option<LoraWeights>> {
+        let slot = agent_id.unwrap_or("__global__");
+        let key = self.key(&["lora", &user_id.to_string(), slot]);
+        self.get_json(&key).await
+    }
+
+    async fn save_lora_weights(&self, weights: &LoraWeights) -> StorageResult<()> {
+        let slot = weights
+            .agent_id
+            .as_deref()
+            .unwrap_or("__global__");
+        let key = self.key(&["lora", &weights.user_id.to_string(), slot]);
+        let idx_key = self.key(&["lora_idx", &weights.user_id.to_string()]);
+
+        self.set_json(&key, weights).await?;
+
+        // Track the slot in the user's index set so list_lora_weights_for_user works
+        let mut conn = self.conn.clone();
+        conn.sadd::<_, _, ()>(&idx_key, slot)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_lora_weights(
+        &self,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) -> StorageResult<()> {
+        let slot = agent_id.unwrap_or("__global__");
+        let key = self.key(&["lora", &user_id.to_string(), slot]);
+        let idx_key = self.key(&["lora_idx", &user_id.to_string()]);
+
+        self.del(&key).await?;
+
+        let mut conn = self.conn.clone();
+        conn.srem::<_, _, ()>(&idx_key, slot)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_all_lora_weights_for_user(&self, user_id: Uuid) -> StorageResult<()> {
+        let idx_key = self.key(&["lora_idx", &user_id.to_string()]);
+        let mut conn = self.conn.clone();
+
+        // Fetch all known slots for this user
+        let slots: Vec<String> = conn
+            .smembers(&idx_key)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        if !slots.is_empty() {
+            let mut pipe = redis::pipe();
+            for slot in &slots {
+                let key = self.key(&["lora", &user_id.to_string(), slot]);
+                pipe.del(&key).ignore();
+            }
+            pipe.del(&idx_key).ignore();
+            pipe.exec_async(&mut conn)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        } else {
+            // Still delete the index key in case it exists
+            self.del(&idx_key).await?;
+        }
+        Ok(())
+    }
+
+    async fn list_lora_weights_for_user(
+        &self,
+        user_id: Uuid,
+    ) -> StorageResult<Vec<LoraWeights>> {
+        let idx_key = self.key(&["lora_idx", &user_id.to_string()]);
+        let mut conn = self.conn.clone();
+
+        let slots: Vec<String> = conn
+            .smembers(&idx_key)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut results = Vec::with_capacity(slots.len());
+        for slot in &slots {
+            let key = self.key(&["lora", &user_id.to_string(), slot]);
+            if let Some(w) = self.get_json::<LoraWeights>(&key).await? {
+                results.push(w);
+            }
+        }
+        Ok(results)
     }
 }

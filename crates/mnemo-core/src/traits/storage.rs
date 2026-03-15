@@ -490,6 +490,7 @@ pub trait SpanStore: Send + Sync {
 
 use crate::models::clarification::ClarificationRequest;
 use crate::models::goal::GoalProfile;
+use crate::models::lora::LoraWeights;
 use crate::models::narrative::UserNarrative;
 
 /// Persistence for self-healing memory clarification requests.
@@ -688,6 +689,48 @@ pub trait RegionStore: Send + Sync {
     ) -> StorageResult<Vec<MemoryRegion>>;
 }
 
+// ─── LoRA Adapter Storage ──────────────────────────────────────────
+
+/// Persistence for per-`(user_id, agent_id)` LoRA adapter weights.
+///
+/// Redis key schema: `{prefix}lora:{user_id}:{agent_id_or___global__}`
+///
+/// Keys have no TTL — adapters persist until explicitly deleted or the user
+/// is deleted (GDPR path). The adapter is small (~25 KB for d=384, r=8) and
+/// safe to keep indefinitely.
+#[allow(async_fn_in_trait)]
+pub trait LoraStore: Send + Sync {
+    /// Load the LoRA weights for a `(user_id, agent_id)` pair.
+    ///
+    /// Returns `None` if no adapter has been trained for this pair yet.
+    /// `agent_id = None` retrieves the user-level (agentless) adapter.
+    async fn get_lora_weights(
+        &self,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) -> StorageResult<Option<LoraWeights>>;
+
+    /// Persist (create or overwrite) the LoRA weights for a `(user_id, agent_id)` pair.
+    async fn save_lora_weights(&self, weights: &LoraWeights) -> StorageResult<()>;
+
+    /// Delete the LoRA adapter for a specific `(user_id, agent_id)`.
+    /// `agent_id = None` deletes the user-level adapter.
+    async fn delete_lora_weights(
+        &self,
+        user_id: Uuid,
+        agent_id: Option<&str>,
+    ) -> StorageResult<()>;
+
+    /// Delete all LoRA adapters for a user (called on user deletion / GDPR wipe).
+    async fn delete_all_lora_weights_for_user(&self, user_id: Uuid) -> StorageResult<()>;
+
+    /// List all adapters for a user (used by stats endpoint).
+    async fn list_lora_weights_for_user(
+        &self,
+        user_id: Uuid,
+    ) -> StorageResult<Vec<LoraWeights>>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -708,6 +751,7 @@ pub trait StateStore:
     + ViewStore
     + GuardrailStore
     + RegionStore
+    + LoraStore
 {
 }
 
@@ -728,6 +772,7 @@ impl<T> StateStore for T where
         + ViewStore
         + GuardrailStore
         + RegionStore
+        + LoraStore
 {
 }
 

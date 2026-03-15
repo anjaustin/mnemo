@@ -20,6 +20,7 @@ pub mod entity;
 pub mod episode;
 pub mod goal;
 pub mod guardrail;
+pub mod lora;
 pub mod narrative;
 pub mod region;
 pub mod session;

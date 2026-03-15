@@ -760,11 +760,11 @@ where
                 new_entity_ids.push(created.id);
                 let emb = self
                     .embedder
-                    .embed(&format!(
-                        "{} ({})",
-                        created.name,
-                        created.entity_type.as_str()
-                    ))
+                    .embed_for_agent(
+                        &format!("{} ({})", created.name, created.entity_type.as_str()),
+                        episode.user_id,
+                        episode.agent_id.as_deref(),
+                    )
                     .await?;
                 self.vector_store.upsert_entity_embedding(
                     created.id, created.user_id, emb,
@@ -881,7 +881,14 @@ where
                 });
             }
 
-            let emb = self.embedder.embed(&created.fact).await?;
+            let emb = self
+                .embedder
+                .embed_for_agent(
+                    &created.fact,
+                    episode.user_id,
+                    episode.agent_id.as_deref(),
+                )
+                .await?;
             self.vector_store
                 .upsert_edge_embedding(
                     created.id,
@@ -895,7 +902,14 @@ where
         // 5. Episode embedding
         let embed_start = chrono::Utc::now();
         let embed_t0 = Instant::now();
-        let ep_emb = self.embedder.embed(&episode.content).await;
+        let ep_emb = self
+            .embedder
+            .embed_for_agent(
+                &episode.content,
+                episode.user_id,
+                episode.agent_id.as_deref(),
+            )
+            .await;
         let embed_elapsed = embed_t0.elapsed();
         let embed_ok = ep_emb.is_ok();
         self.record_span(LlmSpan {

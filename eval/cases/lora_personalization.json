@@ -1,0 +1,244 @@
+[
+  {
+    "id": "lp-001",
+    "category": "lora_personalization",
+    "description": "Supervisor agent retrieves deadline-focused facts preferentially",
+    "setup": [
+      {
+        "role": "user",
+        "content": "The Q4 product launch is scheduled for December 15th. The engineering team must freeze code by December 1st. Marketing needs assets by November 28th."
+      },
+      {
+        "role": "user",
+        "content": "Alice is leading the frontend. Bob is handling backend APIs. Carol owns DevOps pipelines."
+      }
+    ],
+    "query": "What are the critical deadlines?",
+    "agent_id": "supervisor-agent",
+    "expected_in_context": ["December 15", "December 1", "November 28"],
+    "should_not_contain": [],
+    "notes": "Supervisor should surface deadline-type facts highly; LoRA should not degrade base retrieval quality"
+  },
+  {
+    "id": "lp-002",
+    "category": "lora_personalization",
+    "description": "Analyst agent retrieves metric/data-focused facts",
+    "setup": [
+      {
+        "role": "user",
+        "content": "MAU reached 2.4 million in October, up 18% month-over-month. Churn dropped from 4.2% to 3.1%. NPS improved from 42 to 58 over Q3."
+      },
+      {
+        "role": "user",
+        "content": "The team shipped 14 features in Q3. Engineering velocity was 87 story points per sprint."
+      }
+    ],
+    "query": "What are the key metrics?",
+    "agent_id": "analyst-agent",
+    "expected_in_context": ["2.4 million", "18%", "3.1%"],
+    "should_not_contain": [],
+    "notes": "Analyst agent should surface quantitative facts without degrading other agents"
+  },
+  {
+    "id": "lp-003",
+    "category": "lora_personalization",
+    "description": "Worker agent retrieves task-instruction facts",
+    "setup": [
+      {
+        "role": "user",
+        "content": "To deploy the service: 1) run database migrations first, 2) update the config map, 3) roll out the new image using kubectl, 4) monitor error rates for 10 minutes before marking as complete."
+      },
+      {
+        "role": "user",
+        "content": "The on-call rotation is Alice (Monday-Wednesday), Bob (Thursday-Saturday), Carol (Sunday)."
+      }
+    ],
+    "query": "How do I deploy the service?",
+    "agent_id": "worker-agent",
+    "expected_in_context": ["migrations", "config map", "kubectl"],
+    "should_not_contain": [],
+    "notes": "Worker agent should retrieve procedural/instructional content"
+  },
+  {
+    "id": "lp-004",
+    "category": "lora_personalization",
+    "description": "Fresh adapter (B=0) produces same result as unadapted base embedding",
+    "setup": [
+      {
+        "role": "user",
+        "content": "Project Alpha is scheduled for March 2026. Budget is $500,000. Team size is 8 engineers."
+      }
+    ],
+    "query": "Tell me about Project Alpha",
+    "agent_id": "new-agent-no-history",
+    "expected_in_context": ["Project Alpha", "March 2026", "$500,000"],
+    "should_not_contain": [],
+    "notes": "A fresh adapter with B=0 must not degrade retrieval; output must equal base embedding"
+  },
+  {
+    "id": "lp-005",
+    "category": "lora_personalization",
+    "description": "Multiple agents share memory space without cross-contamination",
+    "setup": [
+      {
+        "role": "user",
+        "content": "Agent A's primary task is customer success. Agent B's primary task is revenue forecasting. Agent C's primary task is technical support."
+      }
+    ],
+    "query": "What is my primary task?",
+    "agent_id": "agent-a",
+    "expected_in_context": ["customer success"],
+    "should_not_contain": ["revenue forecasting", "technical support"],
+    "notes": "Agent-specific LoRA should not retrieve facts owned by other agents"
+  },
+  {
+    "id": "lp-006",
+    "category": "lora_personalization",
+    "description": "LoRA adapter reset returns adapter to identity state",
+    "setup": [
+      {
+        "role": "user",
+        "content": "The system processes 50,000 requests per day. Peak load is 8,000 requests per hour at 2pm UTC."
+      }
+    ],
+    "query": "What is system load?",
+    "agent_id": "ops-agent",
+    "expected_in_context": ["50,000", "8,000"],
+    "should_not_contain": [],
+    "notes": "After DELETE /api/v1/agents/ops-agent/lora, retrieval should still work via base embedding"
+  },
+  {
+    "id": "lp-007",
+    "category": "lora_personalization",
+    "description": "embed_for_agent with no agent_id uses user-level adapter",
+    "setup": [
+      {
+        "role": "user",
+        "content": "The organization has three divisions: Engineering, Sales, and Operations. Each has its own P&L."
+      }
+    ],
+    "query": "What divisions exist?",
+    "agent_id": null,
+    "expected_in_context": ["Engineering", "Sales", "Operations"],
+    "should_not_contain": [],
+    "notes": "Null agent_id should use the user-level global adapter (or identity if none exists)"
+  },
+  {
+    "id": "lp-008",
+    "category": "lora_personalization",
+    "description": "Adapter update_count increments after each access",
+    "setup": [
+      {
+        "role": "user",
+        "content": "The API rate limit is 1000 requests per minute. Burst allowance is 200 additional requests."
+      }
+    ],
+    "query": "What is the rate limit?",
+    "agent_id": "api-agent",
+    "expected_in_context": ["1000 requests per minute"],
+    "should_not_contain": [],
+    "notes": "After retrieval, GET /api/v1/agents/api-agent/lora/stats should show update_count > 0"
+  },
+  {
+    "id": "lp-009",
+    "category": "lora_personalization",
+    "description": "LoRA disabled (MNEMO_LORA_ENABLED=false) yields identical results to base",
+    "setup": [
+      {
+        "role": "user",
+        "content": "The database cluster has 3 replicas. Write latency p99 is 12ms. Read latency p99 is 2ms."
+      }
+    ],
+    "query": "What are the database performance numbers?",
+    "agent_id": "db-agent",
+    "expected_in_context": ["12ms", "2ms", "3 replicas"],
+    "should_not_contain": [],
+    "notes": "When disabled, embed_for_agent delegates to embed; no behavioral change expected"
+  },
+  {
+    "id": "lp-010",
+    "category": "lora_personalization",
+    "description": "B matrix clamped to max_norm=10 after many updates",
+    "setup": [
+      {
+        "role": "user",
+        "content": "The CI pipeline runs 450 tests in under 3 minutes. Flaky test rate is 0.2%. Build cache hit rate is 87%."
+      }
+    ],
+    "query": "How fast is the CI pipeline?",
+    "agent_id": "ci-agent",
+    "expected_in_context": ["450 tests", "3 minutes"],
+    "should_not_contain": [],
+    "notes": "After many implicit feedback updates, B norm should be clamped at 10.0; retrieval must not degrade"
+  },
+  {
+    "id": "lp-011",
+    "category": "lora_personalization",
+    "description": "Supervisor and analyst see same facts but with different relevance ordering",
+    "setup": [
+      {
+        "role": "user",
+        "content": "Project launch is set for Q1 2026. Expected revenue impact: $2.1M ARR. Team lead is Diana. Risk level: medium."
+      }
+    ],
+    "query": "Tell me about the project",
+    "agent_id": "supervisor-agent-2",
+    "expected_in_context": ["Q1 2026"],
+    "should_not_contain": [],
+    "notes": "Both agents can retrieve the same fact set; LoRA rotation affects ordering, not access"
+  },
+  {
+    "id": "lp-012",
+    "category": "lora_personalization",
+    "description": "Ingest-time adaptation stores agent-adapted vectors",
+    "setup": [
+      {
+        "role": "user",
+        "content": "The authentication service uses JWT with a 24-hour expiry. Refresh tokens last 30 days. Multi-factor authentication is required for admin accounts."
+      }
+    ],
+    "query": "What are the auth token policies?",
+    "agent_id": "security-agent",
+    "expected_in_context": ["24-hour", "30 days", "Multi-factor"],
+    "should_not_contain": [],
+    "notes": "Vectors stored at ingest time with embed_for_agent should be retrievable at query time"
+  },
+  {
+    "id": "lp-013",
+    "category": "lora_personalization",
+    "description": "LoRA stats endpoint returns correct update_count and b_frobenius_norm",
+    "setup": [],
+    "query": "lora_stats_check",
+    "agent_id": "stats-test-agent",
+    "expected_in_context": [],
+    "should_not_contain": [],
+    "notes": "GET /api/v1/agents/stats-test-agent/lora/stats must return JSON with update_count, b_frobenius_norm, dims=384, rank=8"
+  },
+  {
+    "id": "lp-014",
+    "category": "lora_personalization",
+    "description": "DELETE /api/v1/agents/:id/lora resets adapter to identity",
+    "setup": [],
+    "query": "lora_reset_check",
+    "agent_id": "reset-test-agent",
+    "expected_in_context": [],
+    "should_not_contain": [],
+    "notes": "After DELETE with scope=agent, GET stats must return 404 or update_count=0"
+  },
+  {
+    "id": "lp-015",
+    "category": "lora_personalization",
+    "description": "User-level (global) adapter affects retrieval when agent_id is null",
+    "setup": [
+      {
+        "role": "user",
+        "content": "The company was founded in 2019. Headquarters is in Austin, Texas. Employee count: 240."
+      }
+    ],
+    "query": "Where is the company headquartered?",
+    "agent_id": null,
+    "expected_in_context": ["Austin, Texas"],
+    "should_not_contain": [],
+    "notes": "User-level adapter (agent_id=None) must work correctly via embed_for_agent with None agent_id"
+  }
+]

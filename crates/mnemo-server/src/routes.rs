@@ -50,10 +50,11 @@ use mnemo_core::models::{
     session::{CreateSessionRequest, ListSessionsParams, Session, UpdateSessionRequest},
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
+use mnemo_core::models::lora::LoraStatsResponse;
 use mnemo_core::traits::storage::{
     AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
-    GuardrailStore, NarrativeStore, RawVectorStore, RegionStore, SessionStore, SpanStore,
-    UserStore, VectorStore, ViewStore,
+    GuardrailStore, LoraStore, NarrativeStore, RawVectorStore, RegionStore, SessionStore,
+    SpanStore, UserStore, VectorStore, ViewStore,
 };
 
 use mnemo_retrieval::router::{classify_query, RetrievalStrategy, RoutingSource};
@@ -1328,6 +1329,15 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Domain expansion / transfer learning
         .route("/api/v1/agents/:agent_id/fork", post(fork_agent))
+        // TinyLoRA: per-agent embedding personalization
+        .route(
+            "/api/v1/agents/:agent_id/lora/stats",
+            get(get_agent_lora_stats),
+        )
+        .route(
+            "/api/v1/agents/:agent_id/lora",
+            delete(delete_agent_lora),
+        )
         // Graph knowledge API
         .route("/api/v1/entities/:id/subgraph", get(get_subgraph))
         .route("/api/v1/graph/:user/entities", get(graph_list_entities))
@@ -13173,6 +13183,121 @@ async fn evaluate_guardrails(
     let verdict = evaluate_rules(&rules, &trigger, &ctx);
 
     Ok(Json(EvaluateGuardrailsResponse::from(verdict)))
+}
+
+// ─── TinyLoRA API (Spec 06) ────────────────────────────────────────
+
+/// `GET /api/v1/agents/:agent_id/lora/stats`
+///
+/// Returns LoRA adapter statistics for a specific agent.  If no adapter has
+/// been trained yet, returns a 404.  Also returns stats for the user-level
+/// (agentless) adapter when `include_global=true` is passed as a query param.
+async fn get_agent_lora_stats(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+    let include_global = params
+        .get("include_global")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    // Resolve user from request (needed to look up the adapter).
+    // For LoRA stats we require a `user` query parameter.
+    let user_identifier = params.get("user").map(|s| s.as_str()).unwrap_or("");
+    if user_identifier.is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "user query parameter is required".into(),
+        )));
+    }
+    let user = find_user_by_identifier(&state, user_identifier).await?;
+
+    let mut stats_list: Vec<LoraStatsResponse> = Vec::new();
+
+    // Agent-specific adapter
+    if let Some(weights) = state
+        .state_store
+        .get_lora_weights(user.id, Some(&agent_id))
+        .await?
+    {
+        stats_list.push(LoraStatsResponse::from(&weights));
+    }
+
+    // User-level (global) adapter if requested
+    if include_global {
+        if let Some(weights) = state
+            .state_store
+            .get_lora_weights(user.id, None)
+            .await?
+        {
+            stats_list.push(LoraStatsResponse::from(&weights));
+        }
+    }
+
+    if stats_list.is_empty() {
+        return Err(AppError(MnemoError::NotFound {
+            resource_type: "lora_adapter".to_string(),
+            id: format!("user={}, agent={}", user.id, agent_id),
+        }));
+    }
+
+    Ok((StatusCode::OK, Json(stats_list)))
+}
+
+/// `DELETE /api/v1/agents/:agent_id/lora`
+///
+/// Reset (delete) the LoRA adapter for a specific agent.
+/// Pass `?scope=global` to also delete the user-level adapter.
+/// Pass `?scope=agent` (default) to delete only the agent-specific adapter.
+/// Pass `?scope=all` to delete both.
+async fn delete_agent_lora(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<StatusCode, AppError> {
+    let agent_id = normalize_agent_id(&agent_id)?;
+
+    let user_identifier = params.get("user").map(|s| s.as_str()).unwrap_or("");
+    if user_identifier.is_empty() {
+        return Err(AppError(MnemoError::Validation(
+            "user query parameter is required".into(),
+        )));
+    }
+    let user = find_user_by_identifier(&state, user_identifier).await?;
+
+    let scope = params.get("scope").map(|s| s.as_str()).unwrap_or("agent");
+    match scope {
+        "agent" => {
+            state
+                .state_store
+                .delete_lora_weights(user.id, Some(&agent_id))
+                .await?;
+        }
+        "global" => {
+            state
+                .state_store
+                .delete_lora_weights(user.id, None)
+                .await?;
+        }
+        "all" => {
+            state
+                .state_store
+                .delete_lora_weights(user.id, Some(&agent_id))
+                .await?;
+            state
+                .state_store
+                .delete_lora_weights(user.id, None)
+                .await?;
+        }
+        _ => {
+            return Err(AppError(MnemoError::Validation(
+                "scope must be one of: agent, global, all".into(),
+            )));
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

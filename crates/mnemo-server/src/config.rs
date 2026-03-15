@@ -195,6 +195,12 @@ pub struct ExtractionSection {
     /// Default: 300 (5 minutes). Set via `MNEMO_SLEEP_IDLE_WINDOW_SECONDS`.
     #[serde(default = "default_sleep_idle_window")]
     pub sleep_idle_window_seconds: u64,
+    /// Enable TinyLoRA per-agent embedding personalization (Spec 06).
+    /// When true, `LoraAdaptedEmbedder` wraps the base embedder and applies
+    /// learned per-agent transformations at query and ingest time.
+    /// Set via `MNEMO_LORA_ENABLED`. Default: false.
+    #[serde(default)]
+    pub lora_enabled: bool,
 }
 
 fn default_sleep_enabled() -> bool {
@@ -214,6 +220,7 @@ impl Default for ExtractionSection {
             session_summary_threshold: default_session_summary_threshold(),
             sleep_enabled: true,
             sleep_idle_window_seconds: 300,
+            lora_enabled: false,
         }
     }
 }
@@ -637,6 +644,11 @@ impl MnemoConfig {
             if let Ok(n) = v.parse() {
                 config.extraction.sleep_idle_window_seconds = n;
             }
+        }
+
+        // TinyLoRA override
+        if let Ok(v) = std::env::var("MNEMO_LORA_ENABLED") {
+            config.extraction.lora_enabled = v == "true" || v == "1";
         }
 
         // SOC 2 compliance overrides

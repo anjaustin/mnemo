@@ -9,6 +9,7 @@ members = [
     "crates/mnemo-retrieval",
     "crates/mnemo-llm",
     "crates/mnemo-gnn",
+    "crates/mnemo-lora",
     "crates/mnemo-mcp",
     "crates/mnemo-proto",
 ]
@@ -100,6 +101,7 @@ mnemo-ingest = { path = "crates/mnemo-ingest" }
 mnemo-retrieval = { path = "crates/mnemo-retrieval" }
 mnemo-llm = { path = "crates/mnemo-llm" }
 mnemo-gnn = { path = "crates/mnemo-gnn" }
+mnemo-lora = { path = "crates/mnemo-lora" }
 mnemo-mcp = { path = "crates/mnemo-mcp" }
 mnemo-proto = { path = "crates/mnemo-proto" }
 

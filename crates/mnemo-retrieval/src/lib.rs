@@ -168,8 +168,13 @@ where
         let temporal_filter = request.as_of.or(request.temporal_filter);
 
         // Generate query embedding for semantic search.
+        // Uses embed_for_agent to apply any per-agent LoRA adaptation.
         // If embeddings are unavailable, gracefully degrade to full-text retrieval.
-        let query_embedding = match self.embedder.embed(&query_text).await {
+        let query_embedding = match self
+            .embedder
+            .embed_for_agent(&query_text, user_id, request.agent_id.as_deref())
+            .await
+        {
             Ok(embedding) => Some(embedding),
             Err(err) => {
                 tracing::warn!(
@@ -182,6 +187,10 @@ where
         };
 
         // ── Parallel search: semantic + full-text ──────────────
+        // Save a clone of the adapted query embedding for LoRA implicit-feedback
+        // updates applied after the response is assembled (D7).
+        let adapted_query_embedding_for_lora: Option<Vec<f32>> = query_embedding.clone();
+
         // Semantic search
         let (semantic_entity_hits, semantic_edge_hits, semantic_episode_hits) =
             if let Some(query_embedding) = query_embedding {
@@ -474,10 +483,49 @@ where
         // ── D3: Reinforcement — async access recording ─────────
         // Bump access_count + last_accessed_at for each fact returned in this
         // context. Errors are silently swallowed — this must not fail a query.
+        //
+        // D7: LoRA implicit-feedback — also re-embed each accessed fact and
+        // update the per-agent adapter toward the query vector. This is a
+        // background update on the retrieval path; errors do not fail the query.
         {
-            let ids: Vec<Uuid> = block.facts.iter().map(|f| f.id).collect();
-            for id in ids {
-                let _ = self.state_store.record_edge_access(id).await;
+            let facts_for_feedback: Vec<(Uuid, String)> = block
+                .facts
+                .iter()
+                .map(|f| (f.id, f.fact.clone()))
+                .collect();
+
+            for (id, fact_text) in &facts_for_feedback {
+                let _ = self.state_store.record_edge_access(*id).await;
+
+                // LoRA implicit feedback: re-embed the accessed fact and
+                // nudge the adapter toward the query embedding.
+                if let Some(ref q_vec) = adapted_query_embedding_for_lora {
+                    match self
+                        .embedder
+                        .embed(fact_text)
+                        .await
+                    {
+                        Ok(item_vec) => {
+                            // update_lora_from_access is a no-op on plain EmbeddingProvider;
+                            // LoraAdaptedEmbedder overrides it to apply the Hebbian update.
+                            self.embedder
+                                .update_lora_from_access(
+                                    q_vec,
+                                    &item_vec,
+                                    user_id,
+                                    request.agent_id.as_deref(),
+                                )
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                edge_id = %id,
+                                error = %e,
+                                "LoRA feedback: failed to embed fact for update"
+                            );
+                        }
+                    }
+                }
             }
         }
 

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::error::MnemoError;
 use crate::models::edge::ExtractedRelationship;
@@ -145,4 +146,52 @@ pub trait EmbeddingProvider: Send + Sync {
 
     /// Get the provider name for logging/metrics.
     fn provider_name(&self) -> &str;
+
+    /// Generate an agent-personalized embedding for a single text.
+    ///
+    /// The default implementation delegates to [`embed`] (no personalization).
+    /// Override this in [`LoraAdaptedEmbedder`] to apply per-agent LoRA adaptation.
+    ///
+    /// [`embed`]: EmbeddingProvider::embed
+    /// [`LoraAdaptedEmbedder`]: mnemo_lora::LoraAdaptedEmbedder
+    async fn embed_for_agent(
+        &self,
+        text: &str,
+        _user_id: Uuid,
+        _agent_id: Option<&str>,
+    ) -> LlmResult<Vec<f32>> {
+        self.embed(text).await
+    }
+
+    /// Generate agent-personalized embeddings for multiple texts (batched).
+    ///
+    /// The default implementation delegates to [`embed_batch`] (no personalization).
+    ///
+    /// [`embed_batch`]: EmbeddingProvider::embed_batch
+    async fn embed_batch_for_agent(
+        &self,
+        texts: &[String],
+        _user_id: Uuid,
+        _agent_id: Option<&str>,
+    ) -> LlmResult<Vec<Vec<f32>>> {
+        self.embed_batch(texts).await
+    }
+
+    /// Apply a LoRA implicit-feedback update.
+    ///
+    /// Called after a retrieved fact was accessed (positive feedback signal).
+    /// `v_query` is the adapted query embedding; `v_item` is the base embedding
+    /// of the accessed item.
+    ///
+    /// The default implementation is a **no-op**. Only `LoraAdaptedEmbedder`
+    /// overrides this to apply the actual Hebbian weight update.
+    async fn update_lora_from_access(
+        &self,
+        _v_query: &[f32],
+        _v_item: &[f32],
+        _user_id: Uuid,
+        _agent_id: Option<&str>,
+    ) {
+        // No-op by default — only LoraAdaptedEmbedder applies the update.
+    }
 }
