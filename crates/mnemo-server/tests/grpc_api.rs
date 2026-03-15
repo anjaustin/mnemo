@@ -21,6 +21,7 @@ use mnemo_graph::GraphEngine;
 use mnemo_llm::{EmbedderKind, OpenAiCompatibleEmbedder};
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_server::grpc::GrpcState;
+use mnemo_server::lora_handle::LoraEmbedderHandle;
 use mnemo_server::middleware::AuthConfig;
 use mnemo_server::state::{
     AppState, MetadataPrefilterConfig, RerankerMode, ServerMetrics, WebhookDeliveryConfig,
@@ -61,7 +62,7 @@ async fn build_test_state() -> (AppState, Arc<RedisStateStore>) {
             .expect("Qdrant required for gRPC tests"),
     );
 
-    let embedder = Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
+    let base_embedder = Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
         EmbeddingConfig {
             provider: "openai".to_string(),
             api_key: None,
@@ -70,6 +71,7 @@ async fn build_test_state() -> (AppState, Arc<RedisStateStore>) {
             dimensions: 1536,
         },
     )));
+    let embedder = Arc::new(LoraEmbedderHandle::Base(base_embedder));
 
     let retrieval = Arc::new(RetrievalEngine::new(
         state_store.clone(),
@@ -82,6 +84,7 @@ async fn build_test_state() -> (AppState, Arc<RedisStateStore>) {
         state_store: state_store.clone(),
         vector_store,
         retrieval,
+        lora_embedder: None,
         graph,
         llm: None,
         metadata_prefilter: MetadataPrefilterConfig {

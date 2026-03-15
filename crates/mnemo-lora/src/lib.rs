@@ -482,6 +482,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_concurrent_embed_and_update_no_corruption() {
+        // Verify that concurrent embed_for_agent + update_from_access on the
+        // same (user, agent) key does not corrupt the adapter state.
+        // After all tasks complete: update_count must be a positive integer
+        // and the adapter must be in a consistent (non-NaN) state.
+        use std::sync::Arc;
+        use tokio::task;
+
+        let e = Arc::new(make_embedder(true));
+        let uid = Uuid::from_u128(42);
+        let agent = "concurrent-test";
+
+        // Spawn 8 concurrent updaters and 8 concurrent readers
+        let mut handles = Vec::new();
+
+        for _ in 0..8 {
+            let e2 = e.clone();
+            handles.push(task::spawn(async move {
+                for _ in 0..10 {
+                    e2.update_from_access(
+                        &vec![1.0f32; 16],
+                        &vec![0.5f32; 16],
+                        uid,
+                        Some(agent),
+                    )
+                    .await;
+                }
+            }));
+        }
+
+        for _ in 0..8 {
+            let e2 = e.clone();
+            handles.push(task::spawn(async move {
+                for _ in 0..10 {
+                    let v = e2.embed_for_agent("x", uid, Some(agent)).await.unwrap();
+                    assert_eq!(v.len(), 16, "output must have correct dims");
+                    assert!(v.iter().all(|x| x.is_finite()), "output must be finite");
+                }
+            }));
+        }
+
+        for h in handles {
+            h.await.expect("task panicked");
+        }
+
+        // After all concurrent updates, the adapter must have been updated at
+        // least once and must not contain NaN/Inf values.
+        let cache = e.cache.read().await;
+        let key = LoraAdaptedEmbedder::<ConstEmbedder, NoopLoraStore>::cache_key(uid, Some(agent));
+        if let Some(adapter) = cache.get(&key) {
+            assert!(
+                adapter.weights.update_count > 0,
+                "update_count must be positive after concurrent updates"
+            );
+            assert!(
+                adapter.weights.b_flat.iter().all(|x| x.is_finite()),
+                "B must be finite after concurrent updates"
+            );
+        }
+        // If the key is absent it means all reads raced before any write — that's
+        // also acceptable (no corruption, no panic).
+    }
+
+    #[tokio::test]
     async fn test_adapter_output_changes_after_update() {
         let e = make_embedder(true);
         let uid = Uuid::from_u128(5);

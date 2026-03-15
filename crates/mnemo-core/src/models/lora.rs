@@ -61,15 +61,48 @@ impl LoraWeights {
         let b_flat = vec![0.0f32; dims * rank];
 
         // A = Kaiming uniform: range [-k, k] where k = sqrt(1 / dims)
-        // Deterministic seed so the same (user, agent) always gets the same A.
-        // This is intentional: A is not trained, only B is.
+        // Deterministic seed incorporating (user_id, agent_id) so that each
+        // (user, agent) pair gets a distinct projection matrix, improving the
+        // diversity of adapted embedding spaces across pairs.
         let k = (1.0_f32 / dims as f32).sqrt();
+
+        // Build a u64 seed from user_id bytes and agent_id string bytes.
+        // We XOR a folded version of the user UUID with a hash of agent_id,
+        // then use a linear-congruential step per matrix element for speed.
+        let uid_bytes = user_id.as_bytes();
+        let uid_seed: u64 = uid_bytes[..8]
+            .iter()
+            .enumerate()
+            .fold(0u64, |acc, (i, &b)| acc ^ ((b as u64) << (i * 8)))
+            ^ uid_bytes[8..]
+                .iter()
+                .enumerate()
+                .fold(0u64, |acc, (i, &b)| acc ^ ((b as u64) << (i * 8)));
+
+        let agent_seed: u64 = agent_id
+            .as_deref()
+            .unwrap_or("__global__")
+            .bytes()
+            .enumerate()
+            .fold(0u64, |acc, (i, b)| {
+                acc.wrapping_add(
+                    (b as u64).wrapping_mul(6364136223846793005u64.wrapping_pow(i as u32 + 1)),
+                )
+            });
+
+        let base_seed: u64 = uid_seed ^ agent_seed ^ 0xdeadbeef_cafebabe;
+
         let a_flat: Vec<f32> = (0..rank * dims)
             .map(|i| {
-                // Deterministic pseudo-random using a hash of the index
-                let x = (i as f32 * 2654435761.0_f32) % (1 << 24) as f32;
-                let normalized = x / (1 << 24) as f32; // [0, 1)
-                (normalized * 2.0 - 1.0) * k // [-k, k]
+                // LCG step seeded per-element from the (user, agent, index) triple.
+                // Multiplier and increment from Knuth TAOCP Vol 2 (64-bit LCG).
+                let s = base_seed
+                    .wrapping_add(i as u64)
+                    .wrapping_mul(6364136223846793005u64)
+                    .wrapping_add(1442695040888963407u64);
+                // Take upper 24 bits for float conversion (lower bits have shorter period)
+                let x = ((s >> 40) as f32) / (1u64 << 24) as f32; // [0, 1)
+                (x * 2.0 - 1.0) * k // [-k, k]
             })
             .collect();
 

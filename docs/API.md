@@ -3955,3 +3955,85 @@ DELETE /api/v1/regions/:region_id/acl/:agent_id
 **Ownership**: Only the region owner or an `admin` key may revoke access. Returns `403 Forbidden` otherwise.
 
 **Response**: `204 No Content`
+
+---
+
+## TinyLoRA — Per-Agent Embedding Personalization
+
+TinyLoRA adds per-`(user, agent)` learned linear transformations on top of the shared
+embedding space. Each adapter is a rank-8 LoRA residual that rotates base embeddings
+toward the agent's observed relevance history. Enable with `MNEMO_LORA_ENABLED=true`.
+
+**Adaptation formula:**
+```
+v_adapted = v_base + 0.125 * B · (A · v_base)
+A ∈ ℝ^{8×384}  (fixed random projection, unique per user+agent pair)
+B ∈ ℝ^{384×8}  (zero-init; updated implicitly from retrieval access patterns)
+```
+
+Adapters are persisted in Redis and cached in-memory. When LoRA is disabled,
+`embed_for_agent` is a zero-overhead pass-through to the base embedder.
+
+---
+
+### Get LoRA Adapter Stats
+
+```
+GET /api/v1/agents/:agent_id/lora/stats?user=<identifier>&include_global=true|false
+```
+
+**Auth**: `read`
+
+Returns statistics for the agent-specific adapter. Optionally includes the user-level
+(agentless) global adapter when `include_global=true`.
+
+**Query Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `user` | string | **Required.** User identifier (email or UUID). |
+| `include_global` | bool | Also return the user-level global adapter stats. |
+
+**Response** `200 OK`:
+```json
+[
+  {
+    "user_id": "uuid",
+    "agent_id": "my-agent",
+    "update_count": 42,
+    "last_updated": 1700000000,
+    "dims": 384,
+    "rank": 8,
+    "scale": 0.125,
+    "b_frobenius_norm": 2.34
+  }
+]
+```
+
+`b_frobenius_norm` is a proxy for adapter divergence from identity — values close to 0
+indicate the adapter is near-identity (few updates). Values approaching 10.0 indicate
+the Frobenius clamp has been reached.
+
+**Errors**: `404 Not Found` when no adapter exists for the given user/agent pair.
+
+---
+
+### Reset LoRA Adapter
+
+```
+DELETE /api/v1/agents/:agent_id/lora?user=<identifier>&scope=agent|global|all
+```
+
+**Auth**: `write`
+
+Deletes the LoRA adapter weights from Redis and evicts the in-memory cache for the
+given scope. After a reset, the next retrieval request will use a fresh identity adapter.
+
+**Query Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `user` | string | **Required.** User identifier. |
+| `scope` | string | `agent` (default) — agent-specific adapter only. `global` — user-level adapter. `all` — both. |
+
+**Response**: `204 No Content`

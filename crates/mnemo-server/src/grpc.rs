@@ -57,6 +57,7 @@ use mnemo_proto::proto::{
     QueryEdgesResponse,
 };
 
+use crate::lora_handle::LoraEmbedderHandle;
 use crate::middleware::AuthConfig;
 use crate::state::AppState;
 
@@ -70,7 +71,7 @@ pub struct GrpcState {
         mnemo_retrieval::RetrievalEngine<
             RedisStateStore,
             mnemo_storage::qdrant_store::QdrantVectorStore,
-            mnemo_llm::EmbedderKind,
+            LoraEmbedderHandle,
         >,
     >,
     pub reranker: crate::state::RerankerMode,

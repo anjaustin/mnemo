@@ -120,6 +120,7 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Tool use / function calling | :red_circle: | :red_circle: | :green_circle: | :green_circle: |
 | Human-in-the-loop approval | :yellow_circle: | :red_circle: | :red_circle: | :green_circle: |
 | Shared memory blocks (real-time) | :green_circle: | :green_circle: | :yellow_circle: | :green_circle: |
+| Per-agent embedding personalization (TinyLoRA) | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 
 ### Compute & Observability (9 features)
 
@@ -302,6 +303,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Production Helm Chart** - HA-ready Kubernetes deployment with Redis and Qdrant subcharts, security-hardened defaults (seccompProfile, SA automount disabled, emptyDir sizeLimit), and configurable replicas.
 - **gRPC API** - 3 services, 8 RPCs on the same port as REST. Proto3 with optional fields, streaming support, and full red-team hardening.
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
+- **TinyLoRA Embedding Personalization** - Per-`(user, agent)` rank-8 LoRA adapters rotate base embeddings toward each agent's observed relevance history. No base model changes, no Qdrant index modifications — only the vectors presented to it change. Adapters are persisted in Redis, cached in memory, and updated implicitly from retrieval feedback. Enable with `MNEMO_LORA_ENABLED=true`. Reset via `DELETE /api/v1/agents/:agent_id/lora`. Inspect via `GET /api/v1/agents/:agent_id/lora/stats`.
 
 ## Quality Gates
 
@@ -785,6 +787,7 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_PIPELINE_DEAD_LETTER_MAX_SIZE` | Max items in the dead-letter queue before oldest are evicted | `1000` |
 | `MNEMO_SYNC_ENABLED` | Enable multi-node CRDT sync protocol | `false` |
 | `MNEMO_SYNC_NODE_ID` | Unique node identifier for CRDT sync (must differ per replica) | (auto-generated) |
+| `MNEMO_LORA_ENABLED` | Enable TinyLoRA per-agent embedding personalization | `false` |
 
 For cloud targets that do not have a managed embedding API available, Mnemo also supports a self-hosted embedding path:
 

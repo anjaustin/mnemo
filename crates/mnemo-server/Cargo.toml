@@ -17,6 +17,7 @@ path = "src/main.rs"
 mnemo-core = { workspace = true }
 mnemo-storage = { workspace = true }
 mnemo-llm = { workspace = true }
+mnemo-lora = { workspace = true }
 mnemo-ingest = { workspace = true }
 mnemo-retrieval = { workspace = true }
 mnemo-graph = { workspace = true }

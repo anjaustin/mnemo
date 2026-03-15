@@ -26,6 +26,7 @@
 pub mod config;
 pub mod dashboard;
 pub mod grpc;
+pub mod lora_handle;
 pub mod middleware;
 pub mod openapi;
 pub mod routes;

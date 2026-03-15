@@ -37,6 +37,7 @@ use tower_http::trace::TraceLayer;
 use mnemo_server::config::MnemoConfig;
 use mnemo_server::config::RerankerConfig;
 use mnemo_server::grpc::GrpcState;
+use mnemo_server::lora_handle::LoraEmbedderHandle;
 use mnemo_server::middleware::{request_context_middleware, AuthConfig, AuthLayer};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
@@ -51,6 +52,7 @@ use mnemo_llm::{
 };
 #[cfg(feature = "local-embed")]
 use mnemo_llm::{FastEmbedder, DEFAULT_LOCAL_DIMENSIONS, DEFAULT_LOCAL_MODEL};
+use mnemo_lora::LoraAdaptedEmbedder;
 use mnemo_retrieval::RetrievalEngine;
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
@@ -160,11 +162,31 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Ensuring RediSearch indexes");
     state_store.ensure_indexes().await?;
 
+    // TinyLoRA: optionally wrap the base embedder with a per-agent adapter layer.
+    // When enabled, all embed_for_agent() calls apply the learned LoRA residual.
+    let (lora_embedder_opt, active_embedder): (
+        Option<Arc<LoraAdaptedEmbedder<EmbedderKind, RedisStateStore>>>,
+        Arc<LoraEmbedderHandle>,
+    ) = if config.extraction.lora_enabled {
+        tracing::info!("TinyLoRA enabled — wrapping embedder with LoraAdaptedEmbedder");
+        let lora = Arc::new(LoraAdaptedEmbedder::new(
+            embedder.clone(),
+            state_store.clone(),
+            true,
+        ));
+        let handle = Arc::new(LoraEmbedderHandle::Lora(lora.clone()));
+        (Some(lora), handle)
+    } else {
+        tracing::debug!("TinyLoRA disabled (MNEMO_LORA_ENABLED=false)");
+        let handle = Arc::new(LoraEmbedderHandle::Base(embedder.clone()));
+        (None, handle)
+    };
+
     // Engines (don't need LLM, only embedder)
     let retrieval = Arc::new(RetrievalEngine::new(
         state_store.clone(),
         vector_store.clone(),
-        embedder.clone(),
+        active_embedder.clone(),
     ));
     let graph = Arc::new(GraphEngine::new(state_store.clone()));
 
@@ -222,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
                 state_store.clone(),
                 vector_store.clone(),
                 llm,
-                embedder.clone(),
+                active_embedder.clone(),
                 ingest_config,
             )
             .with_digest_cache(digest_cache.clone())
@@ -239,7 +261,7 @@ async fn main() -> anyhow::Result<()> {
                 state_store.clone(),
                 vector_store.clone(),
                 llm,
-                embedder.clone(),
+                active_embedder.clone(),
                 ingest_config,
             )
             .with_digest_cache(digest_cache.clone())
@@ -256,7 +278,7 @@ async fn main() -> anyhow::Result<()> {
     // Eliminates cold-start latency spikes on queries after idle periods.
     // Belt-and-suspenders alongside keep_alive:-1 in embed requests.
     {
-        let warm_embedder = embedder.clone();
+        let warm_embedder = active_embedder.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(180));
             interval.tick().await; // skip immediate first tick
@@ -306,6 +328,7 @@ async fn main() -> anyhow::Result<()> {
         state_store,
         vector_store,
         retrieval,
+        lora_embedder: lora_embedder_opt,
         graph,
         llm: llm_for_state,
         metadata_prefilter: MetadataPrefilterConfig {

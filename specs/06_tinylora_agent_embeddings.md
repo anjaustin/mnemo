@@ -1,6 +1,6 @@
 # Spec 06 — TinyLoRA: Agent-Specific Memories of Shared Data
 
-**Status:** In Progress  
+**Status:** Complete  
 **Crate:** `crates/mnemo-lora/`  
 **Feature flag:** `MNEMO_LORA_ENABLED=true`
 
@@ -168,3 +168,41 @@ adapters from Redis per `(user_id, agent_id)`.
 - Per-session adapters (user+agent granularity is sufficient)
 - Adapter merging / ensemble (future work)
 - BLAS/LAPACK dependency (pure Rust, <1ms overhead for d=384, r=8)
+
+---
+
+## Known Limitations
+
+### Stale Ingest Vectors (bounded drift)
+
+At ingest time, entity/edge/episode vectors are stored in Qdrant using
+`embed_for_agent(user_id, agent_id)` — i.e., with the B matrix at the moment of
+ingest. At retrieval time the query also uses `embed_for_agent`. If B has been updated
+between ingest and retrieval, stored vectors are "stale" (adapted with old B) while the
+query uses new B.
+
+**Why it is bounded:** `scale = 0.125` and `||B||_F ≤ 10.0` (Frobenius clamp), so
+the maximum residual magnitude per output dimension is `0.125 * 10.0 / sqrt(d*r) ≈
+0.067` for d=384, r=8. This is a small perturbation relative to the unit sphere
+cosine similarity used by Qdrant.
+
+**Practical impact:** Retrieval quality degrades slowly and gracefully as B drifts.
+For production use cases where retrieval precision is critical after significant
+adapter drift, re-embedding stored vectors against the current B is recommended.
+A future operator endpoint (`POST /api/v1/users/:user_id/lora/reindex`) can automate
+this.
+
+### A Matrix is Distinct Per (user_id, agent_id)
+
+Each `(user_id, agent_id)` pair gets a distinct A matrix via a deterministic LCG seeded
+from a hash of the UUID bytes and agent_id string. This ensures diversity of low-rank
+projection spaces across pairs (improved from the original index-only seed that gave
+all pairs the same A).
+
+### TOCTOU Race in Cache (benign)
+
+There is a window between dropping the read lock (cache miss) and acquiring the write
+lock (insert) where two concurrent requests for the same cold key can both load from
+Redis and insert. The second write wins. Both codepaths produce the correct adapter
+(either fresh or Redis-loaded); no data is corrupted. Update operations serialize
+correctly via the exclusive write lock.

@@ -13273,12 +13273,18 @@ async fn delete_agent_lora(
                 .state_store
                 .delete_lora_weights(user.id, Some(&agent_id))
                 .await?;
+            if let Some(lora) = &state.lora_embedder {
+                lora.evict_cache(user.id, Some(&agent_id)).await;
+            }
         }
         "global" => {
             state
                 .state_store
                 .delete_lora_weights(user.id, None)
                 .await?;
+            if let Some(lora) = &state.lora_embedder {
+                lora.evict_cache(user.id, None).await;
+            }
         }
         "all" => {
             state
@@ -13289,6 +13295,10 @@ async fn delete_agent_lora(
                 .state_store
                 .delete_lora_weights(user.id, None)
                 .await?;
+            if let Some(lora) = &state.lora_embedder {
+                lora.evict_cache(user.id, Some(&agent_id)).await;
+                lora.evict_cache(user.id, None).await;
+            }
         }
         _ => {
             return Err(AppError(MnemoError::Validation(

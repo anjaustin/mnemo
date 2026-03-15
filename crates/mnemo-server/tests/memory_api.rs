@@ -24,6 +24,7 @@ use mnemo_core::traits::storage::{EdgeStore, EntityStore, RegionStore, UserStore
 use mnemo_graph::GraphEngine;
 use mnemo_llm::{EmbedderKind, OpenAiCompatibleEmbedder};
 use mnemo_retrieval::RetrievalEngine;
+use mnemo_server::lora_handle::LoraEmbedderHandle;
 use mnemo_server::middleware::{request_context_middleware, REQUEST_ID_HEADER};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
@@ -156,7 +157,7 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
             }),
     );
 
-    let embedder = Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
+    let base_embedder = Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
         EmbeddingConfig {
             provider: "openai".to_string(),
             api_key: None,
@@ -165,6 +166,7 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
             dimensions: 1536,
         },
     )));
+    let embedder = Arc::new(LoraEmbedderHandle::Base(base_embedder));
 
     let retrieval = Arc::new(RetrievalEngine::new(
         state_store.clone(),
@@ -177,6 +179,7 @@ async fn build_test_harness_with_state_and_prefilter_and_webhooks(
         state_store: state_store.clone(),
         vector_store,
         retrieval,
+        lora_embedder: None,
         graph,
         llm: None,
         metadata_prefilter: prefilter,
@@ -5008,7 +5011,7 @@ async fn test_webhook_persistence_survives_restart() {
             .expect("Qdrant required for WH-15 test"),
     );
 
-    let embedder = Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
+    let base_embedder_wh15 = Arc::new(EmbedderKind::OpenAiCompat(OpenAiCompatibleEmbedder::new(
         mnemo_core::traits::llm::EmbeddingConfig {
             provider: "openai".to_string(),
             api_key: None,
@@ -5017,11 +5020,12 @@ async fn test_webhook_persistence_survives_restart() {
             dimensions: 1536,
         },
     )));
+    let embedder_wh15 = Arc::new(LoraEmbedderHandle::Base(base_embedder_wh15));
 
     let retrieval = Arc::new(RetrievalEngine::new(
         state_store.clone(),
         vector_store.clone(),
-        embedder,
+        embedder_wh15,
     ));
     let graph = Arc::new(GraphEngine::new(state_store.clone()));
 
@@ -5048,6 +5052,7 @@ async fn test_webhook_persistence_survives_restart() {
         state_store: state_store.clone(),
         vector_store: vector_store.clone(),
         retrieval: retrieval.clone(),
+        lora_embedder: None,
         graph: graph.clone(),
         llm: None,
         metadata_prefilter: MetadataPrefilterConfig {
@@ -5150,6 +5155,7 @@ async fn test_webhook_persistence_survives_restart() {
         state_store: state_store.clone(),
         vector_store: vector_store.clone(),
         retrieval: retrieval.clone(),
+        lora_embedder: None,
         graph: graph.clone(),
         llm: None,
         metadata_prefilter: MetadataPrefilterConfig {
