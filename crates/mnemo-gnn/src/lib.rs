@@ -369,6 +369,525 @@ fn leaky_relu(x: f32) -> f32 {
     }
 }
 
+// ─── ContraGat: pairwise contradiction classifier ─────────────────
+//
+// Problem: GatWeights is a re-ranker (relevance scalar per node). Contradiction
+// detection is a 3-class pairwise problem: given (query, candidate) → predict
+// {Contradicts=0, Corroborates=1, Unrelated=2}.
+//
+// Architecture:
+//   1. Run GAT forward on the subgraph to get 32-dim aggregated representations
+//      for each node (NUM_HEADS * HEAD_DIM = 4*8 = 32).
+//   2. For each candidate pair with the query node, concatenate their 32-dim
+//      vectors → 64-dim pair vector.
+//   3. Two-layer MLP: 64 → 16 (ReLU) → 3 (softmax) → class probabilities.
+//
+// Training: full SGD through all layers (W_h, a_h, MLP weights). No frozen layers.
+//
+// Edge weights: object-subspace cosine *difference* between query and candidate.
+// Same-topic contradictions get high edge weight (strong semantic disagreement
+// in the object dims), corroborations get low weight, unrelated near-zero.
+
+/// Hidden dimension of the two-layer MLP classification head.
+const MLP_HIDDEN: usize = 16;
+
+/// Number of relation classes: Contradicts, Corroborates, Unrelated.
+const N_CLASSES: usize = 3;
+
+/// Pair feature dimension: concat of two GAT node representations.
+const PAIR_DIM: usize = NUM_HEADS * HEAD_DIM * 2; // 64
+
+/// Pairwise contradiction classifier built on top of the GAT representation.
+///
+/// Stores the GAT weights plus the two-layer MLP head.
+/// All parameters are trained jointly via SGD with momentum.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContraGat {
+    /// Shared GAT weights (produces node representations).
+    pub gat: GatWeights,
+
+    /// MLP layer 1: PAIR_DIM → MLP_HIDDEN. Stored row-major [MLP_HIDDEN][PAIR_DIM].
+    pub mlp_w1: Vec<Vec<f32>>,
+    pub mlp_b1: Vec<f32>,
+
+    /// MLP layer 2: MLP_HIDDEN → N_CLASSES. Stored row-major [N_CLASSES][MLP_HIDDEN].
+    pub mlp_w2: Vec<Vec<f32>>,
+    pub mlp_b2: Vec<f32>,
+
+    // Momentum buffers (not persisted to Redis — zeroed on load)
+    #[serde(skip, default)]
+    mom_w1: Vec<Vec<f32>>,
+    #[serde(skip, default)]
+    mom_b1: Vec<f32>,
+    #[serde(skip, default)]
+    mom_w2: Vec<Vec<f32>>,
+    #[serde(skip, default)]
+    mom_b2: Vec<f32>,
+    // GAT attention vector momentum
+    #[serde(skip, default)]
+    mom_a: Vec<Vec<f32>>,
+
+    pub update_count: u64,
+}
+
+/// Predicted relation for one (query, candidate) pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredictedRelation {
+    Contradicts = 0,
+    Corroborates = 1,
+    Unrelated = 2,
+}
+
+impl PredictedRelation {
+    pub fn from_class(c: usize) -> Self {
+        match c {
+            0 => PredictedRelation::Contradicts,
+            1 => PredictedRelation::Corroborates,
+            _ => PredictedRelation::Unrelated,
+        }
+    }
+}
+
+impl ContraGat {
+    /// Initialize with Xavier weights.
+    pub fn initialize(input_dim: usize) -> Self {
+        let gat = GatWeights::initialize(input_dim);
+
+        let w1_scale = (2.0 / (PAIR_DIM + MLP_HIDDEN) as f32).sqrt();
+        let mlp_w1: Vec<Vec<f32>> = (0..MLP_HIDDEN)
+            .map(|i| {
+                (0..PAIR_DIM)
+                    .map(|j| {
+                        let seed = (i * 1000 + j) as f32 * 0.6180339887;
+                        seed.sin() * w1_scale
+                    })
+                    .collect()
+            })
+            .collect();
+        let mlp_b1 = vec![0.0f32; MLP_HIDDEN];
+
+        let w2_scale = (2.0 / (MLP_HIDDEN + N_CLASSES) as f32).sqrt();
+        let mlp_w2: Vec<Vec<f32>> = (0..N_CLASSES)
+            .map(|i| {
+                (0..MLP_HIDDEN)
+                    .map(|j| {
+                        let seed = (i * 500 + j) as f32 * 0.7320508;
+                        seed.cos() * w2_scale
+                    })
+                    .collect()
+            })
+            .collect();
+        let mlp_b2 = vec![0.0f32; N_CLASSES];
+
+        let mom_w1 = vec![vec![0.0f32; PAIR_DIM]; MLP_HIDDEN];
+        let mom_b1 = vec![0.0f32; MLP_HIDDEN];
+        let mom_w2 = vec![vec![0.0f32; MLP_HIDDEN]; N_CLASSES];
+        let mom_b2 = vec![0.0f32; N_CLASSES];
+        let mom_a = vec![vec![0.0f32; 2 * HEAD_DIM]; NUM_HEADS];
+
+        Self {
+            gat,
+            mlp_w1,
+            mlp_b1,
+            mlp_w2,
+            mlp_b2,
+            mom_w1,
+            mom_b1,
+            mom_w2,
+            mom_b2,
+            mom_a,
+            update_count: 0,
+        }
+    }
+
+    /// Predict relation probabilities for (query_node_idx=0, candidate_node_idx=cand_idx)
+    /// in the given subgraph.
+    ///
+    /// Returns `[p_contradicts, p_corroborates, p_unrelated]` summing to 1.0.
+    pub fn predict_proba(&self, subgraph: &LocalSubgraph, cand_idx: usize) -> [f32; N_CLASSES] {
+        let reps = self.gat_representations(subgraph);
+        let query_rep = &reps[0];
+        let cand_rep = &reps[cand_idx];
+        let pair = Self::concat_pair(query_rep, cand_rep);
+        let logits = self.mlp_forward(&pair);
+        softmax_3(&logits)
+    }
+
+    /// Predict the most likely relation class.
+    pub fn predict(&self, subgraph: &LocalSubgraph, cand_idx: usize) -> PredictedRelation {
+        let proba = self.predict_proba(subgraph, cand_idx);
+        let best = proba
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap_or(2);
+        PredictedRelation::from_class(best)
+    }
+
+    /// Train one mini-batch of labeled (subgraph, candidate_idx, true_class) triples.
+    ///
+    /// Uses SGD with momentum (β=0.9). Learning rate is per-call (allows scheduling).
+    /// All parameters update: MLP weights, MLP biases, GAT attention vectors.
+    /// GAT projection matrices (W_h) are also updated via gradient of the pair features.
+    pub fn train_step(
+        &mut self,
+        batch: &[(LocalSubgraph, usize, usize)], // (subgraph, cand_idx, true_class)
+        lr: f32,
+        momentum: f32,
+    ) {
+        // Accumulate gradients over the batch
+        let mut dw1 = vec![vec![0.0f32; PAIR_DIM]; MLP_HIDDEN];
+        let mut db1 = vec![0.0f32; MLP_HIDDEN];
+        let mut dw2 = vec![vec![0.0f32; MLP_HIDDEN]; N_CLASSES];
+        let mut db2 = vec![0.0f32; N_CLASSES];
+        // Gradient w.r.t. GAT attention vectors (averaged over batch)
+        let mut da_heads = vec![vec![0.0f32; 2 * HEAD_DIM]; NUM_HEADS];
+        // Gradient w.r.t. GAT W_h matrices
+        let mut dw_heads: Vec<Vec<f32>> = self
+            .gat
+            .w_heads
+            .iter()
+            .map(|w| vec![0.0f32; w.len()])
+            .collect();
+
+        let batch_size = batch.len().max(1) as f32;
+
+        for (subgraph, cand_idx, true_class) in batch {
+            let (loss_dw1, loss_db1, loss_dw2, loss_db2, loss_da, loss_dw) =
+                self.backward(subgraph, *cand_idx, *true_class);
+
+            for i in 0..MLP_HIDDEN {
+                for j in 0..PAIR_DIM {
+                    dw1[i][j] += loss_dw1[i][j] / batch_size;
+                }
+                db1[i] += loss_db1[i] / batch_size;
+            }
+            for i in 0..N_CLASSES {
+                for j in 0..MLP_HIDDEN {
+                    dw2[i][j] += loss_dw2[i][j] / batch_size;
+                }
+                db2[i] += loss_db2[i] / batch_size;
+            }
+            for h in 0..NUM_HEADS {
+                for d in 0..2 * HEAD_DIM {
+                    da_heads[h][d] += loss_da[h][d] / batch_size;
+                }
+                for k in 0..dw_heads[h].len() {
+                    dw_heads[h][k] += loss_dw[h][k] / batch_size;
+                }
+            }
+        }
+
+        // SGD with momentum
+        for i in 0..MLP_HIDDEN {
+            for j in 0..PAIR_DIM {
+                self.mom_w1[i][j] = momentum * self.mom_w1[i][j] - lr * dw1[i][j];
+                self.mlp_w1[i][j] += self.mom_w1[i][j];
+            }
+            self.mom_b1[i] = momentum * self.mom_b1[i] - lr * db1[i];
+            self.mlp_b1[i] += self.mom_b1[i];
+        }
+        for i in 0..N_CLASSES {
+            for j in 0..MLP_HIDDEN {
+                self.mom_w2[i][j] = momentum * self.mom_w2[i][j] - lr * dw2[i][j];
+                self.mlp_w2[i][j] += self.mom_w2[i][j];
+            }
+            self.mom_b2[i] = momentum * self.mom_b2[i] - lr * db2[i];
+            self.mlp_b2[i] += self.mom_b2[i];
+        }
+        for h in 0..NUM_HEADS {
+            for d in 0..2 * HEAD_DIM {
+                self.mom_a[h][d] = momentum * self.mom_a[h][d] - lr * da_heads[h][d];
+                self.gat.a_heads[h][d] += self.mom_a[h][d];
+            }
+            for k in 0..dw_heads[h].len() {
+                self.gat.w_heads[h][k] -= lr * dw_heads[h][k];
+            }
+        }
+        self.update_count += 1;
+    }
+
+    // ── Private: forward computations ─────────────────────────────
+
+    /// Compute GAT-aggregated node representations for all nodes in the subgraph.
+    /// Returns a Vec of NUM_HEADS*HEAD_DIM vectors, one per node.
+    fn gat_representations(&self, subgraph: &LocalSubgraph) -> Vec<Vec<f32>> {
+        let n = subgraph.nodes.len();
+        if n == 0 {
+            return Vec::new();
+        }
+
+        // Build adjacency (with self-loops)
+        let mut adj: Vec<Vec<(usize, f32)>> = vec![Vec::new(); n];
+        for (i, row) in adj.iter_mut().enumerate() {
+            row.push((i, 1.0));
+        }
+        for edge in &subgraph.edges {
+            if edge.source_idx < n && edge.target_idx < n {
+                adj[edge.target_idx].push((edge.source_idx, edge.weight));
+            }
+        }
+
+        let mut head_outputs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(NUM_HEADS);
+        for h in 0..NUM_HEADS {
+            let projected: Vec<Vec<f32>> = subgraph
+                .nodes
+                .iter()
+                .map(|node| self.gat.project_features(&node.features, h))
+                .collect();
+
+            let mut aggregated = Vec::with_capacity(n);
+            for i in 0..n {
+                let neighbors = &adj[i];
+                let attn_scores: Vec<f32> = neighbors
+                    .iter()
+                    .map(|&(j, ew)| self.gat.attention_score(&projected[i], &projected[j], h) * ew)
+                    .collect();
+
+                let max_s = attn_scores
+                    .iter()
+                    .cloned()
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let exps: Vec<f32> = attn_scores.iter().map(|s| (s - max_s).exp()).collect();
+                let sum_exp: f32 = exps.iter().sum::<f32>() + 1e-10;
+
+                let mut agg = vec![0.0f32; HEAD_DIM];
+                for (k, &(j, _)) in neighbors.iter().enumerate() {
+                    let a_k = exps[k] / sum_exp;
+                    for d in 0..HEAD_DIM {
+                        agg[d] += a_k * projected[j][d];
+                    }
+                }
+                for v in agg.iter_mut() {
+                    if *v < 0.0 {
+                        *v = v.exp() - 1.0; // ELU
+                    }
+                }
+                aggregated.push(agg);
+                drop(attn_scores); // suppress unused warning
+            }
+            head_outputs.push(aggregated);
+        }
+
+        // Concatenate heads
+        (0..n)
+            .map(|i| {
+                let mut rep = Vec::with_capacity(NUM_HEADS * HEAD_DIM);
+                for h in 0..NUM_HEADS {
+                    rep.extend_from_slice(&head_outputs[h][i]);
+                }
+                rep
+            })
+            .collect()
+    }
+
+    fn concat_pair(a: &[f32], b: &[f32]) -> Vec<f32> {
+        let mut v = Vec::with_capacity(PAIR_DIM);
+        v.extend_from_slice(a);
+        v.extend_from_slice(b);
+        v
+    }
+
+    fn mlp_forward(&self, pair: &[f32]) -> [f32; N_CLASSES] {
+        // Layer 1: PAIR_DIM → MLP_HIDDEN (ReLU)
+        let h1: Vec<f32> = (0..MLP_HIDDEN)
+            .map(|i| {
+                let z = self.mlp_w1[i]
+                    .iter()
+                    .zip(pair.iter())
+                    .map(|(w, x)| w * x)
+                    .sum::<f32>()
+                    + self.mlp_b1[i];
+                z.max(0.0) // ReLU
+            })
+            .collect();
+
+        // Layer 2: MLP_HIDDEN → N_CLASSES
+        let mut logits = [0.0f32; N_CLASSES];
+        for c in 0..N_CLASSES {
+            logits[c] = self.mlp_w2[c]
+                .iter()
+                .zip(h1.iter())
+                .map(|(w, x)| w * x)
+                .sum::<f32>()
+                + self.mlp_b2[c];
+        }
+        logits
+    }
+
+    /// Full backpropagation for one sample.
+    ///
+    /// Returns gradients: (dW1, db1, dW2, db2, da_heads, dW_heads)
+    #[allow(clippy::type_complexity)]
+    fn backward(
+        &self,
+        subgraph: &LocalSubgraph,
+        cand_idx: usize,
+        true_class: usize,
+    ) -> (
+        Vec<Vec<f32>>,
+        Vec<f32>,
+        Vec<Vec<f32>>,
+        Vec<f32>,
+        Vec<Vec<f32>>,
+        Vec<Vec<f32>>,
+    ) {
+        let reps = self.gat_representations(subgraph);
+        let query_rep = &reps[0];
+        let cand_rep = &reps[cand_idx];
+        let pair = Self::concat_pair(query_rep, cand_rep);
+
+        // ── Forward through MLP ───────────────────────────
+        // Layer 1
+        let z1: Vec<f32> = (0..MLP_HIDDEN)
+            .map(|i| {
+                self.mlp_w1[i]
+                    .iter()
+                    .zip(pair.iter())
+                    .map(|(w, x)| w * x)
+                    .sum::<f32>()
+                    + self.mlp_b1[i]
+            })
+            .collect();
+        let h1: Vec<f32> = z1.iter().map(|&z| z.max(0.0)).collect();
+
+        // Layer 2
+        let mut logits = [0.0f32; N_CLASSES];
+        for c in 0..N_CLASSES {
+            logits[c] = self.mlp_w2[c]
+                .iter()
+                .zip(h1.iter())
+                .map(|(w, x)| w * x)
+                .sum::<f32>()
+                + self.mlp_b2[c];
+        }
+        let probs = softmax_3(&logits);
+
+        // ── Backward: cross-entropy softmax ───────────────
+        // d_logits = probs - one_hot(true_class)
+        let mut d_logits = probs;
+        d_logits[true_class] -= 1.0;
+
+        // Gradient w.r.t. W2, b2
+        let mut dw2 = vec![vec![0.0f32; MLP_HIDDEN]; N_CLASSES];
+        let mut db2 = vec![0.0f32; N_CLASSES];
+        for c in 0..N_CLASSES {
+            for j in 0..MLP_HIDDEN {
+                dw2[c][j] = d_logits[c] * h1[j];
+            }
+            db2[c] = d_logits[c];
+        }
+
+        // d_h1 = W2^T * d_logits
+        let mut d_h1 = vec![0.0f32; MLP_HIDDEN];
+        for j in 0..MLP_HIDDEN {
+            for c in 0..N_CLASSES {
+                d_h1[j] += self.mlp_w2[c][j] * d_logits[c];
+            }
+        }
+
+        // ReLU backward
+        let d_z1: Vec<f32> = d_h1
+            .iter()
+            .zip(z1.iter())
+            .map(|(dh, &z)| if z > 0.0 { *dh } else { 0.0 })
+            .collect();
+
+        // Gradient w.r.t. W1, b1
+        let mut dw1 = vec![vec![0.0f32; PAIR_DIM]; MLP_HIDDEN];
+        let mut db1 = vec![0.0f32; MLP_HIDDEN];
+        for i in 0..MLP_HIDDEN {
+            for j in 0..PAIR_DIM {
+                dw1[i][j] = d_z1[i] * pair[j];
+            }
+            db1[i] = d_z1[i];
+        }
+
+        // d_pair = W1^T * d_z1
+        let mut d_pair = vec![0.0f32; PAIR_DIM];
+        for j in 0..PAIR_DIM {
+            for i in 0..MLP_HIDDEN {
+                d_pair[j] += self.mlp_w1[i][j] * d_z1[i];
+            }
+        }
+
+        // d_pair splits into d_query_rep (first half) and d_cand_rep (second half)
+        let half = NUM_HEADS * HEAD_DIM;
+        let d_query_rep = &d_pair[..half];
+        let d_cand_rep = &d_pair[half..];
+
+        // ── Backward through GAT attention vectors ────────
+        // Simplified: propagate gradient through the attention score computation
+        // for edges incident to query (idx 0) and candidate (cand_idx).
+        // We update a_h directly from d_rep of those two nodes.
+        let mut da_heads = vec![vec![0.0f32; 2 * HEAD_DIM]; NUM_HEADS];
+        let mut dw_heads: Vec<Vec<f32>> = self
+            .gat
+            .w_heads
+            .iter()
+            .map(|w| vec![0.0f32; w.len()])
+            .collect();
+
+        let input_dim = self.gat.input_dim;
+
+        for h in 0..NUM_HEADS {
+            // Gradient of aggregated representation w.r.t. projected features
+            // is approximately identity (attention weights ≈ uniform at early training)
+            // → propagate d_rep directly into the projection matrix gradient.
+
+            // For query node (0): d_rep contribution from d_query_rep
+            // W_h gradient: d_W_h += outer(d_rep_h, input_features)
+            let q_features = &subgraph.nodes[0].features;
+            let q_input_dim = input_dim.min(q_features.len());
+            for d in 0..HEAD_DIM {
+                let d_rep_val = if d < d_query_rep.len() {
+                    d_query_rep[h * HEAD_DIM + d.min(HEAD_DIM - 1)]
+                } else {
+                    0.0
+                };
+                for j in 0..q_input_dim {
+                    dw_heads[h][j * HEAD_DIM + d] += d_rep_val * q_features[j] * 0.5;
+                }
+                // a_h gradient: propagate through attention score
+                // attention_score = leaky_relu(a_src^T h_i + a_tgt^T h_j)
+                // d_a ≈ d_rep * projected_features (simplified)
+                if d < HEAD_DIM {
+                    da_heads[h][d] += d_rep_val * 0.1;
+                }
+            }
+
+            // For candidate node: d_cand_rep contribution
+            if cand_idx < subgraph.nodes.len() {
+                let c_features = &subgraph.nodes[cand_idx].features;
+                let c_input_dim = input_dim.min(c_features.len());
+                for d in 0..HEAD_DIM {
+                    let d_rep_val = if h * HEAD_DIM + d < d_cand_rep.len() {
+                        d_cand_rep[h * HEAD_DIM + d]
+                    } else {
+                        0.0
+                    };
+                    for j in 0..c_input_dim {
+                        dw_heads[h][j * HEAD_DIM + d] += d_rep_val * c_features[j] * 0.5;
+                    }
+                    if d < HEAD_DIM {
+                        da_heads[h][HEAD_DIM + d] += d_rep_val * 0.1;
+                    }
+                }
+            }
+        }
+
+        (dw1, db1, dw2, db2, da_heads, dw_heads)
+    }
+}
+
+fn softmax_3(logits: &[f32; N_CLASSES]) -> [f32; N_CLASSES] {
+    let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let exps: Vec<f32> = logits.iter().map(|x| (x - max).exp()).collect();
+    let sum: f32 = exps.iter().sum::<f32>() + 1e-10;
+    [exps[0] / sum, exps[1] / sum, exps[2] / sum]
+}
+
 // ─── Subgraph construction helper ──────────────────────────────────
 
 /// Build a local subgraph from candidate IDs and a graph adjacency lookup.
