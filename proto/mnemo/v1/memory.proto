@@ -148,6 +148,9 @@ message GetContextRequest {
   optional string session_id = 4;         // Optional session scope
   optional string as_of = 5;             // ISO-8601 timestamp for point-in-time
   optional float min_relevance = 6;       // Minimum relevance threshold (0.0-1.0)
+  optional bool structured = 7;           // Return structured JSON context block
+  optional bool explain = 8;             // Include per-fact retrieval explanations
+  optional bool tiered_budget = 9;       // Apply tiered token budget (60/25/15)
 }
 
 message EntitySummary {
@@ -366,10 +369,12 @@ message ListEpisodesRequest {
   string user_id = 1;
   string session_id = 2;
   optional int32 limit = 3;
+  optional string after = 4;              // UUID cursor for pagination (last seen episode ID)
 }
 
 message ListEpisodesResponse {
   repeated Episode episodes = 1;
+  optional string next_cursor = 2;        // Present when more results exist
 }
 
 message DeleteEpisodeRequest {
@@ -397,10 +402,12 @@ message ListEntitiesRequest {
   string user_id = 1;
   optional int32 limit = 2;
   optional string entity_type = 3;        // Filter by type
+  optional string after = 4;              // UUID cursor for pagination
 }
 
 message ListEntitiesResponse {
   repeated Entity entities = 1;
+  optional string next_cursor = 2;        // Present when more results exist
 }
 
 message GetEntityRequest {

@@ -6,6 +6,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-03-15
+
+### Added
+
+- **gRPC API parity** (`mnemo-proto`, `mnemo-server`): Expanded from 3 services / 8 RPCs to 6 services / 30 RPCs, piggybacking on existing REST handler logic with no business logic duplication. New services: `UserService` (CreateUser, GetUser, GetUserByExternalId, UpdateUser, DeleteUser, ListUsers), `SessionService` (CreateSession, GetSession, UpdateSession, DeleteSession, ListUserSessions), `AgentService` (RegisterAgent, GetAgent, UpdateAgentIdentity, DeleteAgent, AddExperience, GetAgentContext, SubmitLoraFeedback, GetLoraStats). Extended: `MemoryService` adds `RememberMemory` (auto-create user+session, ingest text) and `GetMemoryContext` (high-level context with contract/policy/temporal support); `EntityService` adds `DeleteEntity`, `PatchEntityClassification`; `EdgeService` adds `DeleteEdge`, `PatchEdgeClassification`. `proto/mnemo/v1/memory.proto` imports `google/protobuf/struct.proto` for opaque metadata fields.
+
+- **Dedicated gRPC port** (`mnemo-server`): `MNEMO_GRPC_PORT` env var. When set (e.g. `50051`), gRPC binds to its own port like Qdrant's `:6334`; REST stays on `MNEMO_SERVER_PORT`. When unset (default), gRPC is multiplexed on the REST port (backward compatible). Port 50051 already exposed in Dockerfile.
+
+- **gRPC security hardening**: Role enforcement on all 30 handlers (`Read`/`Write`/`Admin` as appropriate). Cross-user ownership guard on `CreateEpisode` (session must belong to specified user). Input length caps: user identifier 256 chars, text 32 KiB. `historical_strict` contract requires `as_of`. `CLASSIFICATION_UNSPECIFIED` (proto3 default 0) explicitly rejected. 9 red-team regression tests.
+
+- **Homeoadaptive LoRA (Spec 07)** (`mnemo-lora`, `mnemo-server`): Explicit feedback loop via `POST /api/v1/agents/:agent_id/feedback`. Agent-view LoRA statistics at `GET /api/v1/agents/:agent_id/lora/stats` and `GET /api/v1/agents/:agent_id/lora/users`. `list_agent_lora_users` storage method surfaces per-agent adapter coverage.
+
+- **Temporal consistency (Spec 08)** (`mnemo-retrieval`, `mnemo-server`): `as_of` hard-filter mode — edges where `valid_at > as_of` are excluded before scoring, closing historical query contamination. `list_agent_lora_users` endpoint completes the homeoadaptive stats surface. Temporal score calculation uses `as_of` as reference point instead of wall clock.
+
+- **Temporal accuracy gate: 96.8%** (gate: 95%): Five targeted fixes — entity "most recent wins" (removed stale `is_none()` guard), historical entity suppression for `as_of` queries, classifier cap bypass via explicit caller guard, σ=180 days gaussian, keyword+temporal blend fallback in routes. Eval harness enhancements: `--wait-for-processing`, sequential episode ingestion, `ingest_tracked()` + `wait_for_processing()` methods.
+
+### Changed
+
+- Workspace version: `0.7.0` → `0.9.0` across all 12 crates.
+- Python SDK version: `0.7.0` → `0.9.0`.
+- TypeScript SDK version: `0.7.0` → `0.9.0`.
+- Helm chart version: `0.7.0` → `0.9.0`.
+- `Edge::from_extraction` gains a 7th `source_agent_id: Option<String>` parameter.
+- `ExtractedRelationship` gains `temporal_scope: Option<FactTemporalScope>`.
+- `CreateEpisodeRequest` and `CreateSessionRequest` gain `agent_id: Option<String>`.
+- `create_episode` storage trait method gains a 4th `agent_id: Option<String>` parameter.
+- `gRPC GetAgentContext` now passes `agent_id` to the retrieval engine for LoRA personalization (was always `None`).
+- `gRPC QueryEdges` now queries both source and target directions; results merged and deduplicated.
+- `gRPC GetMemoryContext` now wires `contract`/`retrieval_policy`/`mode` into `CoreContextRequest`.
+
+### Fixed
+
+- All 5 CI failure modes from prior sprint: `cargo fmt` diffs, stale test API calls in 4 test files, missing `mnemo-lora` Dockerfile COPY.
+- `benchmark-eval` workflow: ONNX Runtime now downloaded before server start; `sleep 3` replaced with 120s readiness poll.
+- Clippy `-D warnings`: 7 violations across `mnemo-mcp`, `mnemo-core`, `mnemo-gnn`, `mnemo-lora`, `mnemo-retrieval`, `mnemo-server`.
+
+### Security
+
+- gRPC `CallerContext` role is now enforced on all 30 handlers (previously discarded with `_caller`).
+- gRPC `CreateEpisode` verifies session ownership (session.user_id == request.user_id).
+- Input length caps on `RememberMemory` prevent unbounded Redis key creation.
+
+## [0.8.0] — 2026-03-14
+
+### Added
+
+- **Agent identity system** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): `AgentIdentityProfile` with cryptographic audit chain (SHA-256 Merkle-style witness), version history, rollback support, and immutable audit trail. `AgentStore` trait with Redis persistence. Endpoints: `POST/GET/DELETE /api/v1/agents`, `GET/PUT /api/v1/agents/:id/identity`, `GET /api/v1/agents/:id/identity/versions`, `GET /api/v1/agents/:id/identity/audit`, `GET /api/v1/agents/:id/identity/audit/verify`, `POST /api/v1/agents/:id/identity/rollback`, `POST /api/v1/agents/:id/identity/verified`. Agent registration CRUD, cursor-paginated list. `agent_id` added to `Session`, `Episode`, `Edge` for multi-agent topology. `Agent` variant in `GuardrailScope` for agent-scoped guardrails. `region_ids` in `ContextRequest` for scoped retrieval. `X-Agent-Id` header support in REST middleware.
+
+- **TinyLoRA: per-agent embedding personalization (Spec 06)** (`mnemo-lora`, `mnemo-server`): Rank-8 LoRA adapters for per-`(user_id, agent_id)` embedding personalization. `LoraAdaptedEmbedder` wraps the base FastEmbed model and applies the adapter matrix at query time. Training, retrieval, deletion endpoints at `/api/v1/lora/*`. Adapters persisted in Redis with no TTL.
+
+- **Agent experience system** (`mnemo-core`, `mnemo-storage`, `mnemo-server`): `ExperienceEvent` model with EWC++ Fisher importance weighting, configurable decay half-life. `POST /api/v1/agents/:id/experience` ingest; `GET .../experience/importance` lists events ranked by Fisher score. Agent branch system: `POST/GET/DELETE /api/v1/agents/:id/branches`, merge, fork endpoints.
+
+- **ContraGAT graph neural network** (`mnemo-gnn`): Contrastive graph attention network for retrieval re-ranking. Multi-head attention on local subgraphs (10–50 nodes, <1ms latency). Pure Rust, zero ML framework dependency. GNN validation benchmark with PARK verdict.
+
+- **Standalone eval package (Spec 05)** (`eval/`): `temporal_eval.py`, `longmem_eval.py`. Regression detection (fails CI if accuracy drops >2pp). 27-case temporal eval pack + 10-case long-term memory pack. Expanded scientific research case pack.
+
+- **Temporal reasoning engine (Spec 03)**: Belief-change detection, fact type annotations (`Mutable`/`Stable`/`TimeBounded`), confidence decay/reinforcement. 27-case eval pack for temporal correctness. `TemporalDiagnostics` in `ContextBlock`. `BeliefChangeStore` trait.
+
+- **Context assembly engine (Spec 04)**: Query classifier (`QueryType` enum), structured context output (`StructuredContext`), retrieval explanations (`RetrievalExplanation`), tiered token budgeting (60%/25%/15% Tier1/2/3 ratio). `AssembleContextRequest` with `structured`, `explain`, `tiered_budget` flags.
+
+### Changed
+
+- Workspace version: `0.7.0` → `0.8.0` (internal; published as `0.9.0` tag inclusive of Spec 07-08).
+- Workspace crate count: 10 → 12 (added `mnemo-lora`, `mnemo-gnn`).
+- `StateStore` composite trait now includes `AgentStore`, `LoraStore`, `BeliefChangeStore`.
+
 ## [0.7.0] — 2026-03-13
 
 ### Added

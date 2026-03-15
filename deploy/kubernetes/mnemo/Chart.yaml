@@ -2,8 +2,8 @@ apiVersion: v2
 name: mnemo
 description: Memory infrastructure for production AI agents — temporal knowledge graph, hybrid retrieval, enterprise access control.
 type: application
-version: 0.7.0
-appVersion: "0.7.0"
+version: 0.9.0
+appVersion: "0.9.0"
 home: https://github.com/anjaustin/mnemo
 sources:
   - https://github.com/anjaustin/mnemo

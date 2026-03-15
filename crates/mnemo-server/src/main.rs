@@ -624,7 +624,8 @@ async fn main() -> anyhow::Result<()> {
         .set_serving::<mnemo_proto::proto::user_service_server::UserServiceServer<GrpcState>>()
         .await;
     health_reporter
-        .set_serving::<mnemo_proto::proto::session_service_server::SessionServiceServer<GrpcState>>()
+        .set_serving::<mnemo_proto::proto::session_service_server::SessionServiceServer<GrpcState>>(
+        )
         .await;
     health_reporter
         .set_serving::<mnemo_proto::proto::entity_service_server::EntityServiceServer<GrpcState>>()

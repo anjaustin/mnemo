@@ -29,40 +29,18 @@ use mnemo_server::state::{
 use mnemo_storage::{QdrantVectorStore, RedisStateStore};
 
 use mnemo_proto::proto::{
-    agent_service_client::AgentServiceClient,
-    edge_service_client::EdgeServiceClient,
-    entity_service_client::EntityServiceClient,
-    memory_service_client::MemoryServiceClient,
-    session_service_client::SessionServiceClient,
-    user_service_client::UserServiceClient,
-    AddExperienceRequest as ProtoAddExperienceRequest,
-    ContextMessage,
-    CreateEpisodeRequest,
-    CreateSessionRequest as ProtoCreateSessionRequest,
-    CreateUserRequest as ProtoCreateUserRequest,
-    DeleteEpisodeRequest,
-    DeleteEntityRequest,
-    DeleteSessionRequest,
-    DeleteUserRequest,
-    GetAgentRequest,
-    GetContextRequest,
-    GetEdgeRequest,
-    GetEntityRequest,
-    GetMemoryContextRequest,
-    GetSessionRequest,
-    GetUserRequest,
-    ListEntitiesRequest,
-    ListEpisodesRequest,
-    ListUserSessionsRequest,
-    ListUsersRequest,
-    PaginationRequest,
-    PatchClassificationRequest,
-    QueryEdgesRequest,
-    RegisterAgentRequest,
-    RememberMemoryRequest,
+    agent_service_client::AgentServiceClient, edge_service_client::EdgeServiceClient,
+    entity_service_client::EntityServiceClient, memory_service_client::MemoryServiceClient,
+    session_service_client::SessionServiceClient, user_service_client::UserServiceClient,
+    AddExperienceRequest as ProtoAddExperienceRequest, ContextMessage, CreateEpisodeRequest,
+    CreateSessionRequest as ProtoCreateSessionRequest, CreateUserRequest as ProtoCreateUserRequest,
+    DeleteEntityRequest, DeleteEpisodeRequest, DeleteSessionRequest, DeleteUserRequest,
+    GetAgentRequest, GetContextRequest, GetEdgeRequest, GetEntityRequest, GetMemoryContextRequest,
+    GetSessionRequest, GetUserRequest, ListEntitiesRequest, ListEpisodesRequest,
+    ListUserSessionsRequest, ListUsersRequest, PaginationRequest, PatchClassificationRequest,
+    QueryEdgesRequest, RegisterAgentRequest, RememberMemoryRequest,
     UpdateAgentIdentityRequest as ProtoUpdateAgentIdentityRequest,
-    UpdateSessionRequest as ProtoUpdateSessionRequest,
-    UpdateUserRequest as ProtoUpdateUserRequest,
+    UpdateSessionRequest as ProtoUpdateSessionRequest, UpdateUserRequest as ProtoUpdateUserRequest,
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -326,6 +304,7 @@ async fn test_grpc_create_and_list_episodes() {
             user_id: user_id.to_string(),
             session_id: session_id.to_string(),
             limit: None,
+            after: None,
         })
         .await
         .unwrap();
@@ -368,6 +347,7 @@ async fn test_grpc_delete_episode() {
             user_id: user_id.to_string(),
             session_id: session_id.to_string(),
             limit: None,
+            after: None,
         })
         .await
         .unwrap();
@@ -469,6 +449,7 @@ async fn test_grpc_list_entities() {
             user_id: user_id.to_string(),
             limit: Some(10),
             entity_type: None,
+            after: None,
         })
         .await
         .unwrap();
@@ -644,6 +625,9 @@ async fn test_grpc_get_context_requires_messages() {
             session_id: None,
             as_of: None,
             min_relevance: None,
+            structured: None,
+            explain: None,
+            tiered_budget: None,
         })
         .await;
 
@@ -672,6 +656,9 @@ async fn test_grpc_get_context_basic() {
             session_id: None,
             as_of: None,
             min_relevance: None,
+            structured: None,
+            explain: None,
+            tiered_budget: None,
         })
         .await
         .unwrap();
@@ -870,6 +857,7 @@ async fn test_grpc_auth_all_services_enforced() {
             user_id: user_id.to_string(),
             limit: Some(10),
             entity_type: None,
+            after: None,
         })
         .await;
     assert!(resp.is_err());
@@ -912,6 +900,9 @@ async fn test_grpc_negative_max_tokens_rejected() {
             session_id: None,
             as_of: None,
             min_relevance: None,
+            structured: None,
+            explain: None,
+            tiered_budget: None,
         })
         .await;
 
@@ -941,6 +932,9 @@ async fn test_grpc_zero_max_tokens_rejected() {
             session_id: None,
             as_of: None,
             min_relevance: None,
+            structured: None,
+            explain: None,
+            tiered_budget: None,
         })
         .await;
 
@@ -970,6 +964,9 @@ async fn test_grpc_malformed_as_of_rejected() {
             session_id: None,
             as_of: Some("not-a-timestamp".to_string()),
             min_relevance: None,
+            structured: None,
+            explain: None,
+            tiered_budget: None,
         })
         .await;
 
@@ -1001,6 +998,9 @@ async fn test_grpc_min_relevance_negative_rejected() {
             session_id: None,
             as_of: None,
             min_relevance: Some(-0.5),
+            structured: None,
+            explain: None,
+            tiered_budget: None,
         })
         .await;
 
@@ -1030,6 +1030,9 @@ async fn test_grpc_min_relevance_above_one_rejected() {
             session_id: None,
             as_of: None,
             min_relevance: Some(1.5),
+            structured: None,
+            explain: None,
+            tiered_budget: None,
         })
         .await;
 
@@ -1142,6 +1145,7 @@ async fn test_grpc_entity_type_filter() {
             user_id: user_id.to_string(),
             limit: Some(50),
             entity_type: Some("person".to_string()),
+            after: None,
         })
         .await
         .unwrap();
@@ -1157,6 +1161,7 @@ async fn test_grpc_entity_type_filter() {
             user_id: user_id.to_string(),
             limit: Some(50),
             entity_type: Some("product".to_string()),
+            after: None,
         })
         .await
         .unwrap();
@@ -1171,6 +1176,7 @@ async fn test_grpc_entity_type_filter() {
             user_id: user_id.to_string(),
             limit: Some(50),
             entity_type: None,
+            after: None,
         })
         .await
         .unwrap();
@@ -1211,7 +1217,9 @@ async fn test_grpc_user_create_and_get() {
 
     // GetUser
     let got = client
-        .get_user(GetUserRequest { id: user_id.clone() })
+        .get_user(GetUserRequest {
+            id: user_id.clone(),
+        })
         .await
         .unwrap()
         .into_inner();
@@ -1282,7 +1290,9 @@ async fn test_grpc_user_delete() {
         .into_inner();
 
     let del = client
-        .delete_user(DeleteUserRequest { id: user.id.clone() })
+        .delete_user(DeleteUserRequest {
+            id: user.id.clone(),
+        })
         .await
         .unwrap()
         .into_inner();
@@ -1799,7 +1809,9 @@ async fn test_grpc_agent_update_identity() {
     fields.insert(
         "role".to_string(),
         prost_types::Value {
-            kind: Some(prost_types::value::Kind::StringValue("support-agent".to_string())),
+            kind: Some(prost_types::value::Kind::StringValue(
+                "support-agent".to_string(),
+            )),
         },
     );
     let core = prost_types::Struct { fields };
@@ -2053,7 +2065,7 @@ async fn test_grpc_rt_create_episode_cross_user_rejected() {
     // Try to inject episode into User A's session using User B's user_id
     let err = client
         .create_episode(CreateEpisodeRequest {
-            user_id: user_b.id.to_string(), // ← User B
+            user_id: user_b.id.to_string(),       // ← User B
             session_id: session_a.id.to_string(), // ← User A's session
             content: "injected content".to_string(),
             episode_type: "message".to_string(),

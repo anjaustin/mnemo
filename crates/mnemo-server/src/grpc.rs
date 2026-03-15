@@ -38,14 +38,13 @@ use uuid::Uuid;
 
 use mnemo_core::error::MnemoError;
 use mnemo_core::models::agent::{
-    AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent,
-    UpdateAgentIdentityRequest,
+    AgentIdentityProfile, CreateExperienceRequest, ExperienceEvent, UpdateAgentIdentityRequest,
 };
 use mnemo_core::models::api_key::{hash_api_key, ApiKeyRole, CallerContext};
 use mnemo_core::models::classification::Classification;
 use mnemo_core::models::context::{
-    ContextMessage as CoreContextMessage, ContextRequest as CoreContextRequest,
-    SearchType, TemporalIntent,
+    ContextMessage as CoreContextMessage, ContextRequest as CoreContextRequest, SearchType,
+    TemporalIntent,
 };
 use mnemo_core::models::episode::{
     CreateEpisodeRequest as CoreCreateEpisodeRequest, EpisodeType, MessageRole,
@@ -66,19 +65,6 @@ use mnemo_storage::redis_store::RedisStateStore;
 use mnemo_proto::proto::{
     // Agent service
     agent_service_server::AgentService,
-    AddExperienceRequest,
-    AgentProfile,
-    DeleteAgentRequest,
-    ExperienceEvent as ProtoExperienceEvent,
-    GetAgentContextRequest,
-    GetAgentContextResponse,
-    GetAgentRequest,
-    GetLoraStatsRequest,
-    LoraFeedbackRequest,
-    LoraFeedbackResponse,
-    LoraStatsResponse,
-    RegisterAgentRequest,
-    UpdateAgentIdentityRequest as ProtoUpdateAgentIdentityRequest,
     // Edge service
     edge_service_server::EdgeService,
     // Entity service
@@ -89,11 +75,14 @@ use mnemo_proto::proto::{
     session_service_server::SessionService,
     // User service
     user_service_server::UserService,
+    AddExperienceRequest,
+    AgentProfile,
     // Common
     Classification as ProtoClassification,
     CreateEpisodeRequest,
     CreateSessionRequest as ProtoCreateSessionRequest,
     CreateUserRequest as ProtoCreateUserRequest,
+    DeleteAgentRequest,
     DeleteEdgeRequest,
     DeleteEntityRequest,
     DeleteEpisodeRequest,
@@ -106,11 +95,16 @@ use mnemo_proto::proto::{
     EntitySummary,
     Episode as ProtoEpisode,
     EpisodeSummary as ProtoEpisodeSummary,
+    ExperienceEvent as ProtoExperienceEvent,
     FactSummary,
+    GetAgentContextRequest,
+    GetAgentContextResponse,
+    GetAgentRequest,
     GetContextRequest,
     GetContextResponse,
     GetEdgeRequest,
     GetEntityRequest,
+    GetLoraStatsRequest,
     GetMemoryContextRequest,
     GetMemoryContextResponse,
     GetSessionRequest,
@@ -124,12 +118,17 @@ use mnemo_proto::proto::{
     ListUserSessionsResponse,
     ListUsersRequest,
     ListUsersResponse,
+    LoraFeedbackRequest,
+    LoraFeedbackResponse,
+    LoraStatsResponse,
     PatchClassificationRequest,
     QueryEdgesRequest,
     QueryEdgesResponse,
+    RegisterAgentRequest,
     RememberMemoryRequest,
     RememberMemoryResponse,
     Session as ProtoSession,
+    UpdateAgentIdentityRequest as ProtoUpdateAgentIdentityRequest,
     UpdateSessionRequest as ProtoUpdateSessionRequest,
     UpdateUserRequest as ProtoUpdateUserRequest,
     User as ProtoUser,
@@ -279,7 +278,8 @@ fn extract_request_id<T>(request: &Request<T>) -> String {
         .filter(|s| {
             !s.is_empty()
                 && s.len() <= 64
-                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         })
         .unwrap_or_else(|| Uuid::now_v7().to_string())
 }
@@ -626,10 +626,10 @@ fn experience_event_to_proto(e: ExperienceEvent) -> ProtoExperienceEvent {
         session_id: e.session_id.as_ref().map(|s| s.to_string()),
         category: e.category,
         signal: e.signal.clone(),
-            confidence: e.confidence,
-            weight: e.weight,
-            decay_half_life_days: e.decay_half_life_days,
-            evidence_episode_ids: e
+        confidence: e.confidence,
+        weight: e.weight,
+        decay_half_life_days: e.decay_half_life_days,
+        evidence_episode_ids: e
             .evidence_episode_ids
             .iter()
             .map(|id| id.to_string())
@@ -723,9 +723,9 @@ impl MemoryService for GrpcState {
             min_relevance,
             agent_id: None,
             region_ids: vec![],
-            structured: false,
-            explain: false,
-            tiered_budget: false,
+            structured: req.structured.unwrap_or(false),
+            explain: req.explain.unwrap_or(false),
+            tiered_budget: req.tiered_budget.unwrap_or(false),
         };
 
         let reranker = reranker_for_state(&self.reranker);
@@ -927,7 +927,10 @@ impl MemoryService for GrpcState {
         };
 
         // Parse contract — drives temporal intent override and as_of requirement.
-        let contract_str = req.contract.clone().unwrap_or_else(|| "default".to_string());
+        let contract_str = req
+            .contract
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
         let contract_requires_as_of = contract_str == "historical_strict";
         if contract_requires_as_of && as_of.is_none() {
             return Err(Status::invalid_argument(
@@ -1177,16 +1180,24 @@ impl MemoryService for GrpcState {
         request: Request<ListEpisodesRequest>,
     ) -> Result<Response<ListEpisodesResponse>, Status> {
         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
         let session_id = parse_uuid(&req.session_id, "session_id")?;
         let limit = req.limit.unwrap_or(20).clamp(1, 500) as u32;
+        let after = req
+            .after
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| parse_uuid(s, "after"))
+            .transpose()?;
 
         let params = mnemo_core::models::episode::ListEpisodesParams {
             limit,
-            after: None,
+            after,
             status: None,
         };
 
@@ -1196,8 +1207,15 @@ impl MemoryService for GrpcState {
             .await
             .map_err(storage_err_to_status)?;
 
+        let next_cursor = if episodes.len() == limit as usize {
+            episodes.last().map(|e| e.id.to_string())
+        } else {
+            None
+        };
+
         Ok(Response::new(ListEpisodesResponse {
             episodes: episodes.into_iter().map(episode_to_proto).collect(),
+            next_cursor,
         }))
     }
 
@@ -1436,12 +1454,14 @@ impl SessionService for GrpcState {
         Ok(Response::new(session_to_proto(session)))
     }
 
-     async fn get_session(
-         &self,
-         request: Request<GetSessionRequest>,
-     ) -> Result<Response<ProtoSession>, Status> {
-         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+    async fn get_session(
+        &self,
+        request: Request<GetSessionRequest>,
+    ) -> Result<Response<ProtoSession>, Status> {
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1508,12 +1528,14 @@ impl SessionService for GrpcState {
         Ok(Response::new(DeleteResponse { deleted: true }))
     }
 
-     async fn list_user_sessions(
-         &self,
-         request: Request<ListUserSessionsRequest>,
-     ) -> Result<Response<ListUserSessionsResponse>, Status> {
-         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+    async fn list_user_sessions(
+        &self,
+        request: Request<ListUserSessionsRequest>,
+    ) -> Result<Response<ListUserSessionsResponse>, Status> {
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1544,7 +1566,8 @@ impl SessionService for GrpcState {
         } else {
             None
         };
-        let proto_sessions: Vec<ProtoSession> = sessions.into_iter().map(session_to_proto).collect();
+        let proto_sessions: Vec<ProtoSession> =
+            sessions.into_iter().map(session_to_proto).collect();
 
         Ok(Response::new(ListUserSessionsResponse {
             sessions: proto_sessions,
@@ -1558,49 +1581,84 @@ impl SessionService for GrpcState {
 
 #[tonic::async_trait]
 impl EntityService for GrpcState {
-     async fn list_entities(
-         &self,
-         request: Request<ListEntitiesRequest>,
-     ) -> Result<Response<ListEntitiesResponse>, Status> {
-         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+    async fn list_entities(
+        &self,
+        request: Request<ListEntitiesRequest>,
+    ) -> Result<Response<ListEntitiesResponse>, Status> {
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
         let limit = req.limit.unwrap_or(20).clamp(1, 500) as u32;
+        let after = req
+            .after
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| parse_uuid(s, "after"))
+            .transpose()?;
 
         let type_filter = req
             .entity_type
             .as_deref()
             .map(mnemo_core::models::entity::EntityType::from_str_flexible);
 
-        let entities = self
-            .state_store
-            .list_entities(user_id, limit, None)
-            .await
-            .map_err(storage_err_to_status)?;
-
+        // When a type filter is requested, loop until we have `limit` matching results
+        // or exhaust all pages (fixes post-filter pagination bug P2-12).
         let filtered: Vec<_> = if let Some(ref et) = type_filter {
-            entities
-                .into_iter()
-                .filter(|e| &e.entity_type == et)
-                .collect()
+            let mut collected = Vec::new();
+            let mut cursor = after;
+            loop {
+                let batch = self
+                    .state_store
+                    .list_entities(user_id, limit, cursor)
+                    .await
+                    .map_err(storage_err_to_status)?;
+                let batch_len = batch.len();
+                for e in batch {
+                    if &e.entity_type == et {
+                        collected.push(e);
+                        if collected.len() >= limit as usize {
+                            break;
+                        }
+                    }
+                }
+                if collected.len() >= limit as usize || batch_len < limit as usize {
+                    break;
+                }
+                cursor = collected.last().map(|e| e.id);
+            }
+            collected
         } else {
-            entities
+            self.state_store
+                .list_entities(user_id, limit, after)
+                .await
+                .map_err(storage_err_to_status)?
+        };
+
+        let next_cursor = if filtered.len() == limit as usize {
+            filtered.last().map(|e| e.id.to_string())
+        } else {
+            None
         };
 
         Ok(Response::new(ListEntitiesResponse {
             entities: filtered.into_iter().map(entity_to_proto).collect(),
+            next_cursor,
         }))
     }
 
-     async fn get_entity(
-         &self,
-         request: Request<GetEntityRequest>,
-     ) -> Result<Response<ProtoEntity>, Status> {
-         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+    async fn get_entity(
+        &self,
+        request: Request<GetEntityRequest>,
+    ) -> Result<Response<ProtoEntity>, Status> {
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1674,7 +1732,9 @@ impl EdgeService for GrpcState {
         request: Request<QueryEdgesRequest>,
     ) -> Result<Response<QueryEdgesResponse>, Status> {
         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1748,12 +1808,14 @@ impl EdgeService for GrpcState {
         }))
     }
 
-     async fn get_edge(
-         &self,
-         request: Request<GetEdgeRequest>,
-     ) -> Result<Response<ProtoEdge>, Status> {
-         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-         caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+    async fn get_edge(
+        &self,
+        request: Request<GetEdgeRequest>,
+    ) -> Result<Response<ProtoEdge>, Status> {
+        let caller = validate_grpc_auth(&self.auth_config, &request).await?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -1869,7 +1931,9 @@ impl AgentService for GrpcState {
         request: Request<GetAgentRequest>,
     ) -> Result<Response<AgentProfile>, Status> {
         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -2014,7 +2078,9 @@ impl AgentService for GrpcState {
         request: Request<GetAgentContextRequest>,
     ) -> Result<Response<GetAgentContextResponse>, Status> {
         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -2120,10 +2186,7 @@ impl AgentService for GrpcState {
             format!("{}\n\n{}", identity_block, context.context)
         };
 
-        let experience_weight_sum: f32 = experiences
-            .iter()
-            .map(|e| e.effective_weight())
-            .sum();
+        let experience_weight_sum: f32 = experiences.iter().map(|e| e.effective_weight()).sum();
         let user_memory_items_used =
             (context.entities.len() + context.facts.len() + context.episodes.len()) as u32;
 
@@ -2217,7 +2280,10 @@ impl AgentService for GrpcState {
                     evidence_episode_ids: vec![],
                     created_at: None,
                 };
-                let _ = self.state_store.add_experience_event(&agent_id, core_req).await;
+                let _ = self
+                    .state_store
+                    .add_experience_event(&agent_id, core_req)
+                    .await;
                 Some(agent_id.clone())
             }
             Err(_) => None,
@@ -2236,7 +2302,9 @@ impl AgentService for GrpcState {
         request: Request<GetLoraStatsRequest>,
     ) -> Result<Response<LoraStatsResponse>, Status> {
         let caller = validate_grpc_auth(&self.auth_config, &request).await?;
-        caller.require_role(ApiKeyRole::Read).map_err(|e| Status::permission_denied(e.to_string()))?;
+        caller
+            .require_role(ApiKeyRole::Read)
+            .map_err(|e| Status::permission_denied(e.to_string()))?;
         let _request_id = extract_request_id(&request);
 
         let req = request.into_inner();
@@ -2250,11 +2318,15 @@ impl AgentService for GrpcState {
             .map_err(storage_err_to_status)?;
 
         let user_count = users.len() as u32;
-        let last_trained_at = users
-            .iter()
-            .map(|w| w.last_updated)
-            .max()
-            .map(|ts| prost_types::Timestamp { seconds: ts, nanos: 0 });
+        let last_trained_at =
+            users
+                .iter()
+                .map(|w| w.last_updated)
+                .max()
+                .map(|ts| prost_types::Timestamp {
+                    seconds: ts,
+                    nanos: 0,
+                });
 
         let avg_norm = if users.is_empty() {
             0.0

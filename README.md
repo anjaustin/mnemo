@@ -301,7 +301,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **OpenTelemetry Export** - OTLP trace export with graceful fallback to console-only tracing when the collector is unavailable.
 - **BYOK Envelope Encryption** - AES-256-GCM at-rest encryption for Redis state with customer-managed keys. Key ID rotation support. Intermediate buffers zeroized.
 - **Production Helm Chart** - HA-ready Kubernetes deployment with Redis and Qdrant subcharts, security-hardened defaults (seccompProfile, SA automount disabled, emptyDir sizeLimit), and configurable replicas.
-- **gRPC API** - 3 services, 8 RPCs on the same port as REST. Proto3 with optional fields, streaming support, and full red-team hardening.
+- **gRPC API** - 6 services, 30 RPCs. Full API parity with REST for the core data plane (users, sessions, episodes, entities, edges, agents, memory context). Runs multiplexed on the REST port by default; set `MNEMO_GRPC_PORT=50051` for a dedicated port like Qdrant's `:6334`. Proto3 schema with `google.protobuf.Struct` metadata, server reflection, and red-team hardening (role enforcement, cross-user ownership checks, input caps).
 - **Multi-tenant + Self-hosted** - Per-user isolation and deploy-it-yourself control.
 - **TinyLoRA Embedding Personalization** - Per-`(user, agent)` rank-8 LoRA adapters rotate base embeddings toward each agent's observed relevance history. No base model changes, no Qdrant index modifications — only the vectors presented to it change. Adapters are persisted in Redis, cached in memory, and updated implicitly from retrieval feedback. Enable with `MNEMO_LORA_ENABLED=true`. Reset via `DELETE /api/v1/agents/:agent_id/lora`. Inspect via `GET /api/v1/agents/:agent_id/lora/stats`.
 
@@ -390,7 +390,7 @@ For a Python-first flow, see [QUICKSTART.md](QUICKSTART.md).
 
 ## Usage
 
-Mnemo exposes a REST API, gRPC API (same port), MCP server (stdio transport), and Python/TypeScript SDKs. The examples below use the REST API.
+Mnemo exposes a REST API, gRPC API (6 services / 30 RPCs), MCP server (stdio transport), and Python/TypeScript SDKs. The examples below use the REST API.
 
 ### Start here: High-Level Memory API
 
@@ -788,6 +788,7 @@ Mnemo reads `config/default.toml` and overrides with environment variables:
 | `MNEMO_SYNC_ENABLED` | Enable multi-node CRDT sync protocol | `false` |
 | `MNEMO_SYNC_NODE_ID` | Unique node identifier for CRDT sync (must differ per replica) | (auto-generated) |
 | `MNEMO_LORA_ENABLED` | Enable TinyLoRA per-agent embedding personalization | `false` |
+| `MNEMO_GRPC_PORT` | Optional dedicated gRPC port (e.g. `50051`). When set, gRPC binds to its own listener; REST stays on `MNEMO_SERVER_PORT`. When unset (default), gRPC is multiplexed on the REST port. | (none — multiplexed) |
 
 For cloud targets that do not have a managed embedding API available, Mnemo also supports a self-hosted embedding path:
 
@@ -878,6 +879,16 @@ See `docs/QA_QC_FALSIFICATION_PRD.md` for the full 25-domain falsification plan.
 - Agent identity Phase B (experience weighting, COW branching, fork) ✅
 - Multi-agent shared memory regions with ACLs ✅
 - gRPC API (3 services, 8 RPCs) with red-team hardening ✅
+
+**v0.9.0 — gRPC Parity, Temporal Accuracy, Homeoadaptive LoRA** ✅ released
+
+- gRPC expanded to 6 services / 30 RPCs with full data-plane parity ✅
+- gRPC red-team hardening: role enforcement, ownership checks, input caps (17 findings fixed) ✅
+- Temporal accuracy gate 96.8% (gate: 95%) via 5 targeted retrieval fixes ✅
+- Homeoadaptive LoRA (Spec 07): explicit feedback, agent-view stats ✅
+- `as_of` hard-filter consistency (Spec 08) ✅
+- Dedicated gRPC port option (`MNEMO_GRPC_PORT`) ✅
+- Version sync: workspace, SDKs, Helm chart all at 0.9.0 ✅
 
 **v0.7.0 — DevEx, Kubernetes & Enterprise Hardening** ✅ released
 
