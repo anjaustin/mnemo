@@ -1,3 +1,7 @@
+// Allow result_large_err for tonic::Status which is 176 bytes - this is the
+// standard gRPC error type and we cannot change its size.
+#![allow(clippy::result_large_err)]
+
 //! gRPC service implementations for the Mnemo memory API.
 //!
 //! These handlers delegate to the same storage traits and retrieval engine
