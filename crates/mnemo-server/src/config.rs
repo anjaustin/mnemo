@@ -679,6 +679,9 @@ impl MnemoConfig {
         if let Ok(v) = std::env::var("MNEMO_WEBHOOKS_PERSISTENCE_PREFIX") {
             config.webhooks.persistence_prefix = v;
         }
+        if let Ok(v) = std::env::var("MNEMO_WEBHOOK_ALLOW_LOCALHOST") {
+            config.webhooks.allow_localhost = v == "true" || v == "1";
+        }
 
         // Sleep-time compute overrides
         if let Ok(v) = std::env::var("MNEMO_SLEEP_ENABLED") {
