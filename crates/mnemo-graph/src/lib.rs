@@ -138,7 +138,7 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
             let filtered_out: Vec<Edge> = outgoing
                 .into_iter()
                 .filter(|e| {
-                    let user_ok = user_id.map_or(true, |uid| e.user_id == uid);
+                    let user_ok = user_id.is_none_or(|uid| e.user_id == uid);
                     let valid_ok = !valid_only || e.is_valid();
                     user_ok && valid_ok
                 })
@@ -146,7 +146,7 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
             let filtered_in: Vec<Edge> = incoming
                 .into_iter()
                 .filter(|e| {
-                    let user_ok = user_id.map_or(true, |uid| e.user_id == uid);
+                    let user_ok = user_id.is_none_or(|uid| e.user_id == uid);
                     let valid_ok = !valid_only || e.is_valid();
                     user_ok && valid_ok
                 })
@@ -298,7 +298,7 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
             let filtered_out: Vec<Edge> = outgoing
                 .into_iter()
                 .filter(|e| {
-                    let user_ok = user_id.map_or(true, |uid| e.user_id == uid);
+                    let user_ok = user_id.is_none_or(|uid| e.user_id == uid);
                     let valid_ok = !valid_only || e.is_valid();
                     user_ok && valid_ok
                 })
@@ -306,7 +306,7 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
             let filtered_in: Vec<Edge> = incoming
                 .into_iter()
                 .filter(|e| {
-                    let user_ok = user_id.map_or(true, |uid| e.user_id == uid);
+                    let user_ok = user_id.is_none_or(|uid| e.user_id == uid);
                     let valid_ok = !valid_only || e.is_valid();
                     user_ok && valid_ok
                 })

@@ -22,10 +22,8 @@ fn constant_time_key_match(keys: &HashSet<String>, candidate: &str) -> bool {
         let key_bytes = key.as_bytes();
         // Only compare if lengths match (length itself leaks info, but this is
         // unavoidable with variable-length keys; the comparison is still constant-time)
-        if key_bytes.len() == candidate_bytes.len() {
-            if key_bytes.ct_eq(candidate_bytes).into() {
-                return true;
-            }
+        if key_bytes.len() == candidate_bytes.len() && key_bytes.ct_eq(candidate_bytes).into() {
+            return true;
         }
     }
     false

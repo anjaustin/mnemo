@@ -10297,7 +10297,7 @@ pub async fn evict_stale_import_jobs(state: &AppState, max_age: chrono::Duration
                 matches!(
                     job.status,
                     ImportJobStatus::Completed | ImportJobStatus::Failed
-                ) && job.finished_at.map_or(false, |t| t < cutoff)
+                ) && job.finished_at.is_some_and(|t| t < cutoff)
             })
             .map(|(id, _)| *id)
             .collect()

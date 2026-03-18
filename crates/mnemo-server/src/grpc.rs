@@ -150,10 +150,8 @@ fn constant_time_key_match(keys: &HashSet<String>, candidate: &str) -> bool {
     let candidate_bytes = candidate.as_bytes();
     for key in keys {
         let key_bytes = key.as_bytes();
-        if key_bytes.len() == candidate_bytes.len() {
-            if key_bytes.ct_eq(candidate_bytes).into() {
-                return true;
-            }
+        if key_bytes.len() == candidate_bytes.len() && key_bytes.ct_eq(candidate_bytes).into() {
+            return true;
         }
     }
     false
