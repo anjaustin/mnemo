@@ -376,6 +376,7 @@ async fn main() -> anyhow::Result<()> {
             circuit_breaker_threshold: config.webhooks.circuit_breaker_threshold,
             circuit_breaker_cooldown_ms: config.webhooks.circuit_breaker_cooldown_ms,
             persistence_enabled: config.webhooks.persistence_enabled,
+            allow_localhost: config.webhooks.allow_localhost,
         },
         // P0-3 SSRF Protection: Disable redirects to prevent redirect-based SSRF bypasses
         webhook_http: Arc::new(

@@ -159,6 +159,8 @@ pub struct WebhookDeliveryConfig {
     pub circuit_breaker_threshold: u32,
     pub circuit_breaker_cooldown_ms: u64,
     pub persistence_enabled: bool,
+    /// Allow localhost/internal IPs for webhook targets. ONLY enable in test/dev.
+    pub allow_localhost: bool,
 }
 
 #[derive(Debug, Clone)]

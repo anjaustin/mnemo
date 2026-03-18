@@ -83,6 +83,7 @@ async fn build_test_app_require_tls() -> axum::Router {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -107,6 +108,7 @@ async fn build_test_harness_with_prefilter(
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -1181,6 +1183,7 @@ async fn test_conflict_radar_detects_active_fact_conflict() {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -2997,6 +3000,7 @@ async fn test_memory_webhooks_capture_head_advanced_event_after_remember() {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -3096,6 +3100,7 @@ async fn test_memory_webhooks_capture_conflict_detected_event() {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -3245,6 +3250,7 @@ async fn test_memory_webhooks_retry_backoff_eventually_delivers() {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -3314,6 +3320,7 @@ async fn test_memory_webhook_dead_letter_and_stats_endpoint() {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -3395,6 +3402,7 @@ async fn test_memory_webhook_replay_retry_and_audit_endpoints() {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -3831,6 +3839,7 @@ async fn test_ops_incidents_endpoint_shapes_action_hrefs_for_drilldowns() {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -4327,6 +4336,7 @@ async fn test_replay_cursor_pagination_with_sparse_event_ids() {
             circuit_breaker_threshold: 100,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -5066,6 +5076,7 @@ async fn test_webhook_persistence_survives_restart() {
         circuit_breaker_threshold: 5,
         circuit_breaker_cooldown_ms: 200,
         persistence_enabled: true,
+        allow_localhost: true,
     };
 
     let state1 = AppState {
@@ -6135,6 +6146,7 @@ async fn wh13_rate_limiting_throttles_excess_deliveries() {
             circuit_breaker_threshold: 100, // High so circuit doesn't trip
             circuit_breaker_cooldown_ms: 60_000,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -6238,6 +6250,7 @@ async fn wh14_circuit_breaker_opens_after_threshold_failures() {
             circuit_breaker_threshold: 2, // Opens after 2 consecutive failures
             circuit_breaker_cooldown_ms: 30_000, // 30s — long enough that circuit stays open during test
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -6335,6 +6348,7 @@ async fn test_list_memory_webhooks_returns_all_registered() {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;
@@ -8715,6 +8729,7 @@ async fn build_authed_test_app_with_store(
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
     )
     .await;

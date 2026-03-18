@@ -345,6 +345,10 @@ pub struct WebhookSection {
     pub persistence_enabled: bool,
     #[serde(default = "default_webhook_prefix")]
     pub persistence_prefix: String,
+    /// Allow localhost/internal IPs for webhook targets. ONLY enable in test/dev.
+    /// Set via `MNEMO_WEBHOOK_ALLOW_LOCALHOST=true`. Default: false (secure).
+    #[serde(default)]
+    pub allow_localhost: bool,
 }
 
 impl Default for WebhookSection {
@@ -360,6 +364,7 @@ impl Default for WebhookSection {
             circuit_breaker_cooldown_ms: default_webhook_circuit_cooldown_ms(),
             persistence_enabled: default_webhook_persistence_enabled(),
             persistence_prefix: default_webhook_prefix(),
+            allow_localhost: false,
         }
     }
 }

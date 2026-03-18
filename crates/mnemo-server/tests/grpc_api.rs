@@ -119,6 +119,7 @@ async fn build_test_state() -> (AppState, Arc<RedisStateStore>) {
             circuit_breaker_threshold: 5,
             circuit_breaker_cooldown_ms: 200,
             persistence_enabled: false,
+            allow_localhost: true,
         },
         webhook_http: Arc::new(reqwest::Client::new()),
         webhook_redis: None,

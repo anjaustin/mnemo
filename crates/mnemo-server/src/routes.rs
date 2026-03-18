@@ -7269,7 +7269,8 @@ async fn register_memory_webhook(
         )));
     }
     // P0-3 SSRF Protection: Block internal/private network targets
-    if !is_url_safe_for_webhook(req.target_url.trim()) {
+    // Unless allow_localhost is enabled (for testing only)
+    if !state.webhook_delivery.allow_localhost && !is_url_safe_for_webhook(req.target_url.trim()) {
         return Err(AppError(MnemoError::Validation(
             "target_url must not point to internal or private network addresses".into(),
         )));
@@ -7438,7 +7439,8 @@ async fn update_memory_webhook(
             )));
         }
         // P0-3 SSRF Protection: Block internal/private network targets
-        if !is_url_safe_for_webhook(trimmed) {
+        // Unless allow_localhost is enabled (for testing only)
+        if !state.webhook_delivery.allow_localhost && !is_url_safe_for_webhook(trimmed) {
             return Err(AppError(MnemoError::Validation(
                 "target_url must not point to internal or private network addresses".into(),
             )));
