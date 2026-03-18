@@ -1087,44 +1087,47 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
         }
 
         // P1-5: DNS Rebinding Protection - validate resolved IPs at delivery time
-        if let Err(dns_err) = validate_webhook_dns(&webhook.target_url).await {
-            let dead_letter = attempt >= max_attempts;
-            update_webhook_delivery_status(
-                &state,
-                webhook_id,
-                event_id,
-                attempt,
-                false,
-                dead_letter,
-                Some(dns_err.clone()),
-            )
-            .await;
-            state
-                .metrics
-                .webhook_deliveries_failure_total
-                .fetch_add(1, Ordering::Relaxed);
-            record_webhook_delivery_failure(&state, webhook_id).await;
-            if dead_letter {
-                append_webhook_audit(
+        // Skip if allow_localhost is enabled (for testing only)
+        if !state.webhook_delivery.allow_localhost {
+            if let Err(dns_err) = validate_webhook_dns(&webhook.target_url).await {
+                let dead_letter = attempt >= max_attempts;
+                update_webhook_delivery_status(
                     &state,
                     webhook_id,
-                    "delivery_dns_rebinding_blocked",
-                    event.request_id.clone(),
-                    serde_json::json!({
-                        "event_id": event_id,
-                        "target_url": webhook.target_url,
-                        "reason": dns_err
-                    }),
+                    event_id,
+                    attempt,
+                    false,
+                    dead_letter,
+                    Some(dns_err.clone()),
                 )
                 .await;
                 state
                     .metrics
-                    .webhook_dead_letter_total
+                    .webhook_deliveries_failure_total
                     .fetch_add(1, Ordering::Relaxed);
+                record_webhook_delivery_failure(&state, webhook_id).await;
+                if dead_letter {
+                    append_webhook_audit(
+                        &state,
+                        webhook_id,
+                        "delivery_dns_rebinding_blocked",
+                        event.request_id.clone(),
+                        serde_json::json!({
+                            "event_id": event_id,
+                            "target_url": webhook.target_url,
+                            "reason": dns_err
+                        }),
+                    )
+                    .await;
+                    state
+                        .metrics
+                        .webhook_dead_letter_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                persist_webhook_state(&state).await;
+                // Don't retry DNS rebinding - it's a security violation
+                return;
             }
-            persist_webhook_state(&state).await;
-            // Don't retry DNS rebinding - it's a security violation
-            return;
         }
 
         let timestamp = chrono::Utc::now().timestamp().to_string();
