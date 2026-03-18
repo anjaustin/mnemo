@@ -793,6 +793,10 @@ impl EntityStore for RedisStateStore {
 
 impl EdgeStore for RedisStateStore {
     async fn create_edge(&self, edge: Edge) -> StorageResult<Edge> {
+        // P3-6: Validate edge label
+        mnemo_core::models::edge::validate_edge_label(&edge.label)
+            .map_err(MnemoError::Validation)?;
+
         let key = self.key(&["edge", &edge.id.to_string()]);
         self.set_json(&key, &edge).await?;
 
@@ -1434,6 +1438,17 @@ impl AgentStore for RedisStateStore {
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 
+        // P2-5: Append audit event for branch creation
+        self.append_identity_audit(
+            agent_id,
+            AgentIdentityAuditAction::BranchCreated,
+            Some(parent.version),
+            parent.version, // branch starts at parent version
+            None,
+            Some(format!("branch:{}", req.branch_name)),
+        )
+        .await?;
+
         Ok(BranchInfo {
             metadata,
             identity: branch_identity,
@@ -1550,6 +1565,19 @@ impl AgentStore for RedisStateStore {
         metadata.merged = true;
         self.set_json(&meta_key, &metadata).await?;
 
+        // P2-5: Append audit event for branch merge (update_agent_identity already
+        // creates an Updated event, so we add a BranchMerged event to track the
+        // branch origin)
+        self.append_identity_audit(
+            agent_id,
+            AgentIdentityAuditAction::BranchMerged,
+            Some(parent_version_before),
+            merged_identity.version,
+            None,
+            Some(format!("branch:{}", branch_name)),
+        )
+        .await?;
+
         Ok(MergeResult {
             branch_name: branch_name.to_string(),
             merged_identity,
@@ -1595,6 +1623,19 @@ impl AgentStore for RedisStateStore {
             .query_async(&mut conn3)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // P2-5: Append audit event for branch deletion
+        // Get parent version for audit trail
+        let parent = self.get_agent_identity(agent_id).await?;
+        self.append_identity_audit(
+            agent_id,
+            AgentIdentityAuditAction::BranchDeleted,
+            Some(parent.version),
+            parent.version, // no version change on parent
+            None,
+            Some(format!("branch:{}", branch_name)),
+        )
+        .await?;
 
         Ok(())
     }
@@ -1731,6 +1772,17 @@ impl AgentStore for RedisStateStore {
             .query_async(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        // P2-5: Append audit event on the SOURCE agent to track the fork
+        self.append_identity_audit(
+            source_agent_id,
+            AgentIdentityAuditAction::Forked,
+            Some(source.version),
+            source.version, // no version change on source
+            None,
+            Some(format!("forked_to:{}", req.new_agent_id)),
+        )
+        .await?;
 
         Ok(ForkResult {
             new_agent: new_identity,

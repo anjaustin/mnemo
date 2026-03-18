@@ -156,10 +156,48 @@ impl From<MnemoError> for ApiErrorResponse {
         Self {
             error: ApiErrorDetail {
                 code: err.error_code().to_string(),
-                message: err.to_string(),
+                // P3-4: Sanitize error messages to avoid leaking internal details
+                message: sanitize_error_message(&err),
                 retry_after_ms,
             },
         }
+    }
+}
+
+/// P3-4: Sanitize error messages before returning to clients.
+/// Replaces internal details (Redis errors, storage paths, etc.) with generic messages.
+fn sanitize_error_message(err: &MnemoError) -> String {
+    match err {
+        // Safe to expose: these are user-facing errors with no internal details
+        MnemoError::UserNotFound(id) => format!("User not found: {}", id),
+        MnemoError::SessionNotFound(id) => format!("Session not found: {}", id),
+        MnemoError::EpisodeNotFound(id) => format!("Episode not found: {}", id),
+        MnemoError::EntityNotFound(id) => format!("Entity not found: {}", id),
+        MnemoError::EdgeNotFound(id) => format!("Edge not found: {}", id),
+        MnemoError::NotFound { resource_type, id } => {
+            format!("{} not found: {}", resource_type, id)
+        }
+        MnemoError::Validation(msg) => format!("Validation error: {}", msg),
+        MnemoError::Duplicate(msg) => format!("Duplicate resource: {}", msg),
+        MnemoError::Forbidden => "Insufficient permissions".to_string(),
+        MnemoError::Unauthorized => "Unauthorized".to_string(),
+        MnemoError::InvalidApiKey => "Invalid API key".to_string(),
+        MnemoError::RateLimited { retry_after_ms } => {
+            format!("Rate limit exceeded, retry after {}ms", retry_after_ms)
+        }
+        MnemoError::AlreadyClaimed(_) => "Resource is being processed".to_string(),
+        MnemoError::ProcessingTimeout(_) => "Processing timed out".to_string(),
+
+        // Internal errors: sanitize to avoid leaking implementation details
+        MnemoError::Redis(_) => "Storage service temporarily unavailable".to_string(),
+        MnemoError::Qdrant(_) => "Vector service temporarily unavailable".to_string(),
+        MnemoError::Storage(_) => "Storage error".to_string(),
+        MnemoError::Serialization(_) => "Data serialization error".to_string(),
+        MnemoError::Config(_) => "Server configuration error".to_string(),
+        MnemoError::LlmProvider { .. } => "Language model service error".to_string(),
+        MnemoError::EmbeddingProvider { .. } => "Embedding service error".to_string(),
+        MnemoError::ExtractionFailed(_) => "Content extraction failed".to_string(),
+        MnemoError::Internal(_) => "Internal server error".to_string(),
     }
 }
 

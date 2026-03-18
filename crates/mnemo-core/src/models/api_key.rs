@@ -6,6 +6,7 @@
 //! for per-request authorization enforcement.
 
 use chrono::{DateTime, Utc};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -212,12 +213,21 @@ pub struct CallerContext {
     pub scope: Option<ApiKeyScope>,
 }
 
+/// P3-5: Sentinel UUID for bootstrap admin context.
+/// Uses a fixed UUID v4 to avoid collision with nil UUID.
+const BOOTSTRAP_SENTINEL_UUID: Uuid = Uuid::from_u128(0x00000000_0000_4000_8000_000000000001);
+
+/// P3-5: Sentinel UUID for anonymous context.
+/// Uses a fixed UUID v4 to avoid collision with nil UUID and bootstrap.
+const ANONYMOUS_SENTINEL_UUID: Uuid = Uuid::from_u128(0x00000000_0000_4000_8000_000000000002);
+
 impl CallerContext {
     /// Convenience: returns an admin context (for auth-disabled mode where the
     /// operator explicitly opted out of authentication).
     pub fn admin_bootstrap() -> Self {
         Self {
-            key_id: Uuid::nil(),
+            // P3-5: Use distinct sentinel UUID instead of nil
+            key_id: BOOTSTRAP_SENTINEL_UUID,
             key_name: "bootstrap".to_string(),
             role: ApiKeyRole::Admin,
             scope: None,
@@ -228,11 +238,22 @@ impl CallerContext {
     /// Has Read-only role so it cannot escalate to protected endpoints.
     pub fn anonymous() -> Self {
         Self {
-            key_id: Uuid::nil(),
+            // P3-5: Use distinct sentinel UUID instead of nil
+            key_id: ANONYMOUS_SENTINEL_UUID,
             key_name: "anonymous".to_string(),
             role: ApiKeyRole::Read,
             scope: None,
         }
+    }
+
+    /// Check if this is the bootstrap admin sentinel.
+    pub fn is_bootstrap(&self) -> bool {
+        self.key_id == BOOTSTRAP_SENTINEL_UUID
+    }
+
+    /// Check if this is the anonymous sentinel.
+    pub fn is_anonymous(&self) -> bool {
+        self.key_id == ANONYMOUS_SENTINEL_UUID
     }
 
     /// Check whether this caller has at least the given role.
@@ -276,19 +297,14 @@ impl CallerContext {
 // ─── Key generation helpers ────────────────────────────────────────
 
 /// Generate a new raw API key with the `mnk_` prefix (mnemo-key).
+///
+/// Uses cryptographically secure random number generation (CSPRNG) via
+/// `rand::thread_rng()` which is backed by the OS entropy source.
 pub fn generate_raw_key() -> String {
+    // P0-2 FIX: Use CSPRNG instead of timestamp-based generation
     // 32 random bytes → 64 hex chars, prefixed with `mnk_`
     let mut bytes = [0u8; 32];
-    // Use a simple fallback: combine current timestamp with Uuid randomness
-    let u1 = Uuid::from_u128(chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u128);
-    let u2 = Uuid::from_u128(
-        chrono::Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or(0)
-            .wrapping_mul(6364136223846793005) as u128,
-    );
-    bytes[..16].copy_from_slice(u1.as_bytes());
-    bytes[16..].copy_from_slice(u2.as_bytes());
+    rand::thread_rng().fill_bytes(&mut bytes);
     format!("mnk_{}", hex::encode(bytes))
 }
 
@@ -497,7 +513,9 @@ mod tests {
         let ctx = CallerContext::anonymous();
         assert_eq!(ctx.role, ApiKeyRole::Read);
         assert_eq!(ctx.key_name, "anonymous");
-        assert!(ctx.key_id.is_nil());
+        // P3-5: Use is_anonymous() instead of is_nil() - distinct sentinel UUID
+        assert!(ctx.is_anonymous());
+        assert!(!ctx.is_bootstrap());
         // anonymous cannot access admin or write endpoints
         assert!(ctx.require_role(ApiKeyRole::Admin).is_err());
         assert!(ctx.require_role(ApiKeyRole::Write).is_err());
@@ -509,6 +527,9 @@ mod tests {
         let ctx = CallerContext::admin_bootstrap();
         assert_eq!(ctx.role, ApiKeyRole::Admin);
         assert_eq!(ctx.key_name, "bootstrap");
+        // P3-5: Use is_bootstrap() instead of is_nil() - distinct sentinel UUID
+        assert!(ctx.is_bootstrap());
+        assert!(!ctx.is_anonymous());
         assert!(ctx.require_role(ApiKeyRole::Admin).is_ok());
         assert!(ctx.require_role(ApiKeyRole::Write).is_ok());
         assert!(ctx.require_role(ApiKeyRole::Read).is_ok());

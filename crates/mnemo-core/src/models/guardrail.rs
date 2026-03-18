@@ -220,10 +220,23 @@ impl GuardrailCondition {
                 .is_some_and(|el| labels.iter().any(|l| l.eq_ignore_ascii_case(el))),
             Self::ContentMatchesRegex { pattern } => {
                 ctx.content.as_ref().is_some_and(|content| {
-                    // Compile regex; if invalid, treat as non-match (safe default)
-                    regex::Regex::new(pattern)
+                    // P1-4 ReDoS Protection: Use bounded regex compilation with size limits
+                    // - size_limit: caps compiled regex memory (default 10MB -> 256KB)
+                    // - dfa_size_limit: caps DFA cache (default 10MB -> 256KB)
+                    // - Content length check: reject overly long content (max 100KB)
+                    const MAX_CONTENT_LEN: usize = 100 * 1024; // 100 KB
+                    const REGEX_SIZE_LIMIT: usize = 256 * 1024; // 256 KB
+
+                    if content.len() > MAX_CONTENT_LEN {
+                        return false; // Too long, skip regex matching
+                    }
+
+                    regex::RegexBuilder::new(pattern)
+                        .size_limit(REGEX_SIZE_LIMIT)
+                        .dfa_size_limit(REGEX_SIZE_LIMIT)
+                        .build()
                         .map(|re| re.is_match(content))
-                        .unwrap_or(false)
+                        .unwrap_or(false) // Invalid or too-complex regex = non-match
                 })
             }
             Self::CallerRoleBelow { role } => ctx

@@ -267,6 +267,8 @@ pub struct AppState {
     pub reranker: RerankerMode,
     pub import_jobs: Arc<RwLock<HashMap<Uuid, ImportJobRecord>>>,
     pub import_idempotency: Arc<RwLock<HashMap<String, Uuid>>>,
+    /// P1-2: Semaphore for limiting concurrent import jobs globally.
+    pub import_semaphore: Arc<tokio::sync::Semaphore>,
     pub memory_webhooks: Arc<RwLock<HashMap<Uuid, MemoryWebhookSubscription>>>,
     pub memory_webhook_events: Arc<RwLock<HashMap<Uuid, Vec<MemoryWebhookEventRecord>>>>,
     pub memory_webhook_audit: Arc<RwLock<HashMap<Uuid, Vec<MemoryWebhookAuditRecord>>>>,

@@ -298,6 +298,182 @@ fn target_url_host(url: &str) -> Option<String> {
         .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
 }
 
+/// P0-3 SSRF Protection: Check if a URL points to a private/internal network.
+///
+/// Returns `true` if the URL is safe (public), `false` if it targets internal resources.
+fn is_url_safe_for_webhook(url: &str) -> bool {
+    let parsed = match reqwest::Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+
+    // Block non-http(s) schemes
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return false,
+    }
+
+    // Get the host
+    let host = match parsed.host_str() {
+        Some(h) => h.to_ascii_lowercase(),
+        None => return false,
+    };
+
+    // Block localhost and loopback variants
+    if host == "localhost"
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host == "[::1]"
+        || host == "0.0.0.0"
+        || host.starts_with("127.")
+        || host.ends_with(".localhost")
+    {
+        return false;
+    }
+
+    // Block common cloud metadata endpoints
+    if host == "169.254.169.254"  // AWS/GCP/Azure metadata
+        || host == "metadata.google.internal"
+        || host == "metadata"
+        || host.ends_with(".internal")
+    {
+        return false;
+    }
+
+    // Block private IP ranges (parse as IP if possible)
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                // Private ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                // Link-local: 169.254.0.0/16
+                // Loopback: 127.0.0.0/8
+                if v4.is_private()
+                    || v4.is_loopback()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_unspecified()
+                {
+                    return false;
+                }
+                // Block 100.64.0.0/10 (Carrier-grade NAT)
+                let octets = v4.octets();
+                if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+                    return false;
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                // Block loopback, link-local, unique local (fc00::/7)
+                if v6.is_loopback() || v6.is_unspecified() {
+                    return false;
+                }
+                let segments = v6.segments();
+                // Link-local (fe80::/10)
+                if segments[0] & 0xffc0 == 0xfe80 {
+                    return false;
+                }
+                // Unique local (fc00::/7)
+                if segments[0] & 0xfe00 == 0xfc00 {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Block common internal hostnames
+    if host.starts_with("internal.")
+        || host.starts_with("private.")
+        || host.starts_with("corp.")
+        || host.starts_with("intranet.")
+    {
+        return false;
+    }
+
+    true
+}
+
+/// P1-5 DNS Rebinding Protection: Check if an IP address is safe for webhooks.
+/// Called at delivery time after DNS resolution to prevent rebinding attacks.
+fn is_ip_safe_for_webhook(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            // Block private, loopback, link-local, broadcast, unspecified
+            if v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+            {
+                return false;
+            }
+            // Block 100.64.0.0/10 (Carrier-grade NAT)
+            let octets = v4.octets();
+            if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+                return false;
+            }
+            // Block 169.254.169.254 (cloud metadata)
+            if octets == [169, 254, 169, 254] {
+                return false;
+            }
+            true
+        }
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() {
+                return false;
+            }
+            let segments = v6.segments();
+            // Link-local (fe80::/10)
+            if segments[0] & 0xffc0 == 0xfe80 {
+                return false;
+            }
+            // Unique local (fc00::/7)
+            if segments[0] & 0xfe00 == 0xfc00 {
+                return false;
+            }
+            true
+        }
+    }
+}
+
+/// P1-5 DNS Rebinding Protection: Resolve hostname and validate all resolved IPs.
+/// Returns Ok(()) if safe, Err with message if any resolved IP is unsafe.
+async fn validate_webhook_dns(url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {}", e))?;
+    
+    let host = parsed.host_str().ok_or("URL has no host")?.to_string();
+    
+    // If it's already an IP address, check directly
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if !is_ip_safe_for_webhook(ip) {
+            return Err(format!("IP address {} is not allowed", ip));
+        }
+        return Ok(());
+    }
+    
+    // Resolve hostname and check all IPs
+    let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let lookup = format!("{}:{}", host, port);
+    
+    let addrs: Vec<std::net::SocketAddr> = match tokio::net::lookup_host(lookup.as_str()).await {
+        Ok(iter) => iter.collect(),
+        Err(e) => return Err(format!("DNS lookup failed for {}: {}", host, e)),
+    };
+    
+    if addrs.is_empty() {
+        return Err(format!("DNS lookup for {} returned no addresses", host));
+    }
+    
+    for addr in &addrs {
+        if !is_ip_safe_for_webhook(addr.ip()) {
+            return Err(format!(
+                "DNS rebinding detected: {} resolved to internal IP {}",
+                host, addr.ip()
+            ));
+        }
+    }
+    
+    Ok(())
+}
+
 fn is_target_url_allowed(policy: &UserPolicyRecord, target_url: &str) -> bool {
     if policy.webhook_domain_allowlist.is_empty() {
         return true;
@@ -353,6 +529,22 @@ fn parse_memory_contract_default(value: &str) -> MemoryContract {
         "historical_strict" => MemoryContract::HistoricalStrict,
         _ => MemoryContract::Default,
     }
+}
+
+/// P2-6: Get contract strictness level (higher = stricter).
+/// Strictness order: Default < SupportSafe < CurrentStrict < HistoricalStrict
+fn contract_strictness(contract: MemoryContract) -> u8 {
+    match contract {
+        MemoryContract::Default => 0,
+        MemoryContract::SupportSafe => 1,
+        MemoryContract::CurrentStrict => 2,
+        MemoryContract::HistoricalStrict => 3,
+    }
+}
+
+/// P2-6: Check if transitioning from `from` to `to` is a downgrade.
+fn is_contract_downgrade(from: MemoryContract, to: MemoryContract) -> bool {
+    contract_strictness(to) < contract_strictness(from)
 }
 
 fn parse_retrieval_policy_default(value: &str) -> AdaptiveRetrievalPolicy {
@@ -889,6 +1081,47 @@ async fn deliver_memory_webhook_event(state: AppState, webhook_id: Uuid, event_i
                 .max(1);
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             continue;
+        }
+
+        // P1-5: DNS Rebinding Protection - validate resolved IPs at delivery time
+        if let Err(dns_err) = validate_webhook_dns(&webhook.target_url).await {
+            let dead_letter = attempt >= max_attempts;
+            update_webhook_delivery_status(
+                &state,
+                webhook_id,
+                event_id,
+                attempt,
+                false,
+                dead_letter,
+                Some(dns_err.clone()),
+            )
+            .await;
+            state
+                .metrics
+                .webhook_deliveries_failure_total
+                .fetch_add(1, Ordering::Relaxed);
+            record_webhook_delivery_failure(&state, webhook_id).await;
+            if dead_letter {
+                append_webhook_audit(
+                    &state,
+                    webhook_id,
+                    "delivery_dns_rebinding_blocked",
+                    event.request_id.clone(),
+                    serde_json::json!({
+                        "event_id": event_id,
+                        "target_url": webhook.target_url,
+                        "reason": dns_err
+                    }),
+                )
+                .await;
+                state
+                    .metrics
+                    .webhook_dead_letter_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            persist_webhook_state(&state).await;
+            // Don't retry DNS rebinding - it's a security violation
+            return;
         }
 
         let timestamp = chrono::Utc::now().timestamp().to_string();
@@ -2639,12 +2872,44 @@ async fn get_user_policy(
 
 async fn upsert_user_policy(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     ctx: Option<Extension<RequestContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<UpsertUserPolicyRequest>,
 ) -> Result<Json<UserPolicyResponse>, AppError> {
     let request_id = request_id_from_extension(ctx);
     let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+
+    // P2-6: Check for contract downgrade
+    let caller = caller_from_extension(caller);
+    if let Some(new_contract_str) = req.default_memory_contract.as_ref() {
+        let new_contract = parse_memory_contract_default(new_contract_str);
+        let current_policy = get_or_create_user_policy(&state, user.id, user_identifier.trim().to_string()).await;
+        let current_contract = parse_memory_contract_default(&current_policy.default_memory_contract);
+        
+        if is_contract_downgrade(current_contract, new_contract) {
+            // P2-6: Contract downgrades require Admin role
+            caller.require_role(ApiKeyRole::Admin).map_err(|_| {
+                AppError(MnemoError::Validation(format!(
+                    "downgrading memory contract from {:?} to {:?} requires Admin role",
+                    current_contract, new_contract
+                )))
+            })?;
+            // Log the downgrade in governance audit
+            append_governance_audit(
+                &state,
+                user.id,
+                "contract_downgrade",
+                request_id.clone(),
+                serde_json::json!({
+                    "from_contract": format!("{:?}", current_contract),
+                    "to_contract": format!("{:?}", new_contract),
+                    "authorized_by": "admin_role"
+                }),
+            )
+            .await;
+        }
+    }
 
     let policy = {
         let mut policies = state.user_policies.write().await;
@@ -2952,9 +3217,14 @@ async fn delete_session(
 )]
 async fn list_user_sessions(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_id): Path<Uuid>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListResponse<Session>>, AppError> {
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(user_id)?;
+
     let list_params = ListSessionsParams {
         limit: params.limit,
         after: params.after,
@@ -3402,9 +3672,14 @@ fn default_entity_limit() -> u32 {
 )]
 async fn list_entities(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_id): Path<Uuid>,
     Query(params): Query<ListEntitiesParams>,
 ) -> Result<Json<ListResponse<Entity>>, AppError> {
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(user_id)?;
+
     // Over-fetch if classification filtering is active (same pattern as EdgeFilter)
     let fetch_limit = if params.max_classification.is_some() {
         params.limit.saturating_mul(3).max(100)
@@ -3434,9 +3709,16 @@ async fn list_entities(
 )]
 async fn get_entity(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Entity>, AppError> {
-    Ok(Json(state.state_store.get_entity(id).await?))
+    let entity = state.state_store.get_entity(id).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    caller
+        .require_user_access(entity.user_id)
+        ?;
+    Ok(Json(entity))
 }
 
 #[utoipa::path(
@@ -3452,10 +3734,16 @@ async fn get_entity(
 async fn delete_entity(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, AppError> {
     let request_id = request_id_from_extension(ctx);
     let entity = state.state_store.get_entity(id).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    caller
+        .require_user_access(entity.user_id)
+        ?;
     state.state_store.delete_entity(id).await?;
     append_governance_audit(
         &state,
@@ -3482,9 +3770,16 @@ async fn delete_entity(
 )]
 async fn query_edges(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_id): Path<Uuid>,
     Query(mut filter): Query<EdgeFilter>,
 ) -> Result<Json<ListResponse<Edge>>, AppError> {
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    caller
+        .require_user_access(user_id)
+        ?;
+
     filter.limit = filter.limit.clamp(1, 1000);
     let edges = state.state_store.query_edges(user_id, filter).await?;
     Ok(Json(ListResponse::new(edges)))
@@ -3502,9 +3797,16 @@ async fn query_edges(
 )]
 async fn get_edge(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Edge>, AppError> {
-    Ok(Json(state.state_store.get_edge(id).await?))
+    let edge = state.state_store.get_edge(id).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    caller
+        .require_user_access(edge.user_id)
+        ?;
+    Ok(Json(edge))
 }
 
 #[utoipa::path(
@@ -3520,10 +3822,16 @@ async fn get_edge(
 async fn delete_edge(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, AppError> {
     let request_id = request_id_from_extension(ctx);
     let edge = state.state_store.get_edge(id).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    caller
+        .require_user_access(edge.user_id)
+        ?;
     state.state_store.delete_edge(id).await?;
     append_governance_audit(
         &state,
@@ -3557,16 +3865,51 @@ struct ClassificationPatch {
 async fn patch_entity_classification(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
+    ctx: Option<Extension<RequestContext>>,
     Path(id): Path<Uuid>,
     Json(body): Json<ClassificationPatch>,
 ) -> Result<Json<Entity>, AppError> {
     let caller = caller_from_extension(caller);
     caller.require_role(ApiKeyRole::Write)?;
+    let request_id = request_id_from_extension(ctx);
 
     let mut entity = state.state_store.get_entity(id).await?;
-    entity.classification = body.classification;
+    // P0-1: Enforce user-scoped access control
+    caller.require_user_access(entity.user_id)?;
+
+    let old_classification = entity.classification;
+    let new_classification = body.classification;
+
+    // P2-7: Classification downgrades require Admin role
+    if new_classification < old_classification {
+        caller.require_role(ApiKeyRole::Admin).map_err(|_| {
+            AppError(MnemoError::Validation(format!(
+                "downgrading classification from {:?} to {:?} requires Admin role",
+                old_classification, new_classification
+            )))
+        })?;
+    }
+
+    entity.classification = new_classification;
     entity.updated_at = chrono::Utc::now();
     state.state_store.update_entity(&entity).await?;
+
+    // P2-7: Audit trail for all classification changes
+    append_governance_audit(
+        &state,
+        entity.user_id,
+        "entity_classification_changed",
+        request_id,
+        serde_json::json!({
+            "entity_id": entity.id,
+            "entity_name": entity.name,
+            "from_classification": format!("{:?}", old_classification),
+            "to_classification": format!("{:?}", new_classification),
+            "is_downgrade": new_classification < old_classification
+        }),
+    )
+    .await;
+
     Ok(Json(entity))
 }
 
@@ -3584,16 +3927,51 @@ async fn patch_entity_classification(
 async fn patch_edge_classification(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
+    ctx: Option<Extension<RequestContext>>,
     Path(id): Path<Uuid>,
     Json(body): Json<ClassificationPatch>,
 ) -> Result<Json<Edge>, AppError> {
     let caller = caller_from_extension(caller);
     caller.require_role(ApiKeyRole::Write)?;
+    let request_id = request_id_from_extension(ctx);
 
     let mut edge = state.state_store.get_edge(id).await?;
-    edge.classification = body.classification;
+    // Verify caller has access to this edge's user
+    caller.require_user_access(edge.user_id)?;
+
+    let old_classification = edge.classification;
+    let new_classification = body.classification;
+
+    // P2-7: Classification downgrades require Admin role
+    if new_classification < old_classification {
+        caller.require_role(ApiKeyRole::Admin).map_err(|_| {
+            AppError(MnemoError::Validation(format!(
+                "downgrading classification from {:?} to {:?} requires Admin role",
+                old_classification, new_classification
+            )))
+        })?;
+    }
+
+    edge.classification = new_classification;
     edge.updated_at = chrono::Utc::now();
     state.state_store.update_edge(&edge).await?;
+
+    // P2-7: Audit trail for all classification changes
+    append_governance_audit(
+        &state,
+        edge.user_id,
+        "edge_classification_changed",
+        request_id,
+        serde_json::json!({
+            "edge_id": edge.id,
+            "edge_label": edge.label,
+            "from_classification": format!("{:?}", old_classification),
+            "to_classification": format!("{:?}", new_classification),
+            "is_downgrade": new_classification < old_classification
+        }),
+    )
+    .await;
+
     Ok(Json(edge))
 }
 
@@ -3612,9 +3990,13 @@ async fn patch_edge_classification(
 )]
 async fn get_context(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_id): Path<Uuid>,
     Json(req): Json<ContextRequest>,
 ) -> Result<Json<ContextBlock>, AppError> {
+    let caller = caller_from_extension(caller);
+    // Verify caller has access to this user's data
+    caller.require_user_access(user_id)?;
     let context = state
         .retrieval
         .get_context(user_id, &req, reranker_for_state(&state))
@@ -4967,7 +5349,29 @@ async fn import_chat_history(
     let dry_run = req.dry_run;
     let state_for_job = state.clone();
 
+    // P1-2: Acquire semaphore permit to limit concurrent import jobs
+    let semaphore = state.import_semaphore.clone();
+    let permit = match semaphore.try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            // Update job status to failed due to rate limiting
+            {
+                let mut jobs = state.import_jobs.write().await;
+                if let Some(job) = jobs.get_mut(&job_id) {
+                    job.status = ImportJobStatus::Failed;
+                    job.errors = vec!["Too many concurrent import jobs. Please try again later.".to_string()];
+                    job.finished_at = Some(chrono::Utc::now());
+                }
+            }
+            return Err(AppError(MnemoError::Validation(
+                "Too many concurrent import jobs. Please try again later.".into(),
+            )));
+        }
+    };
+
     tokio::spawn(async move {
+        // Hold permit for duration of import job
+        let _permit = permit;
         run_import_job(
             state_for_job,
             job_id,
@@ -5045,7 +5449,8 @@ async fn get_memory_context(
     // goal_name is used below after context assembly to adjust relevance
 
     let user_identifier = user.trim().to_string();
-    let user = find_user_by_identifier(&state, user_identifier.as_str()).await?;
+    // P0-1: Enforce user-scoped access control
+    let user = find_user_with_access(&state, &caller, user_identifier.as_str()).await?;
     let policy = get_or_create_user_policy(&state, user.id, user_identifier).await;
 
     let requested_session_name = req.session.and_then(|s| {
@@ -5192,7 +5597,8 @@ async fn get_memory_context(
         AdaptiveRetrievalPolicy::Recall => 700,
         AdaptiveRetrievalPolicy::Stability => 500,
     };
-    let max_tokens = req.max_tokens.unwrap_or(default_max_tokens);
+    // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
+    let max_tokens = req.max_tokens.unwrap_or(default_max_tokens).clamp(100, 10000);
 
     let base_temporal_intent = match contract {
         MemoryContract::CurrentStrict => TemporalIntent::Current,
@@ -5514,10 +5920,12 @@ async fn get_memory_context(
 async fn memory_changes_since(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<MemoryChangesSinceRequest>,
 ) -> Result<Json<MemoryChangesSinceResponse>, AppError> {
     let request_id = request_id_from_extension(ctx);
+    let caller = caller_from_extension(caller);
     if req.to <= req.from {
         return Err(AppError(MnemoError::Validation(
             "'to' must be after 'from'".to_string(),
@@ -5525,7 +5933,8 @@ async fn memory_changes_since(
     }
 
     let user_identifier_trimmed = user_identifier.trim().to_string();
-    let user = find_user_by_identifier(&state, user_identifier_trimmed.as_str()).await?;
+    // P0-1: Enforce user-scoped access control
+    let user = find_user_with_access(&state, &caller, user_identifier_trimmed.as_str()).await?;
     let policy = get_or_create_user_policy(&state, user.id, user_identifier_trimmed).await;
     let sessions = list_all_sessions_for_user(&state, user.id).await?;
 
@@ -5783,10 +6192,12 @@ async fn memory_changes_since(
 async fn time_travel_trace(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<TimeTravelTraceRequest>,
 ) -> Result<Json<TimeTravelTraceResponse>, AppError> {
     let request_id = request_id_from_extension(ctx);
+    let caller = caller_from_extension(caller);
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
@@ -5797,7 +6208,8 @@ async fn time_travel_trace(
     }
 
     let user_identifier = user_identifier.trim().to_string();
-    let user = find_user_by_identifier(&state, user_identifier.as_str()).await?;
+    // P0-1: Enforce user-scoped access control
+    let user = find_user_with_access(&state, &caller, user_identifier.as_str()).await?;
     let policy = get_or_create_user_policy(&state, user.id, user_identifier).await;
     let contract = req
         .contract
@@ -5842,7 +6254,8 @@ async fn time_travel_trace(
         AdaptiveRetrievalPolicy::Recall => 700,
         AdaptiveRetrievalPolicy::Stability => 500,
     };
-    let max_tokens = req.max_tokens.unwrap_or(default_max_tokens);
+    // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
+    let max_tokens = req.max_tokens.unwrap_or(default_max_tokens).clamp(100, 10000);
 
     let base_temporal_intent = match contract {
         MemoryContract::CurrentStrict => TemporalIntent::Current,
@@ -6239,10 +6652,12 @@ async fn time_travel_trace(
 async fn time_travel_summary(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<TimeTravelSummaryRequest>,
 ) -> Result<Json<TimeTravelSummaryResponse>, AppError> {
     let request_id = request_id_from_extension(ctx);
+    let caller = caller_from_extension(caller);
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
@@ -6253,7 +6668,8 @@ async fn time_travel_summary(
     }
 
     let user_identifier = user_identifier.trim().to_string();
-    let user = find_user_by_identifier(&state, user_identifier.as_str()).await?;
+    // P0-1: Enforce user-scoped access control
+    let user = find_user_with_access(&state, &caller, user_identifier.as_str()).await?;
     let policy = get_or_create_user_policy(&state, user.id, user_identifier).await;
     let contract = req
         .contract
@@ -6444,11 +6860,14 @@ async fn time_travel_summary(
 async fn conflict_radar(
     State(state): State<AppState>,
     ctx: Option<Extension<RequestContext>>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<ConflictRadarRequest>,
 ) -> Result<Json<ConflictRadarResponse>, AppError> {
     let request_id = request_id_from_extension(ctx);
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    let caller = caller_from_extension(caller);
+    // P0-1: Enforce user-scoped access control
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
     let as_of = req.as_of.unwrap_or_else(chrono::Utc::now);
     let include_resolved = req.include_resolved.unwrap_or(false);
     let max_items = req.max_items.unwrap_or(50).clamp(1, 200) as usize;
@@ -6608,14 +7027,17 @@ async fn conflict_radar(
 )]
 async fn causal_recall_chains(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<CausalRecallRequest>,
 ) -> Result<Json<CausalRecallResponse>, AppError> {
+    let caller = caller_from_extension(caller);
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
 
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
     let (mode, routing_decision_json) = if let Some(explicit_mode) = req.mode {
         let decision = mnemo_retrieval::router::RoutingDecision {
             selected_strategy: match explicit_mode {
@@ -6648,7 +7070,8 @@ async fn causal_recall_chains(
         resolve_session_scope(&state, user.id, mode, requested_session_name.clone()).await?;
     let session_id = scoped_session.as_ref().map(|s| s.id);
     let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
-    let max_tokens = req.max_tokens.unwrap_or(700);
+    // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
+    let max_tokens = req.max_tokens.unwrap_or(700).clamp(100, 10000);
 
     let context_req = ContextRequest {
         session_id,
@@ -6842,6 +7265,12 @@ async fn register_memory_webhook(
             "target_url must start with http:// or https://".into(),
         )));
     }
+    // P0-3 SSRF Protection: Block internal/private network targets
+    if !is_url_safe_for_webhook(req.target_url.trim()) {
+        return Err(AppError(MnemoError::Validation(
+            "target_url must not point to internal or private network addresses".into(),
+        )));
+    }
     // SOC 2 TLS enforcement: reject non-https targets when require_tls is enabled
     if state.require_tls && !req.target_url.trim().starts_with("https://") {
         return Err(AppError(MnemoError::Validation(
@@ -7003,6 +7432,12 @@ async fn update_memory_webhook(
         if !is_http_url(trimmed) {
             return Err(AppError(MnemoError::Validation(
                 "target_url must start with http:// or https://".into(),
+            )));
+        }
+        // P0-3 SSRF Protection: Block internal/private network targets
+        if !is_url_safe_for_webhook(trimmed) {
+            return Err(AppError(MnemoError::Validation(
+                "target_url must not point to internal or private network addresses".into(),
             )));
         }
         // SOC 2 TLS enforcement: reject non-https targets when require_tls is enabled
@@ -7804,8 +8239,13 @@ async fn get_agent_handler(
 )]
 async fn delete_agent_handler(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(agent_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // P1-3: Require Admin role for deleting agents
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     state.state_store.delete_agent(&agent_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -7847,9 +8287,14 @@ async fn get_agent_identity(
 )]
 async fn update_agent_identity(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(agent_id): Path<String>,
     Json(req): Json<UpdateAgentIdentityRequest>,
 ) -> Result<Json<AgentIdentityProfile>, AppError> {
+    // P1-3: Require Write role for agent identity updates
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     validate_identity_core(&req.core)?;
     let identity = state
@@ -7949,9 +8394,14 @@ async fn verify_agent_audit_chain(
 )]
 async fn rollback_agent_identity(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(agent_id): Path<String>,
     Json(req): Json<IdentityRollbackRequest>,
 ) -> Result<Json<AgentIdentityProfile>, AppError> {
+    // P1-3: Require Admin role for agent identity rollback (destructive operation)
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     if req.target_version == 0 {
         return Err(AppError(MnemoError::Validation(
@@ -7984,9 +8434,14 @@ async fn rollback_agent_identity(
 )]
 async fn verified_identity_update(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(agent_id): Path<String>,
     Json(req): Json<mnemo_core::models::agent::VerifiedIdentityUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // P1-3: Require Write role for verified identity updates
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
 
     // 1. Verify the proof
@@ -8043,9 +8498,14 @@ async fn verified_identity_update(
 )]
 async fn add_agent_experience(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(agent_id): Path<String>,
     Json(req): Json<CreateExperienceRequest>,
 ) -> Result<(StatusCode, Json<ExperienceEvent>), AppError> {
+    // P1-3: Require Write role for adding agent experience
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     if req.signal.trim().is_empty() {
         return Err(AppError(MnemoError::Validation(
@@ -8558,9 +9018,14 @@ async fn get_agent_approval_policy(
 )]
 async fn create_agent_branch(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(agent_id): Path<String>,
     Json(req): Json<mnemo_core::models::agent::CreateBranchRequest>,
 ) -> Result<Json<mnemo_core::models::agent::BranchInfo>, AppError> {
+    // P1-3: Require Admin role for creating agent branches
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     let info = state
         .state_store
@@ -8582,9 +9047,14 @@ async fn create_agent_branch(
 )]
 async fn fork_agent(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(agent_id): Path<String>,
     Json(req): Json<mnemo_core::models::agent::ForkAgentRequest>,
 ) -> Result<Json<mnemo_core::models::agent::ForkResult>, AppError> {
+    // P1-3: Require Admin role for forking agents
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     let result = state.state_store.fork_agent(&agent_id, req).await?;
     Ok(Json(result))
@@ -8650,9 +9120,14 @@ async fn get_agent_branch(
 )]
 async fn update_agent_branch(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path((agent_id, branch_name)): Path<(String, String)>,
     Json(req): Json<mnemo_core::models::agent::UpdateAgentIdentityRequest>,
 ) -> Result<Json<mnemo_core::models::agent::AgentIdentityProfile>, AppError> {
+    // P1-3: Require Write role for updating agent branches
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Write)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     let identity = state
         .state_store
@@ -8676,8 +9151,13 @@ async fn update_agent_branch(
 )]
 async fn merge_agent_branch(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path((agent_id, branch_name)): Path<(String, String)>,
 ) -> Result<Json<mnemo_core::models::agent::MergeResult>, AppError> {
+    // P1-3: Require Admin role for merging agent branches
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     let result = state
         .state_store
@@ -8701,8 +9181,13 @@ async fn merge_agent_branch(
 )]
 async fn delete_agent_branch(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path((agent_id, branch_name)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
+    // P1-3: Require Admin role for deleting agent branches
+    let caller = caller_from_extension(caller);
+    caller.require_role(ApiKeyRole::Admin)?;
+
     let agent_id = normalize_agent_id(&agent_id)?;
     state
         .state_store
@@ -8773,7 +9258,8 @@ async fn get_agent_context(
         resolve_session_scope(&state, user.id, mode, requested_session_name).await?;
     let session_id = scoped_session.as_ref().map(|s| s.id);
 
-    let max_tokens = req.max_tokens.unwrap_or(500);
+    // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
+    let max_tokens = req.max_tokens.unwrap_or(500).clamp(100, 10000);
     let temporal_intent = req.time_intent.unwrap_or(TemporalIntent::Auto);
     let agent_query_text = req.query.clone();
     let context_req = ContextRequest {
@@ -9293,6 +9779,40 @@ async fn run_import_job(
 
     update_import_job_totals(&state, job_id, messages.len() as u32).await;
 
+    // P1-1: Validate timestamps before processing
+    let now = chrono::Utc::now();
+    let max_future_drift = chrono::Duration::minutes(5);
+    let max_age_years = 10;
+    let oldest_allowed = now - chrono::Duration::days(365 * max_age_years);
+    let newest_allowed = now + max_future_drift;
+
+    let mut timestamp_errors: Vec<String> = Vec::new();
+    for (idx, msg) in messages.iter().enumerate() {
+        if msg.created_at > newest_allowed {
+            timestamp_errors.push(format!(
+                "row {}: timestamp {} is in the future (max drift: {} minutes)",
+                idx + 1,
+                msg.created_at,
+                max_future_drift.num_minutes()
+            ));
+        } else if msg.created_at < oldest_allowed {
+            timestamp_errors.push(format!(
+                "row {}: timestamp {} is too old (max age: {} years)",
+                idx + 1,
+                msg.created_at,
+                max_age_years
+            ));
+        }
+        if timestamp_errors.len() >= 10 {
+            timestamp_errors.push("...additional timestamp errors omitted".to_string());
+            break;
+        }
+    }
+    if !timestamp_errors.is_empty() {
+        finalize_import_job_failure(&state, job_id, timestamp_errors).await;
+        return;
+    }
+
     if dry_run {
         let mut session_names = std::collections::HashSet::new();
         for message in &messages {
@@ -9754,6 +10274,53 @@ async fn finalize_import_job_success(
     }
 }
 
+/// P3-3: Evict completed/failed import jobs older than the given duration.
+/// Also cleans up the idempotency map for old jobs.
+pub async fn evict_stale_import_jobs(state: &AppState, max_age: chrono::Duration) {
+    let now = chrono::Utc::now();
+    let cutoff = now - max_age;
+
+    // Collect job IDs to remove
+    let job_ids_to_remove: Vec<Uuid> = {
+        let jobs = state.import_jobs.read().await;
+        jobs.iter()
+            .filter(|(_, job)| {
+                // Only evict completed/failed jobs that are old enough
+                matches!(
+                    job.status,
+                    ImportJobStatus::Completed | ImportJobStatus::Failed
+                ) && job.finished_at.map_or(false, |t| t < cutoff)
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    };
+
+    if job_ids_to_remove.is_empty() {
+        return;
+    }
+
+    // Remove jobs
+    {
+        let mut jobs = state.import_jobs.write().await;
+        for id in &job_ids_to_remove {
+            jobs.remove(id);
+        }
+    }
+
+    // Clean up idempotency map entries pointing to removed jobs
+    {
+        let mut idempotency = state.import_idempotency.write().await;
+        idempotency.retain(|_, job_id| !job_ids_to_remove.contains(job_id));
+    }
+
+    if !job_ids_to_remove.is_empty() {
+        tracing::debug!(
+            evicted = job_ids_to_remove.len(),
+            "Evicted stale import job records"
+        );
+    }
+}
+
 async fn find_or_create_memory_user(
     state: &AppState,
     user_identifier: &str,
@@ -10101,6 +10668,18 @@ async fn find_user_by_identifier(state: &AppState, identifier: &str) -> Result<U
     })
 }
 
+/// P0-1: Find user by identifier and verify caller has access.
+/// Combines user lookup with access control check for memory endpoints.
+async fn find_user_with_access(
+    state: &AppState,
+    caller: &CallerContext,
+    identifier: &str,
+) -> Result<User, MnemoError> {
+    let user = find_user_by_identifier(state, identifier).await?;
+    caller.require_user_access(user.id)?;
+    Ok(user)
+}
+
 async fn find_or_create_session(
     state: &AppState,
     user_id: Uuid,
@@ -10208,12 +10787,25 @@ fn default_max_nodes() -> usize {
 )]
 async fn get_subgraph(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(entity_id): Path<Uuid>,
     Query(params): Query<SubgraphParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // P0-1: Verify entity ownership before traversal
+    let entity = state.state_store.get_entity(entity_id).await?;
+    let caller = caller_from_extension(caller);
+    caller
+        .require_user_access(entity.user_id)
+        ?;
+
+    // P0-1: Clamp traversal parameters to prevent DoS
+    let clamped_depth = params.depth.min(10);
+    let clamped_max_nodes = params.max_nodes.min(500);
+
+    // P2-4: Use user-filtered BFS to prevent cross-user data leakage
     let subgraph = state
         .graph
-        .traverse_bfs(entity_id, params.depth, params.max_nodes, true)
+        .traverse_bfs_for_user(entity_id, Some(entity.user_id), clamped_depth, clamped_max_nodes, true)
         .await?;
 
     // Serialize subgraph to JSON
@@ -10922,10 +11514,13 @@ struct GraphEntitiesParams {
 )]
 async fn graph_list_entities(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user): Path<String>,
     Query(params): Query<GraphEntitiesParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let user_rec = find_user_by_identifier(&state, &user).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user_rec = find_user_with_access(&state, &caller, &user).await?;
     let clamped_limit = params.limit.clamp(1, 1000);
     // Fetch more than requested if filtering (filter reduces result count).
     // We over-fetch by 4x when filters are active to improve the chance of
@@ -11077,10 +11672,13 @@ struct GraphEdgesParams {
 )]
 async fn graph_list_edges(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user): Path<String>,
     Query(params): Query<GraphEdgesParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let user_rec = find_user_by_identifier(&state, &user).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user_rec = find_user_with_access(&state, &caller, &user).await?;
     let include_invalidated = !params.valid_only.unwrap_or(true);
     let filter = EdgeFilter {
         label: params.label.clone(),
@@ -11159,10 +11757,12 @@ async fn graph_neighbors(
             id: entity_id.to_string(),
         }));
     }
+    // P2-4: Use user-filtered BFS to prevent cross-user data leakage
     let subgraph = state
         .graph
-        .traverse_bfs(
+        .traverse_bfs_for_user(
             entity_id,
+            Some(user_rec.id),
             params.depth.min(10),
             params.max_nodes.min(500),
             params.valid_only,
@@ -11321,11 +11921,13 @@ async fn graph_shortest_path(
         }));
     }
 
+    // P2-4: Use user-filtered path finding to prevent cross-user data leakage
     let result = state
         .graph
-        .find_shortest_path(
+        .find_shortest_path_for_user(
             params.from,
             params.to,
+            Some(user_rec.id),
             params.max_depth.min(20),
             params.valid_only,
         )
@@ -11456,9 +12058,14 @@ fn default_spans_limit() -> usize {
 )]
 async fn list_spans_by_user(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_id): Path<Uuid>,
     Query(params): Query<SpansUserParams>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, AppError> {
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(user_id)?;
+
     let clamped_limit = params.limit.clamp(1, 1000);
     // Try Redis first
     let matched: Vec<LlmSpan> = match state
@@ -11479,13 +12086,13 @@ async fn list_spans_by_user(
                 .collect()
         }
     };
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "user_id": user_id,
         "spans": matched,
         "count": matched.len(),
         "total_tokens": matched.iter().map(|s| s.total_tokens).sum::<u32>(),
         "total_latency_ms": matched.iter().map(|s| s.latency_ms).sum::<u64>(),
-    }))
+    })))
 }
 
 // ─── Sleep-time compute: Memory Digest API ────────────────────────────────
@@ -11507,9 +12114,12 @@ async fn list_spans_by_user(
 )]
 async fn get_memory_digest(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user): Path<String>,
 ) -> Result<Json<MemoryDigest>, AppError> {
-    let user_rec = find_user_by_identifier(&state, &user).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user_rec = find_user_with_access(&state, &caller, &user).await?;
 
     // Fast path: in-memory cache hit
     {
@@ -11553,9 +12163,12 @@ async fn get_memory_digest(
 )]
 async fn refresh_memory_digest(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user): Path<String>,
 ) -> Result<Json<MemoryDigest>, AppError> {
-    let user_rec = find_user_by_identifier(&state, &user).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user_rec = find_user_with_access(&state, &caller, &user).await?;
 
     let Some(ref llm) = state.llm else {
         return Err(AppError(MnemoError::Validation(
@@ -11753,10 +12366,13 @@ async fn get_user_coherence(
 )]
 async fn get_stale_facts(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Query(query): Query<mnemo_core::models::edge::StaleFactsQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     // Fetch all valid edges for the user
     let edges = state
@@ -11847,10 +12463,13 @@ async fn get_stale_facts(
 )]
 async fn revalidate_fact(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<mnemo_core::models::edge::RevalidateFactRequest>,
 ) -> Result<Json<mnemo_core::models::edge::RevalidateFactResult>, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     if req.new_confidence < 0.0 || req.new_confidence > 1.0 {
         return Err(AppError(MnemoError::Validation(
@@ -11919,11 +12538,14 @@ async fn revalidate_fact(
 )]
 async fn get_belief_changes(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Query(query): Query<mnemo_core::models::edge::BeliefChangesQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     use mnemo_core::traits::storage::BeliefChangeStore;
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
     let changes = state
         .state_store
         .list_belief_changes(user.id, &query)
@@ -11954,10 +12576,13 @@ async fn get_belief_changes(
 )]
 async fn list_clarifications(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Query(params): Query<ListClarificationsParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
     let pending_only = !params.all.unwrap_or(false);
     let limit = params.limit.unwrap_or(50).min(200) as usize;
 
@@ -11998,10 +12623,13 @@ struct ListClarificationsParams {
 )]
 async fn generate_clarifications(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<mnemo_core::models::clarification::GenerateClarificationsRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     // Fetch all edges (including invalidated) to detect conflicts
     let edges = state
@@ -12109,10 +12737,13 @@ async fn generate_clarifications(
 )]
 async fn resolve_clarification(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path((user_identifier, clarification_id)): Path<(String, Uuid)>,
     Json(req): Json<mnemo_core::models::clarification::ResolveClarificationRequest>,
 ) -> Result<Json<mnemo_core::models::clarification::ClarificationRequest>, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     if req.answer.trim().is_empty() {
         return Err(AppError(MnemoError::Validation(
@@ -12180,9 +12811,12 @@ async fn resolve_clarification(
 )]
 async fn dismiss_clarification(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path((user_identifier, clarification_id)): Path<(String, Uuid)>,
 ) -> Result<Json<mnemo_core::models::clarification::ClarificationRequest>, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     let mut clarification = state
         .state_store
@@ -12225,6 +12859,7 @@ async fn dismiss_clarification(
 )]
 async fn counterfactual_context(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<mnemo_core::models::counterfactual::CounterfactualRequest>,
 ) -> Result<Json<mnemo_core::models::counterfactual::CounterfactualResponse>, AppError> {
@@ -12232,6 +12867,7 @@ async fn counterfactual_context(
         apply_hypotheticals, rebuild_context_string, CounterfactualResponse,
     };
 
+    let caller = caller_from_extension(caller);
     if req.query.trim().is_empty() {
         return Err(AppError(MnemoError::Validation("query is required".into())));
     }
@@ -12241,7 +12877,8 @@ async fn counterfactual_context(
         )));
     }
 
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     let start = std::time::Instant::now();
 
@@ -12266,7 +12903,8 @@ async fn counterfactual_context(
         None
     };
 
-    let max_tokens = req.max_tokens.unwrap_or(2000);
+    // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
+    let max_tokens = req.max_tokens.unwrap_or(2000).clamp(100, 10000);
     let min_relevance = req.min_relevance.unwrap_or(0.0);
 
     let context_req = mnemo_core::models::context::ContextRequest {
@@ -12334,10 +12972,13 @@ async fn counterfactual_context(
 )]
 async fn list_goal_profiles(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Query(params): Query<GoalListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
     let limit = params.limit.unwrap_or(50).min(200) as usize;
 
     let profiles = state.state_store.list_goal_profiles(user.id, limit).await?;
@@ -12370,10 +13011,13 @@ struct GoalListParams {
 )]
 async fn create_goal_profile(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<mnemo_core::models::goal::CreateGoalProfileRequest>,
 ) -> Result<(StatusCode, Json<mnemo_core::models::goal::GoalProfile>), AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     if req.name.trim().is_empty() {
         return Err(AppError(MnemoError::Validation(
@@ -12427,8 +13071,13 @@ async fn create_goal_profile(
 )]
 async fn get_goal_profile(
     State(state): State<AppState>,
-    Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
+    caller: Option<Extension<CallerContext>>,
+    Path((user_identifier, goal_id)): Path<(String, Uuid)>,
 ) -> Result<Json<mnemo_core::models::goal::GoalProfile>, AppError> {
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let _user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
+
     let profile = state
         .state_store
         .get_goal_profile(goal_id)
@@ -12460,9 +13109,14 @@ async fn get_goal_profile(
 )]
 async fn update_goal_profile(
     State(state): State<AppState>,
-    Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
+    caller: Option<Extension<CallerContext>>,
+    Path((user_identifier, goal_id)): Path<(String, Uuid)>,
     Json(req): Json<mnemo_core::models::goal::UpdateGoalProfileRequest>,
 ) -> Result<Json<mnemo_core::models::goal::GoalProfile>, AppError> {
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let _user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
+
     let profile = state
         .state_store
         .get_goal_profile(goal_id)
@@ -12496,8 +13150,13 @@ async fn update_goal_profile(
 )]
 async fn delete_goal_profile(
     State(state): State<AppState>,
-    Path((_user_identifier, goal_id)): Path<(String, Uuid)>,
+    caller: Option<Extension<CallerContext>>,
+    Path((user_identifier, goal_id)): Path<(String, Uuid)>,
 ) -> Result<StatusCode, AppError> {
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let _user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
+
     state.state_store.delete_goal_profile(goal_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -12520,9 +13179,12 @@ async fn delete_goal_profile(
 )]
 async fn get_narrative(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
 ) -> Result<Json<mnemo_core::models::narrative::UserNarrative>, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     let narrative = state
         .state_store
@@ -12551,9 +13213,12 @@ async fn get_narrative(
 )]
 async fn delete_narrative(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
     state.state_store.delete_narrative(user.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -12579,6 +13244,7 @@ async fn delete_narrative(
 )]
 async fn refresh_narrative(
     State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
     Path(user_identifier): Path<String>,
     Json(req): Json<mnemo_core::models::narrative::RefreshNarrativeRequest>,
 ) -> Result<
@@ -12592,7 +13258,9 @@ async fn refresh_narrative(
         build_narrative_prompt, parse_narrative_output, SessionSummaryInput, UserNarrative,
     };
 
-    let user = find_user_by_identifier(&state, user_identifier.trim()).await?;
+    // P0-1: Enforce user-scoped access control
+    let caller = caller_from_extension(caller);
+    let user = find_user_with_access(&state, &caller, user_identifier.trim()).await?;
 
     // Load existing narrative (if any)
     let existing = if req.full_rebuild {
@@ -13263,12 +13931,15 @@ async fn delete_guardrail(
 async fn evaluate_guardrails(
     State(state): State<AppState>,
     caller: Option<Extension<CallerContext>>,
+    ctx: Option<Extension<RequestContext>>,
     Json(body): Json<EvaluateGuardrailsRequest>,
 ) -> Result<Json<EvaluateGuardrailsResponse>, AppError> {
     let caller = caller_from_extension(caller);
     caller.require_role(ApiKeyRole::Read)?;
+    let request_id = request_id_from_extension(ctx);
 
-    let rules = match body.user_id {
+    let user_id = body.user_id;
+    let rules = match user_id {
         Some(uid) => {
             state
                 .state_store
@@ -13279,8 +13950,26 @@ async fn evaluate_guardrails(
     };
 
     let trigger = body.trigger.clone();
-    let ctx = body.into_eval_context();
-    let verdict = evaluate_rules(&rules, &trigger, &ctx);
+    let eval_ctx = body.into_eval_context();
+    let verdict = evaluate_rules(&rules, &trigger, &eval_ctx);
+
+    // P3-7: Audit trail for dry-run guardrail evaluations
+    if let Some(uid) = user_id {
+        append_governance_audit(
+            &state,
+            uid,
+            "guardrail_dry_run_evaluation",
+            request_id,
+            serde_json::json!({
+                "trigger": format!("{:?}", trigger),
+                "rules_evaluated": rules.len(),
+                "blocked": verdict.blocked,
+                "details_count": verdict.details.len(),
+                "warnings_count": verdict.warnings.len()
+            }),
+        )
+        .await;
+    }
 
     Ok(Json(EvaluateGuardrailsResponse::from(verdict)))
 }

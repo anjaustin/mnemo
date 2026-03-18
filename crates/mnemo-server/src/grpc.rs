@@ -35,8 +35,11 @@
 //! remains the "governed path" for production memory workflows that require
 //! policy enforcement.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use subtle::ConstantTimeEq;
+use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -142,6 +145,20 @@ use crate::lora_handle::LoraEmbedderHandle;
 use crate::middleware::AuthConfig;
 use crate::state::AppState;
 
+/// P2-1: Constant-time comparison for bootstrap keys to prevent timing attacks.
+fn constant_time_key_match(keys: &HashSet<String>, candidate: &str) -> bool {
+    let candidate_bytes = candidate.as_bytes();
+    for key in keys {
+        let key_bytes = key.as_bytes();
+        if key_bytes.len() == candidate_bytes.len() {
+            if key_bytes.ct_eq(candidate_bytes).into() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 // ─── Shared state ───────────────────────────────────────────────────
 
 /// Shared state for all gRPC services, cloned from AppState.
@@ -158,6 +175,13 @@ pub struct GrpcState {
     pub reranker: crate::state::RerankerMode,
     /// Auth configuration — shared with the REST middleware.
     pub auth_config: Arc<AuthConfig>,
+    /// P2-2: User policies — shared with REST for policy enforcement.
+    /// When `enforce_policies` is true, gRPC handlers apply user default
+    /// contracts and retrieval policies just like REST.
+    pub user_policies: Arc<RwLock<HashMap<Uuid, crate::state::UserPolicyRecord>>>,
+    /// P2-2: When true, apply user default policies (contract, retrieval_policy)
+    /// when request doesn't specify them. When false, use hardcoded defaults.
+    pub enforce_policies: bool,
 }
 
 impl GrpcState {
@@ -167,6 +191,25 @@ impl GrpcState {
             retrieval: app.retrieval.clone(),
             reranker: app.reranker,
             auth_config,
+            user_policies: app.user_policies.clone(),
+            // Default to enforcing policies for security; can be disabled via config.
+            enforce_policies: true,
+        }
+    }
+
+    /// Create with explicit policy enforcement setting.
+    pub fn from_app_state_with_config(
+        app: &AppState,
+        auth_config: Arc<AuthConfig>,
+        enforce_policies: bool,
+    ) -> Self {
+        Self {
+            state_store: app.state_store.clone(),
+            retrieval: app.retrieval.clone(),
+            reranker: app.reranker,
+            auth_config,
+            user_policies: app.user_policies.clone(),
+            enforce_policies,
         }
     }
 }
@@ -206,8 +249,8 @@ pub async fn validate_grpc_auth<T>(
         None => return Err(Status::unauthenticated("Invalid or missing API key")),
     };
 
-    // Check bootstrap keys
-    if auth.valid_keys.contains(&raw_key) {
+    // Check bootstrap keys (P2-1: constant-time comparison)
+    if constant_time_key_match(&auth.valid_keys, &raw_key) {
         return Ok(CallerContext::admin_bootstrap());
     }
 
@@ -441,6 +484,79 @@ fn reranker_for_state(mode: &crate::state::RerankerMode) -> mnemo_retrieval::Rer
         crate::state::RerankerMode::Rrf => mnemo_retrieval::Reranker::Rrf,
         crate::state::RerankerMode::Mmr => mnemo_retrieval::Reranker::Mmr,
     }
+}
+
+// ─── P2-2: Policy Enforcement ───────────────────────────────────────
+
+/// Get or create user policy, mirroring the REST `get_or_create_user_policy`.
+/// When `enforce_policies` is disabled on GrpcState, returns None.
+async fn get_grpc_user_policy(
+    state: &GrpcState,
+    user_id: Uuid,
+    user_identifier: &str,
+) -> Option<crate::state::UserPolicyRecord> {
+    if !state.enforce_policies {
+        return None;
+    }
+
+    let mut policies = state.user_policies.write().await;
+    let policy = policies
+        .entry(user_id)
+        .or_insert_with(|| default_grpc_user_policy(user_id, user_identifier.to_string()))
+        .clone();
+    Some(policy)
+}
+
+/// Create default user policy record for gRPC.
+fn default_grpc_user_policy(user_id: Uuid, user_identifier: String) -> crate::state::UserPolicyRecord {
+    let now = chrono::Utc::now();
+    crate::state::UserPolicyRecord {
+        user_id,
+        user_identifier,
+        retention_days_message: 365,
+        retention_days_text: 365,
+        retention_days_json: 365,
+        webhook_domain_allowlist: vec![],
+        default_memory_contract: "default".to_string(),
+        default_retrieval_policy: "balanced".to_string(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+/// Get default retrieval parameters based on policy string.
+/// Returns (max_tokens, min_relevance, temporal_weight).
+fn grpc_retrieval_policy_defaults(policy: &str) -> (u32, f32, Option<f32>) {
+    match policy.to_lowercase().as_str() {
+        "precision" => (400, 0.55, Some(0.35)),
+        "recall" => (700, 0.15, Some(0.2)),
+        "stability" => (500, 0.4, Some(0.8)),
+        _ => (500, 0.3, None), // balanced (default)
+    }
+}
+
+/// Get effective contract, applying user default if request doesn't specify.
+fn effective_grpc_contract(
+    req_contract: &Option<String>,
+    user_policy: Option<&crate::state::UserPolicyRecord>,
+) -> String {
+    req_contract
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| user_policy.map(|p| p.default_memory_contract.clone()))
+        .unwrap_or_else(|| "default".to_string())
+}
+
+/// Get effective retrieval policy, applying user default if request doesn't specify.
+fn effective_grpc_retrieval_policy(
+    req_policy: &Option<String>,
+    user_policy: Option<&crate::state::UserPolicyRecord>,
+) -> String {
+    req_policy
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| user_policy.map(|p| p.default_retrieval_policy.clone()))
+        .unwrap_or_else(|| "balanced".to_string())
 }
 
 /// Resolve a user identifier (UUID string, external_id, or name) to a User.
@@ -801,13 +917,14 @@ impl MemoryService for GrpcState {
             None => None,
         };
 
+        // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
         let max_tokens = match req.max_tokens {
             Some(t) if t <= 0 => {
                 return Err(Status::invalid_argument(
                     "max_tokens must be a positive integer",
                 ));
             }
-            Some(t) => t as u32,
+            Some(t) => (t as u32).clamp(100, 10000),
             None => 500,
         };
 
@@ -1022,6 +1139,9 @@ impl MemoryService for GrpcState {
             .await
             .map_err(storage_err_to_status)?;
 
+        // P2-2: Load user policy for defaults (when enforce_policies is enabled)
+        let user_policy = get_grpc_user_policy(self, user.id, req.user.trim()).await;
+
         let as_of = match req.as_of {
             Some(ref s) => {
                 let dt = chrono::DateTime::parse_from_rfc3339(s)
@@ -1036,11 +1156,8 @@ impl MemoryService for GrpcState {
             None => None,
         };
 
-        // Parse contract — drives temporal intent override and as_of requirement.
-        let contract_str = req
-            .contract
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
+        // P2-2: Apply user default contract if request doesn't specify one
+        let contract_str = effective_grpc_contract(&req.contract, user_policy.as_ref());
         let contract_requires_as_of = contract_str == "historical_strict";
         if contract_requires_as_of && as_of.is_none() {
             return Err(Status::invalid_argument(
@@ -1048,20 +1165,13 @@ impl MemoryService for GrpcState {
             ));
         }
 
-        // Parse retrieval_policy — drives default max_tokens / min_relevance / temporal_weight.
-        let policy_str = req
-            .retrieval_policy
-            .clone()
-            .unwrap_or_else(|| "balanced".to_string());
+        // P2-2: Apply user default retrieval_policy if request doesn't specify one
+        let policy_str = effective_grpc_retrieval_policy(&req.retrieval_policy, user_policy.as_ref());
         let (policy_max_tokens, policy_min_relevance, policy_temporal_weight) =
-            match policy_str.as_str() {
-                "precision" => (400u32, 0.55f32, Some(0.35f32)),
-                "recall" => (700, 0.15, Some(0.2)),
-                "stability" => (500, 0.4, Some(0.8)),
-                _ => (500, 0.3, None), // balanced (default)
-            };
+            grpc_retrieval_policy_defaults(&policy_str);
 
-        let max_tokens = req.max_tokens.unwrap_or(policy_max_tokens);
+        // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
+        let max_tokens = req.max_tokens.unwrap_or(policy_max_tokens).clamp(100, 10000);
         let min_relevance = req.min_relevance.unwrap_or(policy_min_relevance);
         let temporal_weight = req.temporal_weight.or(policy_temporal_weight);
 
@@ -1590,6 +1700,11 @@ impl SessionService for GrpcState {
             .await
             .map_err(storage_err_to_status)?;
 
+        // P0-1: Enforce user-scoped access control
+        caller
+            .require_user_access(session.user_id)
+            .map_err(|_| Status::not_found(format!("session {} not found", id)))?;
+
         Ok(Response::new(session_to_proto(session)))
     }
 
@@ -1603,6 +1718,16 @@ impl SessionService for GrpcState {
 
         let req = request.into_inner();
         let id = parse_uuid(&req.id, "id")?;
+
+        // P0-1: Fetch session first to verify ownership
+        let existing = self
+            .state_store
+            .get_session(id)
+            .await
+            .map_err(storage_err_to_status)?;
+        caller
+            .require_user_access(existing.user_id)
+            .map_err(|_| Status::not_found(format!("session {} not found", id)))?;
 
         let core_req = CoreUpdateSessionRequest {
             name: req.name.filter(|s| !s.trim().is_empty()),
@@ -1637,6 +1762,16 @@ impl SessionService for GrpcState {
         let req = request.into_inner();
         let id = parse_uuid(&req.id, "id")?;
 
+        // P0-1: Fetch session first to verify ownership before deleting
+        let session = self
+            .state_store
+            .get_session(id)
+            .await
+            .map_err(storage_err_to_status)?;
+        caller
+            .require_user_access(session.user_id)
+            .map_err(|_| Status::not_found(format!("session {} not found", id)))?;
+
         self.state_store
             .delete_session(id)
             .await
@@ -1657,6 +1792,12 @@ impl SessionService for GrpcState {
 
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
+
+        // P0-1: Enforce user-scoped access control
+        caller
+            .require_user_access(user_id)
+            .map_err(|_| Status::not_found(format!("user {} not found", user_id)))?;
+
         let pagination = req.pagination.unwrap_or_default();
         let limit = pagination.limit.unwrap_or(20).clamp(1, 500);
         let after = pagination
@@ -1710,6 +1851,12 @@ impl EntityService for GrpcState {
 
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
+
+        // P0-1: Enforce user-scoped access control
+        caller
+            .require_user_access(user_id)
+            .map_err(|_| Status::not_found(format!("user {} not found", user_id)))?;
+
         let limit = req.limit.unwrap_or(20).clamp(1, 500) as u32;
         let after = req
             .after
@@ -1787,6 +1934,11 @@ impl EntityService for GrpcState {
             .await
             .map_err(storage_err_to_status)?;
 
+        // P0-1: Enforce user-scoped access control
+        caller
+            .require_user_access(entity.user_id)
+            .map_err(|_| Status::not_found(format!("entity {} not found", id)))?;
+
         Ok(Response::new(entity_to_proto(entity)))
     }
 
@@ -1800,6 +1952,16 @@ impl EntityService for GrpcState {
 
         let req = request.into_inner();
         let id = parse_uuid(&req.id, "id")?;
+
+        // P0-1: Fetch entity first to verify ownership before deleting
+        let entity = self
+            .state_store
+            .get_entity(id)
+            .await
+            .map_err(storage_err_to_status)?;
+        caller
+            .require_user_access(entity.user_id)
+            .map_err(|_| Status::not_found(format!("entity {} not found", id)))?;
 
         self.state_store
             .delete_entity(id)
@@ -1826,6 +1988,17 @@ impl EntityService for GrpcState {
         // times; if a concurrent write changes `updated_at` between our read and
         // write, we re-read and re-apply. This doesn't prevent all races (requires
         // storage-layer CAS for full safety) but eliminates silent downgrades.
+
+        // P0-1: Pre-check user access before entering the retry loop
+        let initial_entity = self
+            .state_store
+            .get_entity(id)
+            .await
+            .map_err(storage_err_to_status)?;
+        caller
+            .require_user_access(initial_entity.user_id)
+            .map_err(|_| Status::not_found(format!("entity {} not found", id)))?;
+
         let mut attempts = 0u8;
         loop {
             let mut entity = self
@@ -1882,6 +2055,12 @@ impl EdgeService for GrpcState {
 
         let req = request.into_inner();
         let user_id = parse_uuid(&req.user_id, "user_id")?;
+
+        // P0-1: Enforce user-scoped access control
+        caller
+            .require_user_access(user_id)
+            .map_err(|_| Status::not_found(format!("user {} not found", user_id)))?;
+
         let limit = req.limit.unwrap_or(20).clamp(1, 1000) as u32;
         let include_invalidated = !req.current_only.unwrap_or(false);
 
@@ -1970,6 +2149,11 @@ impl EdgeService for GrpcState {
             .await
             .map_err(storage_err_to_status)?;
 
+        // P0-1: Enforce user-scoped access control
+        caller
+            .require_user_access(edge.user_id)
+            .map_err(|_| Status::not_found(format!("edge {} not found", id)))?;
+
         Ok(Response::new(edge_to_proto(edge)))
     }
 
@@ -1983,6 +2167,16 @@ impl EdgeService for GrpcState {
 
         let req = request.into_inner();
         let id = parse_uuid(&req.id, "id")?;
+
+        // P0-1: Fetch edge first to verify ownership before deleting
+        let edge = self
+            .state_store
+            .get_edge(id)
+            .await
+            .map_err(storage_err_to_status)?;
+        caller
+            .require_user_access(edge.user_id)
+            .map_err(|_| Status::not_found(format!("edge {} not found", id)))?;
 
         self.state_store
             .delete_edge(id)
@@ -2005,6 +2199,17 @@ impl EdgeService for GrpcState {
         let classification = from_proto_classification(req.classification)?;
 
         // P2-14: read-modify-write with retry (mirrors entity classification logic).
+
+        // P0-1: Pre-check user access before entering the retry loop
+        let initial_edge = self
+            .state_store
+            .get_edge(id)
+            .await
+            .map_err(storage_err_to_status)?;
+        caller
+            .require_user_access(initial_edge.user_id)
+            .map_err(|_| Status::not_found(format!("edge {} not found", id)))?;
+
         let mut attempts = 0u8;
         loop {
             let mut edge = self
@@ -2296,7 +2501,8 @@ impl AgentService for GrpcState {
             }
         };
 
-        let max_tokens = req.max_tokens.unwrap_or(500);
+        // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
+        let max_tokens = req.max_tokens.unwrap_or(500).clamp(100, 10000);
         let min_relevance = req.min_relevance.unwrap_or(0.3);
 
         let core_req = CoreContextRequest {

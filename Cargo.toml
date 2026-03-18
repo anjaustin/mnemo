@@ -55,7 +55,7 @@ tracing-opentelemetry = { version = "0.28", features = ["metrics"] }
 
 # HTTP server
 axum = { version = "0.7", features = ["json", "query"] }
-tower = "0.4"
+tower = { version = "0.4", features = ["limit"] }
 tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
 
 # Redis

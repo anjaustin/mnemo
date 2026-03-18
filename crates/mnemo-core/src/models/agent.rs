@@ -186,6 +186,14 @@ pub enum AgentIdentityAuditAction {
     Updated,
     /// Identity rolled back to a prior version.
     RolledBack,
+    /// P2-5: Branch created from the parent agent identity.
+    BranchCreated,
+    /// P2-5: Branch merged back into the parent agent identity.
+    BranchMerged,
+    /// P2-5: Branch deleted without merging.
+    BranchDeleted,
+    /// P2-5: Agent identity forked into a new independent agent.
+    Forked,
 }
 
 /// Append-only record of every identity mutation for a given agent.

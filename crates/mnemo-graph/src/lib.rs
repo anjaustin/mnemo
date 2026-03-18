@@ -64,12 +64,36 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
 
     /// BFS traversal from a seed entity, collecting connected subgraph.
     ///
+    /// - `user_id`: optional user ID to filter entities/edges (P2-4 security)
     /// - `max_depth`: maximum hops from seed (1 = direct neighbors only)
     /// - `max_nodes`: maximum entities to include
     /// - `valid_only`: if true, only follow currently valid edges
+    ///
+    /// **Security Note (P2-4):** When `user_id` is `Some`, only entities and edges
+    /// belonging to that user are included in the traversal. This prevents data
+    /// leakage between users in a multi-tenant environment.
     pub async fn traverse_bfs(
         &self,
         seed_entity_id: Uuid,
+        max_depth: u32,
+        max_nodes: usize,
+        valid_only: bool,
+    ) -> StorageResult<Subgraph> {
+        // Delegate to user-filtered version without filter for backward compatibility
+        self.traverse_bfs_for_user(seed_entity_id, None, max_depth, max_nodes, valid_only)
+            .await
+    }
+
+    /// BFS traversal from a seed entity with user filtering (P2-4).
+    ///
+    /// - `user_id`: when Some, only traverse entities/edges owned by this user
+    /// - `max_depth`: maximum hops from seed (1 = direct neighbors only)
+    /// - `max_nodes`: maximum entities to include
+    /// - `valid_only`: if true, only follow currently valid edges
+    pub async fn traverse_bfs_for_user(
+        &self,
+        seed_entity_id: Uuid,
+        user_id: Option<Uuid>,
         max_depth: u32,
         max_nodes: usize,
         valid_only: bool,
@@ -92,6 +116,13 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
                 Err(_) => continue,
             };
 
+            // P2-4: Skip entities belonging to other users
+            if let Some(uid) = user_id {
+                if entity.user_id != uid {
+                    continue;
+                }
+            }
+
             let outgoing = self
                 .store
                 .get_outgoing_edges(entity_id)
@@ -103,16 +134,23 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
                 .await
                 .unwrap_or_default();
 
-            let filtered_out: Vec<Edge> = if valid_only {
-                outgoing.into_iter().filter(|e| e.is_valid()).collect()
-            } else {
-                outgoing
-            };
-            let filtered_in: Vec<Edge> = if valid_only {
-                incoming.into_iter().filter(|e| e.is_valid()).collect()
-            } else {
-                incoming
-            };
+            // P2-4: Filter edges by user_id as well as validity
+            let filtered_out: Vec<Edge> = outgoing
+                .into_iter()
+                .filter(|e| {
+                    let user_ok = user_id.map_or(true, |uid| e.user_id == uid);
+                    let valid_ok = !valid_only || e.is_valid();
+                    user_ok && valid_ok
+                })
+                .collect();
+            let filtered_in: Vec<Edge> = incoming
+                .into_iter()
+                .filter(|e| {
+                    let user_ok = user_id.map_or(true, |uid| e.user_id == uid);
+                    let valid_ok = !valid_only || e.is_valid();
+                    user_ok && valid_ok
+                })
+                .collect();
 
             // Queue neighbors for next depth
             if depth < max_depth {
@@ -166,10 +204,43 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
         max_depth: u32,
         valid_only: bool,
     ) -> StorageResult<ShortestPath> {
+        // Delegate to user-filtered version without filter for backward compatibility
+        self.find_shortest_path_for_user(from_id, to_id, None, max_depth, valid_only)
+            .await
+    }
+
+    /// BFS shortest path from `from_id` to `to_id` with user filtering (P2-4).
+    ///
+    /// - `user_id`: when Some, only traverse entities/edges owned by this user
+    /// - `max_depth`: maximum hops to search (prevents runaway on large graphs)
+    /// - `valid_only`: if true, only follow currently valid edges
+    ///
+    /// Returns a `ShortestPath` with the ordered steps from source to target,
+    /// or an empty path with `found: false` if no path exists within `max_depth`.
+    pub async fn find_shortest_path_for_user(
+        &self,
+        from_id: Uuid,
+        to_id: Uuid,
+        user_id: Option<Uuid>,
+        max_depth: u32,
+        valid_only: bool,
+    ) -> StorageResult<ShortestPath> {
         if from_id == to_id {
             // Trivial: source == target
             let entity = match self.store.get_entity(from_id).await {
-                Ok(e) => e,
+                Ok(e) => {
+                    // P2-4: Verify entity belongs to user
+                    if let Some(uid) = user_id {
+                        if e.user_id != uid {
+                            return Ok(ShortestPath {
+                                steps: vec![],
+                                entities_visited: 0,
+                                found: false,
+                            });
+                        }
+                    }
+                    e
+                }
                 Err(_) => {
                     return Ok(ShortestPath {
                         steps: vec![],
@@ -203,6 +274,15 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
                 continue;
             }
 
+            // P2-4: Verify entity belongs to user before traversing
+            if let Some(uid) = user_id {
+                if let Ok(entity) = self.store.get_entity(entity_id).await {
+                    if entity.user_id != uid {
+                        continue;
+                    }
+                }
+            }
+
             let outgoing = self
                 .store
                 .get_outgoing_edges(entity_id)
@@ -214,16 +294,23 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
                 .await
                 .unwrap_or_default();
 
-            let filtered_out: Vec<Edge> = if valid_only {
-                outgoing.into_iter().filter(|e| e.is_valid()).collect()
-            } else {
-                outgoing
-            };
-            let filtered_in: Vec<Edge> = if valid_only {
-                incoming.into_iter().filter(|e| e.is_valid()).collect()
-            } else {
-                incoming
-            };
+            // P2-4: Filter edges by user_id and validity
+            let filtered_out: Vec<Edge> = outgoing
+                .into_iter()
+                .filter(|e| {
+                    let user_ok = user_id.map_or(true, |uid| e.user_id == uid);
+                    let valid_ok = !valid_only || e.is_valid();
+                    user_ok && valid_ok
+                })
+                .collect();
+            let filtered_in: Vec<Edge> = incoming
+                .into_iter()
+                .filter(|e| {
+                    let user_ok = user_id.map_or(true, |uid| e.user_id == uid);
+                    let valid_ok = !valid_only || e.is_valid();
+                    user_ok && valid_ok
+                })
+                .collect();
 
             // Check outgoing neighbors
             for edge in &filtered_out {
@@ -284,11 +371,19 @@ impl<S: EntityStore + EdgeStore + Send + Sync + 'static> GraphEngine<S> {
         let mut steps = Vec::with_capacity(path_ids.len());
         for (i, (entity_id, edge)) in path_ids.into_iter().enumerate() {
             match self.store.get_entity(entity_id).await {
-                Ok(entity) => steps.push(PathStep {
-                    entity,
-                    edge,
-                    depth: i as u32,
-                }),
+                Ok(entity) => {
+                    // P2-4: Final verification that reconstructed path entities belong to user
+                    if let Some(uid) = user_id {
+                        if entity.user_id != uid {
+                            continue;
+                        }
+                    }
+                    steps.push(PathStep {
+                        entity,
+                        edge,
+                        depth: i as u32,
+                    })
+                }
                 Err(_) => continue,
             }
         }

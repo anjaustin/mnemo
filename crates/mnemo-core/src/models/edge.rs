@@ -142,6 +142,60 @@ pub struct Edge {
     pub last_accessed_at: Option<DateTime<Utc>>,
 }
 
+// ─── P3-6: Edge Label Validation ──────────────────────────────────
+
+/// Maximum length for edge labels.
+pub const MAX_EDGE_LABEL_LENGTH: usize = 128;
+
+/// Minimum length for edge labels.
+pub const MIN_EDGE_LABEL_LENGTH: usize = 1;
+
+/// Validate an edge label for length and character set.
+///
+/// # Rules
+/// - Length: 1-128 characters
+/// - Allowed characters: alphanumeric, underscore, hyphen, space
+/// - Must not be all whitespace
+/// - Must not start or end with whitespace
+///
+/// # Returns
+/// `Ok(())` if valid, `Err(reason)` if invalid.
+pub fn validate_edge_label(label: &str) -> Result<(), String> {
+    // Check length
+    if label.is_empty() {
+        return Err("edge label cannot be empty".to_string());
+    }
+    if label.len() > MAX_EDGE_LABEL_LENGTH {
+        return Err(format!(
+            "edge label exceeds maximum length of {} characters",
+            MAX_EDGE_LABEL_LENGTH
+        ));
+    }
+
+    // Check for leading/trailing whitespace
+    let trimmed = label.trim();
+    if trimmed.len() != label.len() {
+        return Err("edge label cannot have leading or trailing whitespace".to_string());
+    }
+
+    // Check for empty after trimming
+    if trimmed.is_empty() {
+        return Err("edge label cannot be all whitespace".to_string());
+    }
+
+    // Check character set: alphanumeric, underscore, hyphen, space
+    for c in label.chars() {
+        if !c.is_alphanumeric() && c != '_' && c != '-' && c != ' ' {
+            return Err(format!(
+                "edge label contains invalid character '{}'; allowed: alphanumeric, underscore, hyphen, space",
+                c
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Represents a relationship extracted by the LLM/extraction pipeline
 /// before it's been resolved against the existing graph.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

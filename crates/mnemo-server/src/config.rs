@@ -56,6 +56,32 @@ pub struct ServerConfig {
     /// Set via `MNEMO_CORS_ALLOWED_ORIGINS` as a comma-separated list.
     #[serde(default = "default_cors_origins")]
     pub cors_allowed_origins: Vec<String>,
+    /// P2-2: When true (default), gRPC handlers apply user default policies
+    /// (memory_contract, retrieval_policy) just like REST. When false, gRPC
+    /// uses hardcoded defaults (bare mode for backward compatibility).
+    /// Set via `MNEMO_GRPC_ENFORCE_POLICIES=true` (default) or `false`.
+    #[serde(default = "default_grpc_enforce_policies")]
+    pub grpc_enforce_policies: bool,
+    /// P3-1: gRPC rate limit (requests per second). Set to 0 to disable.
+    /// Set via `MNEMO_GRPC_RATE_LIMIT` (default: 1000 req/s).
+    #[serde(default = "default_grpc_rate_limit")]
+    pub grpc_rate_limit: u32,
+    /// P3-2: Maximum concurrent gRPC connections per client.
+    /// Set via `MNEMO_GRPC_MAX_CONNECTIONS` (default: 100).
+    #[serde(default = "default_grpc_max_connections")]
+    pub grpc_max_connections: usize,
+}
+
+fn default_grpc_rate_limit() -> u32 {
+    1000 // 1000 requests per second
+}
+
+fn default_grpc_max_connections() -> usize {
+    100
+}
+
+fn default_grpc_enforce_policies() -> bool {
+    true
 }
 
 fn default_cors_origins() -> Vec<String> {
@@ -72,6 +98,9 @@ impl Default for ServerConfig {
             require_tls: false,
             audit_signing_secret: None,
             cors_allowed_origins: default_cors_origins(),
+            grpc_enforce_policies: default_grpc_enforce_policies(),
+            grpc_rate_limit: default_grpc_rate_limit(),
+            grpc_max_connections: default_grpc_max_connections(),
         }
     }
 }
@@ -675,6 +704,25 @@ impl MnemoConfig {
         if let Ok(v) = std::env::var("MNEMO_CORS_ALLOWED_ORIGINS") {
             config.server.cors_allowed_origins =
                 v.split(',').map(|s| s.trim().to_string()).collect();
+        }
+
+        // P2-2: gRPC policy enforcement toggle
+        if let Ok(v) = std::env::var("MNEMO_GRPC_ENFORCE_POLICIES") {
+            config.server.grpc_enforce_policies = v == "true" || v == "1";
+        }
+
+        // P3-1: gRPC rate limiting
+        if let Ok(v) = std::env::var("MNEMO_GRPC_RATE_LIMIT") {
+            if let Ok(n) = v.parse::<u32>() {
+                config.server.grpc_rate_limit = n;
+            }
+        }
+
+        // P3-2: gRPC connection limits
+        if let Ok(v) = std::env::var("MNEMO_GRPC_MAX_CONNECTIONS") {
+            if let Ok(n) = v.parse::<usize>() {
+                config.server.grpc_max_connections = n;
+            }
         }
 
         // OpenTelemetry overrides

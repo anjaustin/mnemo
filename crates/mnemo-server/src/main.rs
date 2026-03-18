@@ -308,6 +308,19 @@ async fn main() -> anyhow::Result<()> {
         AuthConfig::disabled()
     });
 
+    // P3-3: Background task for auth cache cleanup (every 60 seconds)
+    {
+        let auth_for_cleanup = auth_config.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                auth_for_cleanup.evict_stale_cache_entries().await;
+            }
+        });
+    }
+
     // HTTP server
     let webhook_redis = if config.webhooks.persistence_enabled {
         match redis::Client::open(config.redis.url.as_str()) {
@@ -345,6 +358,8 @@ async fn main() -> anyhow::Result<()> {
         },
         import_jobs: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         import_idempotency: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        // P1-2: Limit concurrent import jobs to prevent DoS
+        import_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
         memory_webhooks: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhook_events: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         memory_webhook_audit: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -362,7 +377,13 @@ async fn main() -> anyhow::Result<()> {
             circuit_breaker_cooldown_ms: config.webhooks.circuit_breaker_cooldown_ms,
             persistence_enabled: config.webhooks.persistence_enabled,
         },
-        webhook_http: Arc::new(reqwest::Client::new()),
+        // P0-3 SSRF Protection: Disable redirects to prevent redirect-based SSRF bypasses
+        webhook_http: Arc::new(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("Failed to build webhook HTTP client"),
+        ),
         webhook_redis,
         webhook_redis_prefix: format!(
             "{}:{}",
@@ -563,6 +584,23 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // P3-3: Background task for import job cleanup (every 10 minutes, evict jobs older than 1 hour)
+    {
+        let cleanup_state = app_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(600));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                mnemo_server::routes::evict_stale_import_jobs(
+                    &cleanup_state,
+                    chrono::Duration::hours(1),
+                )
+                .await;
+            }
+        });
+    }
+
     // ─── REST (Axum) router ───────────────────────────────────────
     let rest = build_router(app_state.clone())
         .layer(from_fn_with_state(
@@ -614,7 +652,12 @@ async fn main() -> anyhow::Result<()> {
     // ─── gRPC (tonic) router ────────────────────────────────────
     // gRPC handlers enforce auth internally via validate_grpc_auth(),
     // using the same AuthConfig shared with the REST middleware.
-    let grpc_state = GrpcState::from_app_state(&app_state, auth_config.clone());
+    // P2-2: Control policy enforcement via config (default: enabled for security).
+    let grpc_state = GrpcState::from_app_state_with_config(
+        &app_state,
+        auth_config.clone(),
+        config.server.grpc_enforce_policies,
+    );
 
     // Health check service
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -714,7 +757,23 @@ async fn main() -> anyhow::Result<()> {
         );
 
         // Build the tonic tower service for the dedicated gRPC port
-        let grpc_service = grpc_routes.into_axum_router();
+        // P3-1 & P3-2: Apply concurrency limits (rate limiting requires Clone which
+        // tower::limit::RateLimit doesn't provide; concurrency limiting is sufficient
+        // for DoS protection and is Clone-compatible)
+        let grpc_service = {
+            let router = grpc_routes.into_axum_router();
+            if config.server.grpc_max_connections > 0 {
+                tracing::info!(
+                    max_connections = config.server.grpc_max_connections,
+                    "gRPC concurrency limiting enabled"
+                );
+                router.layer(tower::limit::ConcurrencyLimitLayer::new(
+                    config.server.grpc_max_connections,
+                ))
+            } else {
+                router
+            }
+        };
 
         tokio::select! {
             result = axum::serve(rest_listener, rest.into_make_service()).with_graceful_shutdown(shutdown_signal()) => {
@@ -726,7 +785,21 @@ async fn main() -> anyhow::Result<()> {
         }
     } else {
         // ─── Multiplex: gRPC + REST on the same port ────────────
-        let grpc = grpc_routes.into_axum_router();
+        // P3-1 & P3-2: Apply concurrency limits
+        let grpc = {
+            let router = grpc_routes.into_axum_router();
+            if config.server.grpc_max_connections > 0 {
+                tracing::info!(
+                    max_connections = config.server.grpc_max_connections,
+                    "gRPC concurrency limiting enabled (multiplexed)"
+                );
+                router.layer(tower::limit::ConcurrencyLimitLayer::new(
+                    config.server.grpc_max_connections,
+                ))
+            } else {
+                router
+            }
+        };
         let app = multiplex_grpc_rest(rest, grpc);
 
         let listener = TcpListener::bind(&rest_addr).await?;

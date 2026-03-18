@@ -6,6 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use subtle::ConstantTimeEq;
 use tower::{Layer, Service};
 
 use mnemo_core::error::{ApiErrorDetail, ApiErrorResponse};
@@ -13,6 +14,22 @@ use mnemo_core::models::api_key::{hash_api_key, CallerContext};
 use mnemo_core::traits::storage::ApiKeyStore;
 use mnemo_storage::RedisStateStore;
 use tokio::sync::RwLock;
+
+/// P2-1: Constant-time comparison for bootstrap keys to prevent timing attacks.
+fn constant_time_key_match(keys: &HashSet<String>, candidate: &str) -> bool {
+    let candidate_bytes = candidate.as_bytes();
+    for key in keys {
+        let key_bytes = key.as_bytes();
+        // Only compare if lengths match (length itself leaks info, but this is
+        // unavoidable with variable-length keys; the comparison is still constant-time)
+        if key_bytes.len() == candidate_bytes.len() {
+            if key_bytes.ct_eq(candidate_bytes).into() {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 /// Configuration for API key authentication.
 ///
@@ -40,6 +57,12 @@ pub struct CachedKey {
     pub cached_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// P3-3: Cache TTL for key lookups (seconds).
+const KEY_CACHE_TTL_SECS: i64 = 30;
+
+/// P3-3: Maximum cache entries before forced eviction.
+const KEY_CACHE_MAX_ENTRIES: usize = 10_000;
+
 impl AuthConfig {
     pub fn disabled() -> Self {
         Self {
@@ -65,6 +88,33 @@ impl AuthConfig {
             valid_keys: keys.into_iter().collect(),
             state_store: Some(store),
             key_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// P3-3: Evict stale entries from the key cache.
+    /// Called periodically or when cache grows too large.
+    pub async fn evict_stale_cache_entries(&self) {
+        let now = chrono::Utc::now();
+        let mut cache = self.key_cache.write().await;
+        
+        // Remove entries older than TTL
+        cache.retain(|_, cached| {
+            let age = now - cached.cached_at;
+            age.num_seconds() < KEY_CACHE_TTL_SECS
+        });
+        
+        // If still too large, remove oldest entries
+        if cache.len() > KEY_CACHE_MAX_ENTRIES {
+            let mut entries: Vec<_> = cache
+                .iter()
+                .map(|(k, v)| (k.clone(), v.cached_at))
+                .collect();
+            entries.sort_by(|a, b| a.1.cmp(&b.1));
+            
+            let to_remove = cache.len() - KEY_CACHE_MAX_ENTRIES;
+            for (key, _) in entries.into_iter().take(to_remove) {
+                cache.remove(&key);
+            }
         }
     }
 }
@@ -166,8 +216,8 @@ where
         let mut inner = self.inner.clone();
 
         Box::pin(async move {
-            // ── Check bootstrap keys first ──────────────────────
-            if config.valid_keys.contains(&raw_key) {
+            // ── Check bootstrap keys first (P2-1: constant-time comparison) ──
+            if constant_time_key_match(&config.valid_keys, &raw_key) {
                 req.extensions_mut()
                     .insert(CallerContext::admin_bootstrap());
                 return inner.call(req).await;
@@ -177,12 +227,12 @@ where
             if let Some(ref store) = config.state_store {
                 let key_hash = hash_api_key(&raw_key);
 
-                // Check cache first (30-second TTL)
+                // Check cache first (TTL-based)
                 {
                     let cache = config.key_cache.read().await;
                     if let Some(cached) = cache.get(&key_hash) {
                         let age = chrono::Utc::now() - cached.cached_at;
-                        if age.num_seconds() < 30 && cached.active {
+                        if age.num_seconds() < KEY_CACHE_TTL_SECS && cached.active {
                             req.extensions_mut().insert(cached.context.clone());
                             return inner.call(req).await;
                         }
