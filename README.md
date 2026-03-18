@@ -1,8 +1,12 @@
 # Mnemo
 
-[![CI](https://github.com/anjaustin/mnemo/actions/workflows/quality-gates.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/quality-gates.yml)
-[![version](https://img.shields.io/github/v/tag/anjaustin/mnemo?sort=semver&label=version)](https://github.com/anjaustin/mnemo/releases)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+| CI | Falsification | Benchmarks | Packages | Release |
+| --- | --- | --- | --- | --- |
+| [![quality-gates](https://github.com/anjaustin/mnemo/actions/workflows/quality-gates.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/quality-gates.yml) | [![memory-falsification](https://github.com/anjaustin/mnemo/actions/workflows/memory-falsification.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/memory-falsification.yml) | [![benchmark-eval](https://github.com/anjaustin/mnemo/actions/workflows/benchmark-eval.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/benchmark-eval.yml) | [![package-ghcr](https://github.com/anjaustin/mnemo/actions/workflows/package-ghcr.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/package-ghcr.yml) | [![release](https://github.com/anjaustin/mnemo/actions/workflows/release.yml/badge.svg)](https://github.com/anjaustin/mnemo/actions/workflows/release.yml) |
+
+| Version | License | Stars | Downloads | GHCR |
+| --- | --- | --- | --- | --- |
+| [![version](https://img.shields.io/github/v/release/anjaustin/mnemo?display_name=tag&sort=semver)](https://github.com/anjaustin/mnemo/releases/latest) | [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) | [![stars](https://img.shields.io/github/stars/anjaustin/mnemo?style=flat&label=stars&color=blue)](https://github.com/anjaustin/mnemo/stargazers) | [![downloads](https://img.shields.io/github/downloads/anjaustin/mnemo/total?label=downloads&color=blue)](https://github.com/anjaustin/mnemo/releases) | [![ghcr](https://img.shields.io/badge/ghcr-mnemo--server-1f6feb)](https://github.com/anjaustin/mnemo/pkgs/container/mnemo%2Fmnemo-server) |
 
 ![Mnemosyne](img/mnemosyne.gif)
 
