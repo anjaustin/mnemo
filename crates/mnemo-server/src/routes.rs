@@ -438,9 +438,9 @@ fn is_ip_safe_for_webhook(ip: std::net::IpAddr) -> bool {
 /// Returns Ok(()) if safe, Err with message if any resolved IP is unsafe.
 async fn validate_webhook_dns(url: &str) -> Result<(), String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {}", e))?;
-    
+
     let host = parsed.host_str().ok_or("URL has no host")?.to_string();
-    
+
     // If it's already an IP address, check directly
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if !is_ip_safe_for_webhook(ip) {
@@ -448,29 +448,32 @@ async fn validate_webhook_dns(url: &str) -> Result<(), String> {
         }
         return Ok(());
     }
-    
+
     // Resolve hostname and check all IPs
-    let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let port = parsed
+        .port()
+        .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
     let lookup = format!("{}:{}", host, port);
-    
+
     let addrs: Vec<std::net::SocketAddr> = match tokio::net::lookup_host(lookup.as_str()).await {
         Ok(iter) => iter.collect(),
         Err(e) => return Err(format!("DNS lookup failed for {}: {}", host, e)),
     };
-    
+
     if addrs.is_empty() {
         return Err(format!("DNS lookup for {} returned no addresses", host));
     }
-    
+
     for addr in &addrs {
         if !is_ip_safe_for_webhook(addr.ip()) {
             return Err(format!(
                 "DNS rebinding detected: {} resolved to internal IP {}",
-                host, addr.ip()
+                host,
+                addr.ip()
             ));
         }
     }
-    
+
     Ok(())
 }
 
@@ -2884,9 +2887,11 @@ async fn upsert_user_policy(
     let caller = caller_from_extension(caller);
     if let Some(new_contract_str) = req.default_memory_contract.as_ref() {
         let new_contract = parse_memory_contract_default(new_contract_str);
-        let current_policy = get_or_create_user_policy(&state, user.id, user_identifier.trim().to_string()).await;
-        let current_contract = parse_memory_contract_default(&current_policy.default_memory_contract);
-        
+        let current_policy =
+            get_or_create_user_policy(&state, user.id, user_identifier.trim().to_string()).await;
+        let current_contract =
+            parse_memory_contract_default(&current_policy.default_memory_contract);
+
         if is_contract_downgrade(current_contract, new_contract) {
             // P2-6: Contract downgrades require Admin role
             caller.require_role(ApiKeyRole::Admin).map_err(|_| {
@@ -3715,9 +3720,7 @@ async fn get_entity(
     let entity = state.state_store.get_entity(id).await?;
     // P0-1: Enforce user-scoped access control
     let caller = caller_from_extension(caller);
-    caller
-        .require_user_access(entity.user_id)
-        ?;
+    caller.require_user_access(entity.user_id)?;
     Ok(Json(entity))
 }
 
@@ -3741,9 +3744,7 @@ async fn delete_entity(
     let entity = state.state_store.get_entity(id).await?;
     // P0-1: Enforce user-scoped access control
     let caller = caller_from_extension(caller);
-    caller
-        .require_user_access(entity.user_id)
-        ?;
+    caller.require_user_access(entity.user_id)?;
     state.state_store.delete_entity(id).await?;
     append_governance_audit(
         &state,
@@ -3776,9 +3777,7 @@ async fn query_edges(
 ) -> Result<Json<ListResponse<Edge>>, AppError> {
     // P0-1: Enforce user-scoped access control
     let caller = caller_from_extension(caller);
-    caller
-        .require_user_access(user_id)
-        ?;
+    caller.require_user_access(user_id)?;
 
     filter.limit = filter.limit.clamp(1, 1000);
     let edges = state.state_store.query_edges(user_id, filter).await?;
@@ -3803,9 +3802,7 @@ async fn get_edge(
     let edge = state.state_store.get_edge(id).await?;
     // P0-1: Enforce user-scoped access control
     let caller = caller_from_extension(caller);
-    caller
-        .require_user_access(edge.user_id)
-        ?;
+    caller.require_user_access(edge.user_id)?;
     Ok(Json(edge))
 }
 
@@ -3829,9 +3826,7 @@ async fn delete_edge(
     let edge = state.state_store.get_edge(id).await?;
     // P0-1: Enforce user-scoped access control
     let caller = caller_from_extension(caller);
-    caller
-        .require_user_access(edge.user_id)
-        ?;
+    caller.require_user_access(edge.user_id)?;
     state.state_store.delete_edge(id).await?;
     append_governance_audit(
         &state,
@@ -5359,7 +5354,9 @@ async fn import_chat_history(
                 let mut jobs = state.import_jobs.write().await;
                 if let Some(job) = jobs.get_mut(&job_id) {
                     job.status = ImportJobStatus::Failed;
-                    job.errors = vec!["Too many concurrent import jobs. Please try again later.".to_string()];
+                    job.errors = vec![
+                        "Too many concurrent import jobs. Please try again later.".to_string()
+                    ];
                     job.finished_at = Some(chrono::Utc::now());
                 }
             }
@@ -5598,7 +5595,10 @@ async fn get_memory_context(
         AdaptiveRetrievalPolicy::Stability => 500,
     };
     // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
-    let max_tokens = req.max_tokens.unwrap_or(default_max_tokens).clamp(100, 10000);
+    let max_tokens = req
+        .max_tokens
+        .unwrap_or(default_max_tokens)
+        .clamp(100, 10000);
 
     let base_temporal_intent = match contract {
         MemoryContract::CurrentStrict => TemporalIntent::Current,
@@ -6255,7 +6255,10 @@ async fn time_travel_trace(
         AdaptiveRetrievalPolicy::Stability => 500,
     };
     // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
-    let max_tokens = req.max_tokens.unwrap_or(default_max_tokens).clamp(100, 10000);
+    let max_tokens = req
+        .max_tokens
+        .unwrap_or(default_max_tokens)
+        .clamp(100, 10000);
 
     let base_temporal_intent = match contract {
         MemoryContract::CurrentStrict => TemporalIntent::Current,
@@ -10794,9 +10797,7 @@ async fn get_subgraph(
     // P0-1: Verify entity ownership before traversal
     let entity = state.state_store.get_entity(entity_id).await?;
     let caller = caller_from_extension(caller);
-    caller
-        .require_user_access(entity.user_id)
-        ?;
+    caller.require_user_access(entity.user_id)?;
 
     // P0-1: Clamp traversal parameters to prevent DoS
     let clamped_depth = params.depth.min(10);
@@ -10805,7 +10806,13 @@ async fn get_subgraph(
     // P2-4: Use user-filtered BFS to prevent cross-user data leakage
     let subgraph = state
         .graph
-        .traverse_bfs_for_user(entity_id, Some(entity.user_id), clamped_depth, clamped_max_nodes, true)
+        .traverse_bfs_for_user(
+            entity_id,
+            Some(entity.user_id),
+            clamped_depth,
+            clamped_max_nodes,
+            true,
+        )
         .await?;
 
     // Serialize subgraph to JSON

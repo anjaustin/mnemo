@@ -508,7 +508,10 @@ async fn get_grpc_user_policy(
 }
 
 /// Create default user policy record for gRPC.
-fn default_grpc_user_policy(user_id: Uuid, user_identifier: String) -> crate::state::UserPolicyRecord {
+fn default_grpc_user_policy(
+    user_id: Uuid,
+    user_identifier: String,
+) -> crate::state::UserPolicyRecord {
     let now = chrono::Utc::now();
     crate::state::UserPolicyRecord {
         user_id,
@@ -1166,12 +1169,16 @@ impl MemoryService for GrpcState {
         }
 
         // P2-2: Apply user default retrieval_policy if request doesn't specify one
-        let policy_str = effective_grpc_retrieval_policy(&req.retrieval_policy, user_policy.as_ref());
+        let policy_str =
+            effective_grpc_retrieval_policy(&req.retrieval_policy, user_policy.as_ref());
         let (policy_max_tokens, policy_min_relevance, policy_temporal_weight) =
             grpc_retrieval_policy_defaults(&policy_str);
 
         // P2-3: Clamp max_tokens to prevent resource exhaustion (100-10000)
-        let max_tokens = req.max_tokens.unwrap_or(policy_max_tokens).clamp(100, 10000);
+        let max_tokens = req
+            .max_tokens
+            .unwrap_or(policy_max_tokens)
+            .clamp(100, 10000);
         let min_relevance = req.min_relevance.unwrap_or(policy_min_relevance);
         let temporal_weight = req.temporal_weight.or(policy_temporal_weight);
 

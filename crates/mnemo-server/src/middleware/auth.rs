@@ -96,13 +96,13 @@ impl AuthConfig {
     pub async fn evict_stale_cache_entries(&self) {
         let now = chrono::Utc::now();
         let mut cache = self.key_cache.write().await;
-        
+
         // Remove entries older than TTL
         cache.retain(|_, cached| {
             let age = now - cached.cached_at;
             age.num_seconds() < KEY_CACHE_TTL_SECS
         });
-        
+
         // If still too large, remove oldest entries
         if cache.len() > KEY_CACHE_MAX_ENTRIES {
             let mut entries: Vec<_> = cache
@@ -110,7 +110,7 @@ impl AuthConfig {
                 .map(|(k, v)| (k.clone(), v.cached_at))
                 .collect();
             entries.sort_by(|a, b| a.1.cmp(&b.1));
-            
+
             let to_remove = cache.len() - KEY_CACHE_MAX_ENTRIES;
             for (key, _) in entries.into_iter().take(to_remove) {
                 cache.remove(&key);
