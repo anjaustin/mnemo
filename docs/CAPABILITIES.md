@@ -179,7 +179,43 @@ Per-step latency/throughput metrics for the ingestion pipeline.
 
 ### MCP Server
 
-Model Context Protocol over stdio transport with 7 tools and 2 resource templates for Claude Code and compatible clients.
+Full Model Context Protocol implementation for Claude Code and compatible clients.
+
+**Transports:**
+- stdio (default) - for CLI integration
+- SSE (optional `--features sse`) - HTTP-based with POST /message, GET /sse endpoints
+
+**13 Tools:**
+- `remember` - store memories with temporal tracking
+- `recall` - semantic search with hybrid retrieval
+- `digest` - get/regenerate user memory summaries
+- `scopes` - list data classification scopes
+- `graph_query` - knowledge graph operations (neighbors, shortest_path, communities)
+- `agent_identity` - get/update agent personality profiles
+- `delegate` - create shared memory regions with ACLs
+- `revoke` - remove agent access to memory regions
+- `experience` - log agent experience events with EWC++ weighting
+- `relate` - manage entity relationships (connect/disconnect/list)
+- `forget` - request memory deletion with audit trail
+
+**11 Resource Templates:**
+- `mnemo://users/{user}/memory/search?query={query}` - semantic search
+- `mnemo://users/{user}/digest` - memory digest
+- `mnemo://users/{user}/episodes/{episode_id}` - episode details
+- `mnemo://agents/{agent_id}/promotions` - pending promotions
+- `mnemo://users/{user}/graph/edges` - knowledge graph edges
+- `mnemo://users/{user}/graph/communities` - detected communities
+
+**5 Prompt Templates:**
+- `memory-context` - load relevant memories for a topic
+- `memory-summary` - summarize user memory
+- `identity-reflection` - reflect on agent identity and experiences
+- `entity-analysis` - analyze entity relationships in knowledge graph
+- `remember-conversation` - generate memory-optimized conversation summary
+
+**Resource Subscriptions:**
+- `resources/subscribe` / `resources/unsubscribe` for real-time updates
+- SSE transport broadcasts `notifications/resources/updated` events
 
 ### Python SDK
 

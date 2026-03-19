@@ -87,7 +87,7 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | Circuit breaker + rate limiting | :green_circle: | :yellow_circle: | :yellow_circle: | :red_circle: |
 | Webhook delivery stats + audit | :green_circle: | :green_circle: | :red_circle: | :red_circle: |
 
-## SDKs & Integrations (12 features)
+## SDKs & Integrations (17 features)
 
 | Feature | Mnemo | Zep | Mem0 | Letta |
 |---|:---:|:---:|:---:|:---:|
@@ -101,6 +101,11 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 | CrewAI / AutoGen adapter | :red_circle: | :green_circle: | :green_circle: | :red_circle: |
 | gRPC API | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | MCP server | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
+| MCP tools (10+) | :green_circle: | :yellow_circle: | :yellow_circle: | :yellow_circle: |
+| MCP resources | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| MCP prompts | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| MCP subscriptions | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
+| MCP SSE transport | :green_circle: | :red_circle: | :red_circle: | :red_circle: |
 | OpenAPI spec | :green_circle: | :green_circle: | :green_circle: | :green_circle: |
 | CLI tool | :red_circle: | :green_circle: | :yellow_circle: | :green_circle: |
 
@@ -121,10 +126,10 @@ How Mnemo compares to the three leading AI memory systems. Assessed feature-by-f
 
 | | Mnemo | Zep | Mem0 | Letta |
 |---|---:|---:|---:|---:|
-| :green_circle: Shipped | **64** | **38** | **26** | **22** |
-| :yellow_circle: Partial | **2** | **14** | **19** | **11** |
-| :red_circle: Not available | **11** | **25** | **32** | **44** |
-| **Total features** | **77** | **77** | **77** | **77** |
+| :green_circle: Shipped | **69** | **38** | **26** | **22** |
+| :yellow_circle: Partial | **2** | **15** | **20** | **12** |
+| :red_circle: Not available | **11** | **29** | **36** | **48** |
+| **Total features** | **82** | **82** | **82** | **82** |
 
 ## Honesty Notes
 
@@ -145,6 +150,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Helm Qdrant auth**: Supported via `qdrant.apiKey`. Disabled by default.
 - **Helm Ingress TLS**: Supports TLS but defaults to disabled.
 - **Helm NetworkPolicy**: Optional (`networkPolicy.enabled: true`). Disabled by default.
+- **MCP server**: Full MCP 1.0 implementation with 13 tools, 11 resource templates, 5 prompt templates, resource subscriptions, and optional SSE transport. See [MCP Server Guide](wiki/guides/mcp-server.md).
 
 ### Zep Notes
 
@@ -164,6 +170,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Webhook management**: Dashboard UI only, not API.
 - **Shared memory**: Group graphs for cross-user sharing. No per-graph agent ACLs.
 - **Vector backends**: Pluggable embedders but storage tied to graph backend's native index.
+- **MCP**: Basic MCP server with limited tools. No resources, prompts, or subscriptions.
 
 ### Mem0 Notes
 
@@ -179,6 +186,7 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **Webhooks**: SDK-managed CRUD. No HMAC signing or delivery stats.
 - **Multi-modal**: Images (JPG, PNG), documents (MDX, TXT), and PDFs supported.
 - **CLI**: OpenMemory has a CLI (`npx @openmemory/install`).
+- **MCP**: Basic MCP server with limited tools. No resources, prompts, or subscriptions.
 
 ### Letta Notes
 
@@ -198,3 +206,4 @@ We take accuracy seriously. Every claim below has a source link or caveat.
 - **BYOK**: "Connect your own LLM API keys" listed on pricing.
 - **Local embeddings**: Docker deployment supports Ollama.
 - **Vector backends**: pgvector only.
+- **MCP**: Basic MCP server with limited tools. No resources, prompts, or subscriptions.

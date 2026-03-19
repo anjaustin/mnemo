@@ -145,9 +145,9 @@ Single Rust binary. 142 REST endpoints + 30 gRPC RPCs. MCP server for Claude Cod
 
 | | Mnemo | Zep | Mem0 | Letta |
 |---|---:|---:|---:|---:|
-| Features shipped | **64** | 38 | 26 | 22 |
-| Partial | 2 | 14 | 19 | 11 |
-| Not available | 11 | 25 | 32 | 44 |
+| Features shipped | **69** | 38 | 26 | 22 |
+| Partial | 2 | 15 | 20 | 12 |
+| Not available | 11 | 29 | 36 | 48 |
 
 **[Full competitive matrix →](docs/COMPETITIVE_MATRIX.md)**
 
