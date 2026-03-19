@@ -34,6 +34,9 @@
 pub mod context;
 pub mod protocol;
 pub mod resources;
+#[cfg(feature = "sse")]
+pub mod sse;
+pub mod subscriptions;
 pub mod tools;
 pub mod transport;
 

@@ -238,6 +238,50 @@ pub struct ResourceReadParams {
     pub uri: String,
 }
 
+/// Params for resources/subscribe.
+#[derive(Debug, Deserialize)]
+pub struct ResourceSubscribeParams {
+    pub uri: String,
+}
+
+/// Params for resources/unsubscribe.
+#[derive(Debug, Deserialize)]
+pub struct ResourceUnsubscribeParams {
+    pub uri: String,
+}
+
+/// JSON-RPC 2.0 notification (server to client, no id).
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonRpcNotification {
+    pub jsonrpc: String,
+    pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+}
+
+impl JsonRpcNotification {
+    pub fn new(method: impl Into<String>, params: Option<serde_json::Value>) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            method: method.into(),
+            params,
+        }
+    }
+
+    /// Create a resource updated notification.
+    pub fn resource_updated(uri: &str) -> Self {
+        Self::new(
+            "notifications/resources/updated",
+            Some(serde_json::json!({ "uri": uri })),
+        )
+    }
+
+    /// Create a resource list changed notification.
+    pub fn resources_list_changed() -> Self {
+        Self::new("notifications/resources/list_changed", None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

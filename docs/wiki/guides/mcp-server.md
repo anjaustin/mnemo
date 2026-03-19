@@ -17,9 +17,13 @@ The MCP server allows AI agents like Claude, GPT, and open-source models to:
 Agent (Claude/GPT/etc.)
         |
         v
-   MCP Protocol (JSON-RPC 2.0 over stdio)
+   MCP Protocol (JSON-RPC 2.0)
         |
-        v
+    +---+---+
+    |       |
+  stdio    SSE/HTTP
+    |       |
+    v       v
    mnemo-mcp-server
         |
         v
@@ -29,6 +33,10 @@ Agent (Claude/GPT/etc.)
    Memory Storage (Redis + Qdrant)
 ```
 
+The MCP server supports two transports:
+- **stdio** — For local tool integration (Claude Code, Cursor)
+- **SSE/HTTP** — For web-based agents and remote integrations
+
 ---
 
 ## Quick Start
@@ -36,10 +44,16 @@ Agent (Claude/GPT/etc.)
 ### 1. Build the MCP Server
 
 ```bash
+# Stdio transport (default)
 cargo build --release -p mnemo-mcp
+
+# With SSE transport support
+cargo build --release -p mnemo-mcp --features sse
 ```
 
-The binary is at `target/release/mnemo-mcp-server`.
+Binaries:
+- `target/release/mnemo-mcp-server` — stdio transport
+- `target/release/mnemo-mcp-sse` — SSE/HTTP transport (requires `sse` feature)
 
 ### 2. Configure Environment
 
@@ -52,11 +66,25 @@ export MNEMO_MCP_AGENT_ID="my-assistant"           # Optional: Agent identity
 
 ### 3. Run Standalone
 
+**Stdio transport:**
 ```bash
 mnemo-mcp-server
 ```
 
 The server reads JSON-RPC messages from stdin and writes responses to stdout.
+
+**SSE transport:**
+```bash
+# Start SSE server (requires --features sse build)
+MNEMO_MCP_SSE_HOST=0.0.0.0 \
+MNEMO_MCP_SSE_PORT=3000 \
+mnemo-mcp-sse
+```
+
+SSE transport provides:
+- `POST /message` — Send JSON-RPC requests
+- `GET /sse` — SSE stream for notifications
+- `GET /health` — Health check
 
 ### 4. Integrate with Claude Desktop
 
@@ -89,6 +117,14 @@ Add to your Claude Desktop MCP settings (`~/.config/claude/mcp.json` or equivale
 | `MNEMO_MCP_AGENT_ID` | Agent identifier for identity binding | None |
 | `MNEMO_MCP_SESSION` | Session name for grouping operations | `mcp-session` |
 | `RUST_LOG` | Log level (logs go to stderr) | `warn` |
+
+**SSE transport only:**
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `MNEMO_MCP_SSE_HOST` | Host to bind SSE server | `127.0.0.1` |
+| `MNEMO_MCP_SSE_PORT` | Port to bind SSE server | `3000` |
+| `MNEMO_MCP_SSE_CORS` | Comma-separated CORS origins | Permissive |
 
 ---
 
@@ -297,17 +333,40 @@ Check Mnemo server health.
 
 ## Resources
 
-The MCP server exposes 5 resource templates:
+The MCP server exposes 11 resource templates:
+
+### User Memory Resources
 
 | URI Template | Description |
 |--------------|-------------|
 | `mnemo://users/{user}/memory` | Knowledge graph summary and coherence |
-| `mnemo://users/{user}/episodes` | Recent memory episodes |
-| `mnemo://users/{user}/entities` | Entities in the knowledge graph |
-| `mnemo://agents/{agent_id}/identity` | Agent identity profile |
-| `mnemo://agents/{agent_id}/experience` | Recent experience events |
+| `mnemo://users/{user}/episodes` | Recent memory episodes (default: 20) |
+| `mnemo://users/{user}/entities` | Entities in the knowledge graph (default: 50) |
+| `mnemo://users/{user}/search?q={query}` | Semantic memory search |
+| `mnemo://users/{user}/digest` | Prose summary of knowledge graph |
 
-Example resource read:
+### Episode Resources
+
+| URI Template | Description |
+|--------------|-------------|
+| `mnemo://episodes/{episode_id}` | Single episode by ID with all turns |
+
+### Agent Identity Resources
+
+| URI Template | Description |
+|--------------|-------------|
+| `mnemo://agents/{agent_id}/identity` | Agent identity profile |
+| `mnemo://agents/{agent_id}/experience` | Recent experience events (default: 20) |
+| `mnemo://agents/{agent_id}/promotions` | Pending promotion proposals |
+
+### Graph Resources
+
+| URI Template | Description |
+|--------------|-------------|
+| `mnemo://users/{user}/graph/edges` | Entity relationships in knowledge graph |
+| `mnemo://users/{user}/graph/communities` | Detected graph communities |
+
+### Example Resource Read
 
 ```json
 {
@@ -317,6 +376,32 @@ Example resource read:
   }
 }
 ```
+
+### Resource Subscriptions
+
+Subscribe to resource changes (notifications delivered via SSE):
+
+```json
+{
+  "method": "resources/subscribe",
+  "params": {
+    "uri": "mnemo://users/user-123/memory"
+  }
+}
+```
+
+Unsubscribe:
+
+```json
+{
+  "method": "resources/unsubscribe",
+  "params": {
+    "uri": "mnemo://users/user-123/memory"
+  }
+}
+```
+
+**Note:** Subscriptions require SSE transport for notification delivery. With stdio transport, subscriptions are acknowledged but notifications cannot be pushed.
 
 ---
 
@@ -491,17 +576,73 @@ Logs go to stderr, not stdout (stdout is reserved for MCP protocol).
 The MCP server implements:
 
 - **JSON-RPC 2.0** message format
-- **stdio** transport (stdin/stdout)
+- **Transports**: stdio (stdin/stdout) and SSE/HTTP
 - **MCP Protocol Version**: 2025-03-26
 
-Supported methods:
-- `initialize` — Capability negotiation
-- `tools/list` — List available tools
-- `tools/call` — Execute a tool
-- `resources/list` — List static resources
-- `resources/templates/list` — List resource templates
-- `resources/read` — Read a resource
-- `ping` — Health check
+### Supported Methods
+
+| Method | Description |
+|--------|-------------|
+| `initialize` | Capability negotiation |
+| `tools/list` | List available tools |
+| `tools/call` | Execute a tool |
+| `resources/list` | List static resources |
+| `resources/templates/list` | List resource templates |
+| `resources/read` | Read a resource |
+| `resources/subscribe` | Subscribe to resource updates |
+| `resources/unsubscribe` | Unsubscribe from resource updates |
+| `ping` | Health check |
+
+### Server Capabilities
+
+```json
+{
+  "capabilities": {
+    "tools": { "listChanged": false },
+    "resources": { "listChanged": false, "subscribe": true }
+  }
+}
+```
+
+### SSE Transport Endpoints
+
+When running with SSE transport:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/message` | POST | Send JSON-RPC request, receive response |
+| `/sse` | GET | SSE stream for server notifications |
+| `/health` | GET | Health check endpoint |
+
+Example SSE client (JavaScript):
+
+```javascript
+// Connect to SSE stream
+const events = new EventSource('http://localhost:3000/sse');
+
+events.addEventListener('connected', (e) => {
+  const { sessionId } = JSON.parse(e.data);
+  console.log('Connected:', sessionId);
+});
+
+events.onmessage = (e) => {
+  const notification = JSON.parse(e.data);
+  if (notification.method === 'notifications/resources/updated') {
+    console.log('Resource updated:', notification.params.uri);
+  }
+};
+
+// Send a request
+fetch('http://localhost:3000/message', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/list'
+  })
+}).then(r => r.json()).then(console.log);
+```
 
 ---
 

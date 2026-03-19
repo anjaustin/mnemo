@@ -11,8 +11,17 @@ description = "MCP (Model Context Protocol) server for Mnemo — exposes memory 
 name = "mnemo-mcp-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "mnemo-mcp-sse"
+path = "src/bin/sse.rs"
+required-features = ["sse"]
+
 [lib]
 path = "src/lib.rs"
+
+[features]
+default = []
+sse = ["axum", "axum-extra", "tokio-stream", "futures"]
 
 [dependencies]
 serde = { workspace = true }
@@ -25,5 +34,12 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 urlencoding = "2"
 
+# SSE transport (optional)
+axum = { workspace = true, optional = true }
+axum-extra = { version = "0.9", features = ["typed-header"], optional = true }
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
+futures = { workspace = true, optional = true }
+
 [dev-dependencies]
 tokio-test = { workspace = true }
+tower = { version = "0.5", features = ["util"] }

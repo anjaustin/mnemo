@@ -103,6 +103,10 @@ async fn dispatch_method(
 
         "resources/read" => handle_resources_read(server, params, id).await,
 
+        "resources/subscribe" => handle_resources_subscribe(params, id),
+
+        "resources/unsubscribe" => handle_resources_unsubscribe(params, id),
+
         "ping" => {
             let resp = JsonRpcResponse::new(id.clone(), serde_json::json!({}));
             serde_json::to_string(&resp).unwrap_or_default()
@@ -140,7 +144,7 @@ fn handle_initialize(params: Option<&serde_json::Value>, id: &serde_json::Value)
             },
             resources: ResourcesCapability {
                 list_changed: false,
-                subscribe: false,
+                subscribe: true, // Subscription support enabled
             },
         },
         server_info: ServerInfo {
@@ -249,6 +253,83 @@ async fn handle_resources_read(
             serde_json::to_string(&err).unwrap_or_default()
         }
     }
+}
+
+fn handle_resources_subscribe(
+    params: Option<&serde_json::Value>,
+    id: &serde_json::Value,
+) -> String {
+    let params = match params {
+        Some(p) => p,
+        None => {
+            let err =
+                JsonRpcError::invalid_params(id.clone(), "Missing params for resources/subscribe");
+            return serde_json::to_string(&err).unwrap_or_default();
+        }
+    };
+
+    let sub_params: ResourceSubscribeParams = match serde_json::from_value(params.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            let err = JsonRpcError::invalid_params(
+                id.clone(),
+                format!("Invalid resources/subscribe params: {}", e),
+            );
+            return serde_json::to_string(&err).unwrap_or_default();
+        }
+    };
+
+    // Validate the URI format (must be a valid mnemo:// URI)
+    if !sub_params.uri.starts_with("mnemo://") {
+        let err = JsonRpcError::invalid_params(
+            id.clone(),
+            format!(
+                "Invalid subscription URI: {}. Must start with 'mnemo://'",
+                sub_params.uri
+            ),
+        );
+        return serde_json::to_string(&err).unwrap_or_default();
+    }
+
+    // For stdio transport, subscriptions are acknowledged but notifications
+    // can't be pushed (no reverse channel). Clients using stdio should poll
+    // resources instead. SSE transport handles actual notification delivery.
+    tracing::debug!(uri = %sub_params.uri, "Resource subscription registered (stdio)");
+
+    let resp = JsonRpcResponse::new(id.clone(), serde_json::json!({}));
+    serde_json::to_string(&resp).unwrap_or_default()
+}
+
+fn handle_resources_unsubscribe(
+    params: Option<&serde_json::Value>,
+    id: &serde_json::Value,
+) -> String {
+    let params = match params {
+        Some(p) => p,
+        None => {
+            let err = JsonRpcError::invalid_params(
+                id.clone(),
+                "Missing params for resources/unsubscribe",
+            );
+            return serde_json::to_string(&err).unwrap_or_default();
+        }
+    };
+
+    let unsub_params: ResourceUnsubscribeParams = match serde_json::from_value(params.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            let err = JsonRpcError::invalid_params(
+                id.clone(),
+                format!("Invalid resources/unsubscribe params: {}", e),
+            );
+            return serde_json::to_string(&err).unwrap_or_default();
+        }
+    };
+
+    tracing::debug!(uri = %unsub_params.uri, "Resource unsubscription (stdio)");
+
+    let resp = JsonRpcResponse::new(id.clone(), serde_json::json!({}));
+    serde_json::to_string(&resp).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -538,5 +619,76 @@ mod tests {
             parsed["error"]["code"], -32602,
             "Should reject non-object params"
         );
+    }
+
+    // ─── Subscription tests ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_subscribe_capability_enabled() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":200,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert_eq!(
+            parsed["result"]["capabilities"]["resources"]["subscribe"], true,
+            "Subscribe capability should be enabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resources_subscribe_success() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":201,"method":"resources/subscribe","params":{"uri":"mnemo://users/alice/memory"}}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert!(parsed["result"].is_object());
+        assert!(parsed.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_resources_subscribe_missing_params() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":202,"method":"resources/subscribe"}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert_eq!(parsed["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn test_resources_subscribe_invalid_uri() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":203,"method":"resources/subscribe","params":{"uri":"https://evil.com"}}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert_eq!(parsed["error"]["code"], -32602);
+        assert!(parsed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("mnemo://"));
+    }
+
+    #[tokio::test]
+    async fn test_resources_unsubscribe_success() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":204,"method":"resources/unsubscribe","params":{"uri":"mnemo://users/alice/memory"}}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert!(parsed["result"].is_object());
+        assert!(parsed.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_resources_unsubscribe_missing_params() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":205,"method":"resources/unsubscribe"}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert_eq!(parsed["error"]["code"], -32602);
     }
 }
