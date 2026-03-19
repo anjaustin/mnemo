@@ -117,6 +117,7 @@ pub struct InitializeResult {
 pub struct ServerCapabilities {
     pub tools: ToolsCapability,
     pub resources: ResourcesCapability,
+    pub prompts: PromptsCapability,
 }
 
 #[derive(Debug, Serialize)]
@@ -248,6 +249,81 @@ pub struct ResourceSubscribeParams {
 #[derive(Debug, Deserialize)]
 pub struct ResourceUnsubscribeParams {
     pub uri: String,
+}
+
+// ─── Prompt types ─────────────────────────────────────────────────
+
+/// Prompt definition returned in prompts/list.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptDefinition {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Vec<PromptArgument>>,
+}
+
+/// Argument definition for a prompt.
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptArgument {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+}
+
+/// Params for prompts/get.
+#[derive(Debug, Deserialize)]
+pub struct PromptGetParams {
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Result of prompts/get.
+#[derive(Debug, Serialize)]
+pub struct PromptGetResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub messages: Vec<PromptMessage>,
+}
+
+/// A message in a prompt.
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptMessage {
+    pub role: String,
+    pub content: PromptContent,
+}
+
+/// Content in a prompt message.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PromptContent {
+    Text { text: String },
+    Resource { resource: EmbeddedResource },
+}
+
+/// An embedded resource in prompt content.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedResource {
+    pub uri: String,
+    pub mime_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blob: Option<String>,
+}
+
+/// Prompts capability for server.
+#[derive(Debug, Serialize)]
+pub struct PromptsCapability {
+    #[serde(rename = "listChanged")]
+    pub list_changed: bool,
 }
 
 /// JSON-RPC 2.0 notification (server to client, no id).

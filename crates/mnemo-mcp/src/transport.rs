@@ -107,6 +107,10 @@ async fn dispatch_method(
 
         "resources/unsubscribe" => handle_resources_unsubscribe(params, id),
 
+        "prompts/list" => handle_prompts_list(id),
+
+        "prompts/get" => handle_prompts_get(server, params, id).await,
+
         "ping" => {
             let resp = JsonRpcResponse::new(id.clone(), serde_json::json!({}));
             serde_json::to_string(&resp).unwrap_or_default()
@@ -145,6 +149,9 @@ fn handle_initialize(params: Option<&serde_json::Value>, id: &serde_json::Value)
             resources: ResourcesCapability {
                 list_changed: false,
                 subscribe: true, // Subscription support enabled
+            },
+            prompts: PromptsCapability {
+                list_changed: false,
             },
         },
         server_info: ServerInfo {
@@ -369,6 +376,52 @@ fn handle_resources_unsubscribe(
 
     let resp = JsonRpcResponse::new(id.clone(), serde_json::json!({}));
     serde_json::to_string(&resp).unwrap_or_default()
+}
+
+fn handle_prompts_list(id: &serde_json::Value) -> String {
+    let prompts = crate::prompts::list_prompts();
+    let resp = JsonRpcResponse::new(id.clone(), serde_json::json!({ "prompts": prompts }));
+    serde_json::to_string(&resp).unwrap_or_default()
+}
+
+async fn handle_prompts_get(
+    server: &McpServer,
+    params: Option<&serde_json::Value>,
+    id: &serde_json::Value,
+) -> String {
+    let params = match params {
+        Some(p) => p,
+        None => {
+            let err = JsonRpcError::invalid_params(id.clone(), "Missing params for prompts/get");
+            return serde_json::to_string(&err).unwrap_or_default();
+        }
+    };
+
+    let get_params: PromptGetParams = match serde_json::from_value(params.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            let err = JsonRpcError::invalid_params(
+                id.clone(),
+                format!("Invalid prompts/get params: {}", e),
+            );
+            return serde_json::to_string(&err).unwrap_or_default();
+        }
+    };
+
+    match crate::prompts::get_prompt(server, &get_params.name, get_params.arguments.as_ref()).await
+    {
+        Ok(result) => {
+            let resp = JsonRpcResponse::new(
+                id.clone(),
+                serde_json::to_value(&result).unwrap_or_default(),
+            );
+            serde_json::to_string(&resp).unwrap_or_default()
+        }
+        Err(e) => {
+            let err = JsonRpcError::invalid_params(id.clone(), e);
+            serde_json::to_string(&err).unwrap_or_default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -729,5 +782,63 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
         assert_eq!(parsed["error"]["code"], -32602);
+    }
+
+    // ─── Prompt tests ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_prompts_list_returns_all() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":300,"method":"prompts/list"}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        let prompts = parsed["result"]["prompts"].as_array().unwrap();
+        assert_eq!(prompts.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_prompts_get_missing_params() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":301,"method":"prompts/get"}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert_eq!(parsed["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn test_prompts_get_unknown_prompt() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":302,"method":"prompts/get","params":{"name":"nonexistent"}}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert_eq!(parsed["error"]["code"], -32602);
+        assert!(parsed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown prompt"));
+    }
+
+    #[tokio::test]
+    async fn test_prompts_get_remember_conversation() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":303,"method":"prompts/get","params":{"name":"remember-conversation","arguments":{"conversation":"Hello!","user":"alice"}}}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert!(parsed["result"]["messages"].is_array());
+        assert!(!parsed["result"]["messages"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_includes_prompts_capability() {
+        let server = test_server();
+        let msg = r#"{"jsonrpc":"2.0","id":304,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#;
+        let resp = handle_message(&server, msg).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert!(parsed["result"]["capabilities"]["prompts"].is_object());
     }
 }

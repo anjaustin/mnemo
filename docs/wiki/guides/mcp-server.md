@@ -405,6 +405,80 @@ Unsubscribe:
 
 ---
 
+## Prompts
+
+The MCP server provides 5 prompt templates for common memory workflows:
+
+| Prompt | Description |
+|--------|-------------|
+| `memory-context` | Load relevant memories for a topic as conversation context |
+| `memory-summary` | Generate a summary of what's known about a user |
+| `identity-reflection` | Reflect on agent identity and suggest improvements |
+| `entity-analysis` | Analyze an entity and its relationships in the graph |
+| `remember-conversation` | Generate memory-optimized summary of a conversation |
+
+### Listing Prompts
+
+```json
+{
+  "method": "prompts/list",
+  "id": 1
+}
+```
+
+### Using a Prompt
+
+```json
+{
+  "method": "prompts/get",
+  "params": {
+    "name": "memory-context",
+    "arguments": {
+      "topic": "project deadlines",
+      "user": "alice"
+    }
+  }
+}
+```
+
+### Example: Memory Context
+
+The `memory-context` prompt retrieves relevant memories and formats them as conversation context:
+
+```json
+{
+  "method": "prompts/get",
+  "params": {
+    "name": "memory-context",
+    "arguments": {
+      "topic": "Alice's work preferences",
+      "user": "user-123"
+    }
+  }
+}
+```
+
+Response includes a message with retrieved memories:
+
+```json
+{
+  "result": {
+    "description": "Memory context for topic: Alice's work preferences",
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "type": "text",
+          "text": "Here is relevant context from memory about \"Alice's work preferences\":\n\n[retrieved memories]\n\nPlease use this context to inform your response."
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
 ## Agent Identity Binding
 
 When `MNEMO_MCP_AGENT_ID` is set, the MCP session is bound to an agent identity. This enables:
