@@ -23,6 +23,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+urlencoding = "2"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

@@ -286,7 +286,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 13);
     }
 
     #[tokio::test]
@@ -297,7 +297,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
         let templates = parsed["result"]["resourceTemplates"].as_array().unwrap();
-        assert_eq!(templates.len(), 2);
+        assert_eq!(templates.len(), 5);
     }
 
     #[tokio::test]

@@ -258,6 +258,104 @@ pub fn list_tools() -> Vec<ToolDefinition> {
                 "required": []
             }),
         },
+        // ─── Agent identity evolution tools ───────────────────────────
+        ToolDefinition {
+            name: "experience".to_string(),
+            description: "Record a learning experience that may influence agent identity over time. \
+                          Use when observing user preferences, successful interactions, or important \
+                          behavioral patterns."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "Agent UUID to record experience for."
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category of experience (e.g., 'tone', 'domain', 'preference', 'boundary')."
+                    },
+                    "signal": {
+                        "type": "string",
+                        "description": "Natural language description of what was learned (e.g., 'user prefers concise responses')."
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "description": "How confident the agent is in this signal (0.0-1.0)."
+                    },
+                    "evidence_episode_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Episode UUIDs that provide evidence for this experience."
+                    }
+                },
+                "required": ["agent_id", "category", "signal", "confidence"]
+            }),
+        },
+        ToolDefinition {
+            name: "relate".to_string(),
+            description: "Create or query entity relationships in the knowledge graph. Use to \
+                          connect people, concepts, places, or events."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "string",
+                        "description": "User identifier."
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["connect", "neighbors", "path"],
+                        "description": "'connect' creates an edge, 'neighbors' lists connected entities, 'path' finds shortest path."
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Source entity name or ID."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Target entity name or ID (for 'connect' and 'path')."
+                    },
+                    "relation": {
+                        "type": "string",
+                        "description": "Relationship type for 'connect' (e.g., 'works_at', 'knows', 'located_in')."
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "Hop depth for 'neighbors' (default: 1)."
+                    }
+                },
+                "required": ["action", "source"]
+            }),
+        },
+        ToolDefinition {
+            name: "forget".to_string(),
+            description: "Remove a specific memory episode. Use with caution — deletion is permanent. \
+                          Requires providing a reason for audit purposes."
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "string",
+                        "description": "User identifier."
+                    },
+                    "episode_id": {
+                        "type": "string",
+                        "description": "Episode UUID to delete."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason for deletion (required for audit trail)."
+                    }
+                },
+                "required": ["episode_id", "reason"]
+            }),
+        },
     ]
 }
 
@@ -312,6 +410,9 @@ pub async fn dispatch_tool(
         "delegate" => handle_delegate(server, arguments).await,
         "revoke" => handle_revoke(server, arguments).await,
         "scopes" => handle_scopes(server, arguments).await,
+        "experience" => handle_experience(server, arguments).await,
+        "relate" => handle_relate(server, arguments).await,
+        "forget" => handle_forget(server, arguments).await,
         _ => ToolCallResult::error(format!("Unknown tool: {}", tool_name)),
     }
 }
@@ -839,14 +940,267 @@ async fn handle_scopes(server: &McpServer, args: &Value) -> ToolCallResult {
     }
 }
 
+// ─── Agent identity evolution tool handlers ──────────────────────
+
+async fn handle_experience(server: &McpServer, args: &Value) -> ToolCallResult {
+    let agent_id = match args.get("agent_id").and_then(|v| v.as_str()) {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => return ToolCallResult::error("'agent_id' argument is required"),
+    };
+
+    if let Err(e) = validate_path_segment(agent_id, "agent_id") {
+        return ToolCallResult::error(e);
+    }
+
+    let category = match args.get("category").and_then(|v| v.as_str()) {
+        Some(c) if !c.trim().is_empty() => c,
+        _ => return ToolCallResult::error("'category' argument is required and must be non-empty"),
+    };
+
+    let signal = match args.get("signal").and_then(|v| v.as_str()) {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => return ToolCallResult::error("'signal' argument is required and must be non-empty"),
+    };
+
+    let confidence = match args.get("confidence").and_then(|v| v.as_f64()) {
+        Some(c) if (0.0..=1.0).contains(&c) => c as f32,
+        Some(c) => {
+            return ToolCallResult::error(format!(
+                "'confidence' must be between 0.0 and 1.0, got {}",
+                c
+            ))
+        }
+        None => return ToolCallResult::error("'confidence' argument is required"),
+    };
+
+    let evidence_episode_ids: Vec<String> = args
+        .get("evidence_episode_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let body = serde_json::json!({
+        "category": category,
+        "signal": signal,
+        "confidence": confidence,
+        "evidence_episode_ids": evidence_episode_ids,
+    });
+
+    let path = format!("/api/v1/agents/{}/experience", agent_id);
+    match server.post(&path).json(&body).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            match resp.json::<Value>().await {
+                Ok(json) if status.is_success() => ToolCallResult::json(&json),
+                Ok(json) => ToolCallResult::error(format!(
+                    "Mnemo API error ({}): {}",
+                    status,
+                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                )),
+                Err(e) => ToolCallResult::error(format!("Failed to parse response: {}", e)),
+            }
+        }
+        Err(e) => ToolCallResult::error(format!("HTTP request failed: {}", e)),
+    }
+}
+
+async fn handle_relate(server: &McpServer, args: &Value) -> ToolCallResult {
+    let user = match server.resolve_user(args.get("user").and_then(|v| v.as_str())) {
+        Ok(u) => u.to_string(),
+        Err(e) => return ToolCallResult::error(e),
+    };
+
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
+
+    let action = match args.get("action").and_then(|v| v.as_str()) {
+        Some(a) => a,
+        None => return ToolCallResult::error("'action' argument is required"),
+    };
+
+    let source = match args.get("source").and_then(|v| v.as_str()) {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => return ToolCallResult::error("'source' argument is required and must be non-empty"),
+    };
+
+    match action {
+        "connect" => {
+            let target = match args.get("target").and_then(|v| v.as_str()) {
+                Some(t) if !t.trim().is_empty() => t,
+                _ => {
+                    return ToolCallResult::error(
+                        "'target' argument is required for 'connect' action",
+                    )
+                }
+            };
+
+            let relation = match args.get("relation").and_then(|v| v.as_str()) {
+                Some(r) if !r.trim().is_empty() => r,
+                _ => {
+                    return ToolCallResult::error(
+                        "'relation' argument is required for 'connect' action",
+                    )
+                }
+            };
+
+            let body = serde_json::json!({
+                "source_entity": source,
+                "target_entity": target,
+                "relation": relation,
+            });
+
+            let path = format!("/api/v1/graph/{}/edges", user);
+            match server.post(&path).json(&body).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    match resp.json::<Value>().await {
+                        Ok(json) if status.is_success() => ToolCallResult::json(&json),
+                        Ok(json) => ToolCallResult::error(format!(
+                            "Mnemo API error ({}): {}",
+                            status,
+                            serde_json::to_string_pretty(&json).unwrap_or_default()
+                        )),
+                        Err(e) => ToolCallResult::error(format!("Failed to parse response: {}", e)),
+                    }
+                }
+                Err(e) => ToolCallResult::error(format!("HTTP request failed: {}", e)),
+            }
+        }
+        "neighbors" => {
+            let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1);
+
+            // URL-encode the source in case it contains special characters
+            let encoded_source = urlencoding::encode(source);
+            let path = format!(
+                "/api/v1/graph/{}/neighbors/{}?depth={}",
+                user, encoded_source, depth
+            );
+            match server.get(&path).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    match resp.json::<Value>().await {
+                        Ok(json) if status.is_success() => ToolCallResult::json(&json),
+                        Ok(json) => ToolCallResult::error(format!(
+                            "Mnemo API error ({}): {}",
+                            status,
+                            serde_json::to_string_pretty(&json).unwrap_or_default()
+                        )),
+                        Err(e) => ToolCallResult::error(format!("Failed to parse response: {}", e)),
+                    }
+                }
+                Err(e) => ToolCallResult::error(format!("HTTP request failed: {}", e)),
+            }
+        }
+        "path" => {
+            let target = match args.get("target").and_then(|v| v.as_str()) {
+                Some(t) if !t.trim().is_empty() => t,
+                _ => {
+                    return ToolCallResult::error("'target' argument is required for 'path' action")
+                }
+            };
+
+            let body = serde_json::json!({
+                "source": source,
+                "target": target,
+            });
+
+            let path = format!("/api/v1/graph/{}/path", user);
+            match server.post(&path).json(&body).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    match resp.json::<Value>().await {
+                        Ok(json) if status.is_success() => ToolCallResult::json(&json),
+                        Ok(json) => ToolCallResult::error(format!(
+                            "Mnemo API error ({}): {}",
+                            status,
+                            serde_json::to_string_pretty(&json).unwrap_or_default()
+                        )),
+                        Err(e) => ToolCallResult::error(format!("Failed to parse response: {}", e)),
+                    }
+                }
+                Err(e) => ToolCallResult::error(format!("HTTP request failed: {}", e)),
+            }
+        }
+        _ => ToolCallResult::error(format!(
+            "Unknown action '{}'. Must be one of: connect, neighbors, path",
+            action
+        )),
+    }
+}
+
+async fn handle_forget(server: &McpServer, args: &Value) -> ToolCallResult {
+    let user = match server.resolve_user(args.get("user").and_then(|v| v.as_str())) {
+        Ok(u) => u.to_string(),
+        Err(e) => return ToolCallResult::error(e),
+    };
+
+    if let Err(e) = validate_path_segment(&user, "user") {
+        return ToolCallResult::error(e);
+    }
+
+    let episode_id = match args.get("episode_id").and_then(|v| v.as_str()) {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => {
+            return ToolCallResult::error("'episode_id' argument is required and must be non-empty")
+        }
+    };
+
+    if let Err(e) = validate_path_segment(episode_id, "episode_id") {
+        return ToolCallResult::error(e);
+    }
+
+    let reason = match args.get("reason").and_then(|v| v.as_str()) {
+        Some(r) if !r.trim().is_empty() => r,
+        _ => {
+            return ToolCallResult::error(
+                "'reason' argument is required for audit purposes and must be non-empty",
+            )
+        }
+    };
+
+    // The API uses query param for user context
+    let path = format!("/api/v1/episodes/{}?user={}", episode_id, user);
+    match server.delete(&path).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                let result = serde_json::json!({
+                    "episode_id": episode_id,
+                    "reason": reason,
+                    "status": "deleted",
+                });
+                ToolCallResult::json(&result)
+            } else {
+                match resp.json::<Value>().await {
+                    Ok(json) => ToolCallResult::error(format!(
+                        "Delete failed ({}): {}",
+                        status,
+                        serde_json::to_string_pretty(&json).unwrap_or_default()
+                    )),
+                    Err(e) => ToolCallResult::error(format!(
+                        "Delete failed ({}) and response unparseable: {}",
+                        status, e
+                    )),
+                }
+            }
+        }
+        Err(e) => ToolCallResult::error(format!("HTTP request failed: {}", e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_list_tools_returns_10_tools() {
+    fn test_list_tools_returns_all_tools() {
         let tools = list_tools();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 13);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"remember"));
@@ -859,6 +1213,9 @@ mod tests {
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"revoke"));
         assert!(names.contains(&"scopes"));
+        assert!(names.contains(&"experience"));
+        assert!(names.contains(&"relate"));
+        assert!(names.contains(&"forget"));
     }
 
     #[test]
@@ -1445,5 +1802,294 @@ mod tests {
         .await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("illegal characters"));
+    }
+
+    // ─── Experience tool tests ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_experience_rejects_missing_agent_id() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "experience",
+            &serde_json::json!({
+                "category": "tone",
+                "signal": "user prefers formal",
+                "confidence": 0.8
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("agent_id"));
+    }
+
+    #[tokio::test]
+    async fn test_experience_rejects_missing_category() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "experience",
+            &serde_json::json!({
+                "agent_id": "my-agent",
+                "signal": "user prefers formal",
+                "confidence": 0.8
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("category"));
+    }
+
+    #[tokio::test]
+    async fn test_experience_rejects_invalid_confidence() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "experience",
+            &serde_json::json!({
+                "agent_id": "my-agent",
+                "category": "tone",
+                "signal": "user prefers formal",
+                "confidence": 1.5
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("confidence"));
+    }
+
+    #[tokio::test]
+    async fn test_experience_rejects_negative_confidence() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None,
+        });
+        let result = dispatch_tool(
+            &server,
+            "experience",
+            &serde_json::json!({
+                "agent_id": "my-agent",
+                "category": "tone",
+                "signal": "user prefers formal",
+                "confidence": -0.1
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("confidence"));
+    }
+
+    // ─── Relate tool tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_relate_rejects_missing_action() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "relate",
+            &serde_json::json!({
+                "source": "Alice"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("action"));
+    }
+
+    #[tokio::test]
+    async fn test_relate_rejects_missing_source() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "relate",
+            &serde_json::json!({
+                "action": "connect"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("source"));
+    }
+
+    #[tokio::test]
+    async fn test_relate_connect_rejects_missing_target() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "relate",
+            &serde_json::json!({
+                "action": "connect",
+                "source": "Alice"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("target"));
+    }
+
+    #[tokio::test]
+    async fn test_relate_connect_rejects_missing_relation() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "relate",
+            &serde_json::json!({
+                "action": "connect",
+                "source": "Alice",
+                "target": "Bob"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("relation"));
+    }
+
+    #[tokio::test]
+    async fn test_relate_rejects_unknown_action() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "relate",
+            &serde_json::json!({
+                "action": "delete_all",
+                "source": "Alice"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("Unknown action"));
+    }
+
+    // ─── Forget tool tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_forget_rejects_missing_episode_id() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "forget",
+            &serde_json::json!({
+                "reason": "user requested deletion"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("episode_id"));
+    }
+
+    #[tokio::test]
+    async fn test_forget_rejects_missing_reason() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "forget",
+            &serde_json::json!({
+                "episode_id": "550e8400-e29b-41d4-a716-446655440000"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("reason"));
+    }
+
+    #[tokio::test]
+    async fn test_forget_rejects_empty_reason() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "forget",
+            &serde_json::json!({
+                "episode_id": "550e8400-e29b-41d4-a716-446655440000",
+                "reason": "   "
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("reason"));
+    }
+
+    #[tokio::test]
+    async fn test_forget_rejects_path_traversal_in_episode_id() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: Some("test-user".to_string()),
+        });
+        let result = dispatch_tool(
+            &server,
+            "forget",
+            &serde_json::json!({
+                "episode_id": "../../../etc/passwd",
+                "reason": "test"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("illegal characters"));
+    }
+
+    #[tokio::test]
+    async fn test_forget_rejects_missing_user() {
+        let server = McpServer::new(crate::McpConfig {
+            mnemo_base_url: "http://localhost:99999".to_string(),
+            api_key: None,
+            default_user: None, // no default
+        });
+        let result = dispatch_tool(
+            &server,
+            "forget",
+            &serde_json::json!({
+                "episode_id": "550e8400-e29b-41d4-a716-446655440000",
+                "reason": "test"
+            }),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("MNEMO_MCP_DEFAULT_USER"));
     }
 }

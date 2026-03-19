@@ -4,6 +4,14 @@ How-to guides for specific features and use cases.
 
 ---
 
+## Integration Guides
+
+| Guide | Description |
+|-------|-------------|
+| **[MCP Server](mcp-server.md)** | Integrate Mnemo with Claude, GPT, and other MCP-compatible agents |
+
+---
+
 ## Existing Documentation
 
 For detailed guides, see these existing docs:

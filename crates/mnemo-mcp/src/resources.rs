@@ -17,10 +17,28 @@ pub fn list_resource_templates() -> Vec<ResourceTemplate> {
             mime_type: "application/json".to_string(),
         },
         ResourceTemplate {
+            uri_template: "mnemo://users/{user}/episodes".to_string(),
+            name: "Recent Episodes".to_string(),
+            description: "List of recent memory episodes for a user.".to_string(),
+            mime_type: "application/json".to_string(),
+        },
+        ResourceTemplate {
+            uri_template: "mnemo://users/{user}/entities".to_string(),
+            name: "User Entities".to_string(),
+            description: "List of entities in the user's knowledge graph.".to_string(),
+            mime_type: "application/json".to_string(),
+        },
+        ResourceTemplate {
             uri_template: "mnemo://agents/{agent_id}/identity".to_string(),
             name: "Agent Identity".to_string(),
             description: "Agent identity profile including core, experience, and version info."
                 .to_string(),
+            mime_type: "application/json".to_string(),
+        },
+        ResourceTemplate {
+            uri_template: "mnemo://agents/{agent_id}/experience".to_string(),
+            name: "Agent Experience".to_string(),
+            description: "Recent experience events for agent identity evolution.".to_string(),
             mime_type: "application/json".to_string(),
         },
     ]
@@ -58,9 +76,21 @@ pub async fn read_resource(server: &McpServer, uri: &str) -> Result<ResourceRead
                 validate_identifier(user, "user")?;
                 read_user_memory(server, user, uri).await
             }
+            ["users", user, "episodes"] => {
+                validate_identifier(user, "user")?;
+                read_user_episodes(server, user, uri).await
+            }
+            ["users", user, "entities"] => {
+                validate_identifier(user, "user")?;
+                read_user_entities(server, user, uri).await
+            }
             ["agents", agent_id, "identity"] => {
                 validate_identifier(agent_id, "agent_id")?;
                 read_agent_identity(server, agent_id, uri).await
+            }
+            ["agents", agent_id, "experience"] => {
+                validate_identifier(agent_id, "agent_id")?;
+                read_agent_experience(server, agent_id, uri).await
             }
             _ => Err(format!("Unknown resource URI: {}", uri)),
         }
@@ -79,6 +109,76 @@ async fn read_user_memory(
 ) -> Result<ResourceReadResult, String> {
     // Fetch coherence report (lightweight summary of user's memory)
     let path = format!("/api/v1/users/{}/coherence", user);
+    let resp = server
+        .get(&path)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    let status = resp.status();
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "Mnemo API error ({}): {}",
+            status,
+            serde_json::to_string_pretty(&json).unwrap_or_default()
+        ));
+    }
+
+    Ok(ResourceReadResult {
+        contents: vec![ResourceContent {
+            uri: uri.to_string(),
+            mime_type: "application/json".to_string(),
+            text: serde_json::to_string_pretty(&json).unwrap_or_default(),
+        }],
+    })
+}
+
+async fn read_user_episodes(
+    server: &McpServer,
+    user: &str,
+    uri: &str,
+) -> Result<ResourceReadResult, String> {
+    let path = format!("/api/v1/users/{}/episodes?limit=20", user);
+    let resp = server
+        .get(&path)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    let status = resp.status();
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "Mnemo API error ({}): {}",
+            status,
+            serde_json::to_string_pretty(&json).unwrap_or_default()
+        ));
+    }
+
+    Ok(ResourceReadResult {
+        contents: vec![ResourceContent {
+            uri: uri.to_string(),
+            mime_type: "application/json".to_string(),
+            text: serde_json::to_string_pretty(&json).unwrap_or_default(),
+        }],
+    })
+}
+
+async fn read_user_entities(
+    server: &McpServer,
+    user: &str,
+    uri: &str,
+) -> Result<ResourceReadResult, String> {
+    let path = format!("/api/v1/graph/{}/entities?limit=50", user);
     let resp = server
         .get(&path)
         .send()
@@ -143,18 +243,56 @@ async fn read_agent_identity(
     })
 }
 
+async fn read_agent_experience(
+    server: &McpServer,
+    agent_id: &str,
+    uri: &str,
+) -> Result<ResourceReadResult, String> {
+    let path = format!("/api/v1/agents/{}/experience?limit=20", agent_id);
+    let resp = server
+        .get(&path)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    let status = resp.status();
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "Mnemo API error ({}): {}",
+            status,
+            serde_json::to_string_pretty(&json).unwrap_or_default()
+        ));
+    }
+
+    Ok(ResourceReadResult {
+        contents: vec![ResourceContent {
+            uri: uri.to_string(),
+            mime_type: "application/json".to_string(),
+            text: serde_json::to_string_pretty(&json).unwrap_or_default(),
+        }],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_list_resource_templates_returns_2() {
+    fn test_list_resource_templates_returns_all() {
         let templates = list_resource_templates();
-        assert_eq!(templates.len(), 2);
+        assert_eq!(templates.len(), 5);
 
         let uris: Vec<&str> = templates.iter().map(|t| t.uri_template.as_str()).collect();
         assert!(uris.contains(&"mnemo://users/{user}/memory"));
+        assert!(uris.contains(&"mnemo://users/{user}/episodes"));
+        assert!(uris.contains(&"mnemo://users/{user}/entities"));
         assert!(uris.contains(&"mnemo://agents/{agent_id}/identity"));
+        assert!(uris.contains(&"mnemo://agents/{agent_id}/experience"));
     }
 
     #[test]

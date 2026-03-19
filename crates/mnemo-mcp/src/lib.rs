@@ -22,7 +22,16 @@
 //! 2. Server responds with capabilities (tools, resources)
 //! 3. Client sends `initialized` notification
 //! 4. Client calls `tools/call`, `resources/read`, etc.
+//!
+//! ## Agent Context
+//!
+//! MCP sessions can be bound to an agent identity via `MNEMO_MCP_AGENT_ID`.
+//! This enables:
+//! - Agent-scoped memory operations
+//! - Experience recording for identity evolution
+//! - Session continuity across reconnects
 
+pub mod context;
 pub mod protocol;
 pub mod resources;
 pub mod tools;
