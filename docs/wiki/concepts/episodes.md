@@ -300,5 +300,5 @@ Keep related messages in the same session for better context.
 ## Next Steps
 
 - **[Entities & Edges](entities-and-edges.md)** - What gets extracted
-- **[Sessions](sessions.md)** - Episode containers
-- **[Multi-Modal Guide](../guides/multi-modal/images.md)** - Attachments
+- **[Sessions](overview.md#session)** - Episode containers (see overview)
+- **[Multi-Modal PRD](../../MULTI_MODAL_PRD.md)** - Attachments implementation

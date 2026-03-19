@@ -9,11 +9,9 @@ Production deployment guides for Mnemo.
 | Guide | Description |
 |-------|-------------|
 | **[Docker](docker.md)** | Local and single-server deployment |
-| **[Kubernetes](kubernetes.md)** | Helm chart for production |
-| **[AWS](aws.md)** | CloudFormation templates |
-| **[GCP](gcp.md)** | Cloud Run deployment |
-| **[DigitalOcean](digitalocean.md)** | App Platform |
-| **[Other Providers](other-providers.md)** | Render, Railway, Vultr, Linode |
+| **[Kubernetes & Cloud](../../DEPLOY.md)** | Helm chart and cloud providers |
+
+For platform-specific guides, see the [deploy/](../../../deploy/) directory.
 
 ---
 
@@ -110,5 +108,5 @@ Before going to production:
 ## Quick Links
 
 - **[Docker Compose](docker.md)** - Fastest path to running
-- **[Kubernetes Helm](kubernetes.md)** - Production-grade deployment
+- **[Kubernetes Helm](../../DEPLOY.md)** - Production-grade deployment
 - **[Configuration](../reference/configuration.md)** - All settings

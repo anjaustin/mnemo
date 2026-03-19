@@ -284,4 +284,4 @@ export RUST_LOG="mnemo_server=info,mnemo_ingest=debug"
 
 - **[Architecture](architecture.md)** - System internals
 - **[Deployment](../deployment/docker.md)** - Production setup
-- **[Troubleshooting](troubleshooting.md)** - Common issues
+- **[Troubleshooting](../../TROUBLESHOOTING.md)** - Common issues

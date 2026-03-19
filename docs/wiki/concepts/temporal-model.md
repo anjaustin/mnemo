@@ -325,5 +325,5 @@ If your app always needs current state, use `current_strict` contract.
 ## Next Steps
 
 - **[Entities & Edges](entities-and-edges.md)** - Knowledge graph structure
-- **[Context Assembly](../guides/context-assembly.md)** - How retrieval works
-- **[Memory Contracts](../guides/memory-contracts.md)** - Retrieval policies
+- **[Architecture](../reference/architecture.md)** - Retrieval pipeline details
+- **[Capabilities](../../CAPABILITIES.md)** - Memory contracts and retrieval policies

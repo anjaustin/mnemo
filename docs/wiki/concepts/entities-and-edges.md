@@ -361,5 +361,5 @@ GET /edges?entity_type=person  # Broader
 ## Next Steps
 
 - **[Temporal Model](temporal-model.md)** - How facts change over time
-- **[Hybrid Search](../guides/hybrid-search.md)** - Graph + semantic + full-text
-- **[Data Classification](../guides/data-classification.md)** - Access control
+- **[Architecture](../reference/architecture.md)** - Retrieval pipeline details
+- **[Capabilities](../../CAPABILITIES.md)** - Full feature list including classification

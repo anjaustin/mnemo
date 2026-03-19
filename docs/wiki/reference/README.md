@@ -10,9 +10,9 @@ Technical reference documentation.
 |-----------|-------------|
 | **[Configuration](configuration.md)** | Environment variables and TOML settings |
 | **[Architecture](architecture.md)** | System internals and design |
-| **[Performance](performance.md)** | Benchmarks and tuning |
-| **[Troubleshooting](troubleshooting.md)** | Common issues and solutions |
-| **[Security](security.md)** | Security controls and hardening |
+| **[Benchmarks](../../BENCHMARKS.md)** | Performance measurements |
+| **[Troubleshooting](../../TROUBLESHOOTING.md)** | Common issues and solutions |
+| **[Security](../../SECURITY_CONTROLS.md)** | Security controls and hardening |
 
 ---
 

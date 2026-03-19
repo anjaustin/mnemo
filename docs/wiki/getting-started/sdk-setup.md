@@ -338,5 +338,5 @@ const client = new MnemoClient();
 ## Next Steps
 
 - **[First Memory](first-memory.md)** - Detailed API walkthrough
-- **[LangChain Integration](../guides/integrations/langchain.md)** - Full LangChain guide
-- **[API Reference](../api/python-sdk.md)** - Complete SDK reference
+- **[Usage Guide](../../USAGE.md)** - LangChain, LlamaIndex, and more integrations
+- **[API Reference](../../API.md)** - Complete API reference

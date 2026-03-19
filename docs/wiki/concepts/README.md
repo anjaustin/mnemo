@@ -12,8 +12,8 @@ Understanding Mnemo's data model and architecture.
 | **[Episodes](episodes.md)** | The atomic unit of memory |
 | **[Entities & Edges](entities-and-edges.md)** | The knowledge graph |
 | **[Temporal Model](temporal-model.md)** | How facts change over time |
-| **[Sessions](sessions.md)** | Conversation threads |
-| **[Users](users.md)** | Multi-tenant isolation |
+
+Sessions and Users are covered in the [Overview](overview.md).
 
 ---
 

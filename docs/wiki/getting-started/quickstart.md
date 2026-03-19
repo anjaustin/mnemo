@@ -14,7 +14,16 @@ Get Mnemo running in 5 minutes.
 
 ## One-Command Install
 
+> **Security Note**: Always review scripts before running them. You can inspect this script at:
+> https://github.com/anjaustin/mnemo/blob/main/deploy/docker/quickstart.sh
+
 ```bash
+# Option 1: Review then run
+curl -fsSL https://raw.githubusercontent.com/anjaustin/mnemo/main/deploy/docker/quickstart.sh -o quickstart.sh
+less quickstart.sh  # Review the script
+bash quickstart.sh
+
+# Option 2: Direct run (if you trust the source)
 curl -fsSL https://raw.githubusercontent.com/anjaustin/mnemo/main/deploy/docker/quickstart.sh | bash
 ```
 
@@ -122,6 +131,17 @@ When you recall:
 
 ---
 
+## Security Considerations
+
+For production deployments:
+
+1. **Enable authentication** - Set `MNEMO_AUTH_ENABLED=true`
+2. **Use HTTPS** - Put Mnemo behind a reverse proxy with TLS
+3. **Firewall Redis/Qdrant** - Don't expose ports 6379/6333 publicly
+4. **Use secrets management** - Don't hardcode API keys in compose files
+
+---
+
 ## Stopping Mnemo
 
 ```bash
@@ -159,4 +179,4 @@ Ensure Docker is running:
 docker ps
 ```
 
-See **[Troubleshooting](../reference/troubleshooting.md)** for more.
+Check the main [Troubleshooting](../../TROUBLESHOOTING.md) guide for more.

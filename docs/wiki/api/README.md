@@ -4,16 +4,13 @@ Complete API documentation for Mnemo.
 
 ---
 
-## In This Section
+## Documentation
 
 | Reference | Description |
 |-----------|-------------|
-| **[REST API](rest.md)** | All 142 HTTP endpoints |
-| **[gRPC API](grpc.md)** | Protobuf service definitions |
-| **[Python SDK](python-sdk.md)** | `mnemo` package reference |
-| **[TypeScript SDK](typescript-sdk.md)** | `mnemo-client` package reference |
-| **[MCP Tools](mcp-tools.md)** | Model Context Protocol tools |
-| **[Error Codes](errors.md)** | Error handling reference |
+| **[Full API Reference](../../API.md)** | All endpoints with examples |
+| **[Usage Guide](../../USAGE.md)** | SDK examples and integrations |
+| **[gRPC Examples](../../API.md#grpc-api)** | gRPC usage |
 
 ---
 

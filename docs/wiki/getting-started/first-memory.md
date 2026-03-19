@@ -296,5 +296,5 @@ curl "http://localhost:8080/api/v1/users/019abc12-3456-7890-abcd-ef1234567890/ch
 
 - **[SDK Setup](sdk-setup.md)** - Use Python or TypeScript clients
 - **[Temporal Model](../concepts/temporal-model.md)** - Deep dive into bi-temporal facts
-- **[Context Assembly](../guides/context-assembly.md)** - Token budgeting and retrieval options
-- **[Hybrid Search](../guides/hybrid-search.md)** - Understand search strategies
+- **[Architecture](../reference/architecture.md)** - Retrieval pipeline details
+- **[Usage Guide](../../USAGE.md)** - Full API usage examples

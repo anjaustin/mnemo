@@ -434,5 +434,5 @@ cluster:
 ## Next Steps
 
 - **[Configuration](configuration.md)** - All settings
-- **[Performance](performance.md)** - Benchmarks and tuning
-- **[Deployment](../deployment/kubernetes.md)** - Production setup
+- **[Benchmarks](../../BENCHMARKS.md)** - Performance measurements
+- **[Deployment](../../DEPLOY.md)** - Production setup

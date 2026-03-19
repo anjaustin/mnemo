@@ -43,4 +43,4 @@ New to Mnemo? Start here.
 
 - **[Core Concepts](../concepts/overview.md)** - Understand the data model
 - **[Configuration](../reference/configuration.md)** - Customize settings
-- **[API Reference](../api/rest.md)** - Full endpoint documentation
+- **[API Reference](../../API.md)** - Full endpoint documentation

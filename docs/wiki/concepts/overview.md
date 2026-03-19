@@ -262,7 +262,7 @@ POST /regions/{id}/access
 - **RediSearch** - Full-text search index (module in Redis)
 - **Qdrant** - Vector embeddings for semantic search
 
-Both services can be scaled independently. See [Deployment](../deployment/kubernetes.md).
+Both services can be scaled independently. See [Deployment](../../DEPLOY.md).
 
 ---
 

@@ -22,7 +22,7 @@ Join the Mnemo project.
 git clone https://github.com/anjaustin/mnemo.git
 cd mnemo
 
-# Install Rust
+# Install Rust (see https://rustup.rs for alternatives)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Start dependencies

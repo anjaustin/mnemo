@@ -4,64 +4,22 @@ How-to guides for specific features and use cases.
 
 ---
 
-## Memory & Retrieval
+## Existing Documentation
 
-| Guide | Description |
-|-------|-------------|
-| **[Context Assembly](context-assembly.md)** | Token-budgeted retrieval |
-| **[Hybrid Search](hybrid-search.md)** | Semantic + graph + full-text |
-| **[Temporal Queries](temporal-queries.md)** | Point-in-time recall |
-| **[Memory Contracts](memory-contracts.md)** | Predefined retrieval policies |
-| **[Reranking](reranking.md)** | RRF, MMR, GNN, Hyperbolic |
+For detailed guides, see these existing docs:
 
----
-
-## Multi-Modal
-
-| Guide | Description |
-|-------|-------------|
-| **[Image Memory](multi-modal/images.md)** | Vision processing |
-| **[Audio Memory](multi-modal/audio.md)** | Transcription |
-| **[Document Memory](multi-modal/documents.md)** | PDF and text parsing |
+| Topic | Documentation |
+|-------|---------------|
+| **Full Feature List** | [Capabilities](../../CAPABILITIES.md) |
+| **API Usage Examples** | [Usage Guide](../../USAGE.md) |
+| **Multi-Modal Memory** | [Multi-Modal PRD](../../MULTI_MODAL_PRD.md) |
+| **Agent Identity** | [Agent Identity Substrate](../../AGENT_IDENTITY_SUBSTRATE.md) |
+| **Webhooks** | [Webhooks Guide](../../WEBHOOKS.md) |
+| **Security** | [Security Controls](../../SECURITY_CONTROLS.md) |
 
 ---
 
-## Agent Architecture
-
-| Guide | Description |
-|-------|-------------|
-| **[Agent Identity](agent-identity.md)** | Personality and versioning |
-| **[Agent Branching](agent-branching.md)** | A/B testing personalities |
-| **[Agent Forking](agent-forking.md)** | Creating derived agents |
-| **[Experience Weighting](experience-weighting.md)** | EWC++ for memory importance |
-| **[Memory Regions](memory-regions.md)** | Multi-agent shared memory |
-
----
-
-## Governance & Security
-
-| Guide | Description |
-|-------|-------------|
-| **[API Keys & RBAC](api-keys.md)** | Authentication and authorization |
-| **[Data Classification](data-classification.md)** | Four-tier labeling |
-| **[Memory Views](memory-views.md)** | Filtered access policies |
-| **[Guardrails](guardrails.md)** | Content filtering rules |
-
----
-
-## Integrations
-
-| Guide | Description |
-|-------|-------------|
-| **[LangChain](integrations/langchain.md)** | Python integration |
-| **[LlamaIndex](integrations/llamaindex.md)** | Python integration |
-| **[Vercel AI SDK](integrations/vercel-ai.md)** | TypeScript integration |
-| **[MCP Server](integrations/mcp.md)** | Claude Code integration |
-| **[Webhooks](webhooks.md)** | Event notifications |
-
----
-
-## Common Tasks
+## Quick Examples
 
 ### Store and Retrieve
 
@@ -87,3 +45,12 @@ ctx = client.context("user", "Show images", include_modalities=["image"])
 ```python
 ctx = client.context("user", "Current state only", contract="current_strict")
 ```
+
+---
+
+## Architecture Reference
+
+For understanding how features work internally:
+
+- **[Architecture](../reference/architecture.md)** - System overview and pipelines
+- **[Configuration](../reference/configuration.md)** - All settings

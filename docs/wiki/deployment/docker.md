@@ -6,11 +6,18 @@ Deploy Mnemo using Docker and Docker Compose.
 
 ## Quick Start
 
+> **Security Note**: Always review scripts before running them.
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/anjaustin/mnemo/main/deploy/docker/quickstart.sh | bash
+# Review then run (recommended)
+curl -fsSL https://raw.githubusercontent.com/anjaustin/mnemo/main/deploy/docker/quickstart.sh -o quickstart.sh
+less quickstart.sh
+bash quickstart.sh
 ```
 
 This starts Mnemo with Redis and Qdrant, using local embeddings.
+
+> **Warning**: The quickstart exposes ports on all interfaces. For production, see the security section below.
 
 ---
 
@@ -457,6 +464,20 @@ docker stats
 
 ## Next Steps
 
-- **[Kubernetes](kubernetes.md)** - Production Helm deployment
+- **[Kubernetes](../../DEPLOY.md)** - Production Helm deployment
 - **[Configuration](../reference/configuration.md)** - All settings
-- **[Troubleshooting](../reference/troubleshooting.md)** - Common issues
+- **[Troubleshooting](../../TROUBLESHOOTING.md)** - Common issues
+
+---
+
+## Security Checklist
+
+Before exposing to the internet:
+
+- [ ] Enable authentication (`MNEMO_AUTH_ENABLED=true`)
+- [ ] Use strong API keys (generate with `openssl rand -base64 32`)
+- [ ] Put behind reverse proxy with TLS (nginx, traefik, caddy)
+- [ ] Don't expose Redis (6379) or Qdrant (6333) ports publicly
+- [ ] Use Docker secrets or env file for sensitive values
+- [ ] Enable rate limiting
+- [ ] Set up monitoring and alerting
