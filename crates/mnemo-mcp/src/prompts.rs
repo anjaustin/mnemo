@@ -42,13 +42,13 @@ fn validate_argument(name: &str, value: &str, max_length: usize) -> Result<(), S
     }
 
     // Check for path traversal attempts in identifier-type arguments
-    if name == "user" || name == "agent_id" || name == "entity" {
-        if value.contains("..") || value.contains('/') || value.contains('\\') {
-            return Err(format!(
-                "Argument '{}' contains invalid path characters",
-                name
-            ));
-        }
+    if (name == "user" || name == "agent_id" || name == "entity")
+        && (value.contains("..") || value.contains('/') || value.contains('\\'))
+    {
+        return Err(format!(
+            "Argument '{}' contains invalid path characters",
+            name
+        ));
     }
 
     Ok(())

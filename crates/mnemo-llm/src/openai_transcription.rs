@@ -192,7 +192,7 @@ impl TranscriptionProvider for OpenAITranscriptionProvider {
             .into_iter()
             .map(|s| {
                 // Convert log probability to confidence (0-1 range)
-                let confidence = s.avg_logprob.map(|lp| (lp.exp()).min(1.0).max(0.0));
+                let confidence = s.avg_logprob.map(|lp| (lp.exp()).clamp(0.0, 1.0));
                 TranscriptSegment {
                     id: s.id,
                     start: s.start,

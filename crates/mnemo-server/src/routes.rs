@@ -14411,9 +14411,10 @@ async fn upload_attachment(
     let image_data_for_vision: Option<std::sync::Arc<Vec<u8>>> =
         if attachment_type == AttachmentType::Image {
             // Only keep reference if we might do vision processing
-            if state.vision.is_some() && state.vision_config.is_some() {
+            if let (Some(vision), Some(_config)) =
+                (state.vision.as_ref(), state.vision_config.as_ref())
+            {
                 // Validate size against vision provider limits
-                let vision = state.vision.as_ref().unwrap();
                 let max_vision_size = vision.max_image_size();
                 if size_bytes > max_vision_size {
                     tracing::warn!(
@@ -14436,9 +14437,11 @@ async fn upload_attachment(
     let audio_data_for_transcription: Option<std::sync::Arc<Vec<u8>>> =
         if attachment_type == AttachmentType::Audio {
             // Only keep reference if we might do transcription processing
-            if state.transcription.is_some() && state.transcription_config.is_some() {
+            if let (Some(transcription), Some(_config)) = (
+                state.transcription.as_ref(),
+                state.transcription_config.as_ref(),
+            ) {
                 // Validate size against transcription provider limits
-                let transcription = state.transcription.as_ref().unwrap();
                 let max_audio_size = transcription.max_audio_size();
                 if size_bytes > max_audio_size {
                     tracing::warn!(
@@ -14958,7 +14961,9 @@ fn sanitize_vision_error(error: &MnemoError) -> String {
 
     // Check for common patterns that might contain sensitive info
     // Remove anything that looks like an API key or token
-    let sanitized = if error_str.contains("API") || error_str.contains("key") {
+    
+
+    if error_str.contains("API") || error_str.contains("key") {
         // If the error mentions API/key, provide a generic message
         if error_str.contains("401") || error_str.contains("Unauthorized") {
             "Authentication failed with vision provider".to_string()
@@ -14978,9 +14983,7 @@ fn sanitize_vision_error(error: &MnemoError) -> String {
     } else {
         // For non-API errors, still redact potential secrets
         redact_secrets(&error_str)
-    };
-
-    sanitized
+    }
 }
 
 /// Redact potential secrets (long hex/base64 strings) from error messages.
@@ -15049,7 +15052,9 @@ fn sanitize_transcription_error(error: &MnemoError) -> String {
     let error_str = error.to_string();
 
     // Check for common patterns that might contain sensitive info
-    let sanitized = if error_str.contains("API") || error_str.contains("key") {
+    
+
+    if error_str.contains("API") || error_str.contains("key") {
         if error_str.contains("401") || error_str.contains("Unauthorized") {
             "Authentication failed with transcription provider".to_string()
         } else if error_str.contains("403") || error_str.contains("Forbidden") {
@@ -15066,9 +15071,7 @@ fn sanitize_transcription_error(error: &MnemoError) -> String {
         }
     } else {
         redact_secrets(&error_str)
-    };
-
-    sanitized
+    }
 }
 
 /// Helper function to update attachment with document parsing results.
@@ -15107,7 +15110,9 @@ fn sanitize_document_error(error: &MnemoError) -> String {
     let error_str = error.to_string();
 
     // Document parsing errors are generally safe, but redact file paths
-    let sanitized = if error_str.contains('/') || error_str.contains('\\') {
+    
+
+    if error_str.contains('/') || error_str.contains('\\') {
         // Might contain file paths, provide generic message
         "Document parsing failed".to_string()
     } else if error_str.contains("memory") || error_str.contains("allocation") {
@@ -15118,9 +15123,7 @@ fn sanitize_document_error(error: &MnemoError) -> String {
     } else {
         // For other errors, redact any long token-like strings
         redact_secrets(&error_str)
-    };
-
-    sanitized
+    }
 }
 
 /// List attachments for an episode.

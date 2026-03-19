@@ -3191,8 +3191,8 @@ impl AttachmentStore for RedisStateStore {
         redis::pipe()
             .atomic()
             .set(&key, &json)
-            .zadd(&user_key, &attachment.id.to_string(), score)
-            .zadd(&episode_key, &attachment.id.to_string(), score)
+            .zadd(&user_key, attachment.id.to_string(), score)
+            .zadd(&episode_key, attachment.id.to_string(), score)
             .query_async::<()>(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
@@ -3296,8 +3296,8 @@ impl AttachmentStore for RedisStateStore {
         redis::pipe()
             .atomic()
             .del(&key)
-            .zrem(&user_key, &attachment_id.to_string())
-            .zrem(&episode_key, &attachment_id.to_string())
+            .zrem(&user_key, attachment_id.to_string())
+            .zrem(&episode_key, attachment_id.to_string())
             .query_async::<()>(&mut conn)
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;

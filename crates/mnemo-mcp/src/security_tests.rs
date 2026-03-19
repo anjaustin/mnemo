@@ -43,7 +43,7 @@ mod tests {
         let server = test_server();
         // Attempt path traversal in subscription URI
         let msg = r#"{"jsonrpc":"2.0","id":1,"method":"resources/subscribe","params":{"uri":"mnemo://users/../admin/memory"}}"#;
-        let resp = handle_message(&server, &msg).await.unwrap();
+        let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
         // Should reject path traversal patterns
@@ -58,7 +58,7 @@ mod tests {
         let server = test_server();
         // Attempt null byte injection in subscription URI
         let msg = r#"{"jsonrpc":"2.0","id":1,"method":"resources/subscribe","params":{"uri":"mnemo://users/alice\u0000evil/memory"}}"#;
-        let resp = handle_message(&server, &msg).await.unwrap();
+        let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
         // Should reject URIs with null bytes
@@ -73,7 +73,7 @@ mod tests {
         let server = test_server();
         // Unsubscribe should also validate the URI
         let msg = r#"{"jsonrpc":"2.0","id":1,"method":"resources/unsubscribe","params":{"uri":"https://evil.com/steal"}}"#;
-        let resp = handle_message(&server, &msg).await.unwrap();
+        let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
         // Should reject non-mnemo URIs
@@ -108,7 +108,7 @@ mod tests {
         let server = test_server();
         // Try to inject additional parameters via the query
         let msg = r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"mnemo://users/alice/search?q=test&admin=true&bypass=1"}}"#;
-        let resp = handle_message(&server, &msg).await;
+        let resp = handle_message(&server, msg).await;
 
         // The request will fail at HTTP level (server not running) but should not panic
         // and should properly parse the query parameter
@@ -120,7 +120,7 @@ mod tests {
         let server = test_server();
         // URL-encoded path traversal in query
         let msg = r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"mnemo://users/alice/search?q=%2e%2e%2f%2e%2e%2fetc%2fpasswd"}}"#;
-        let resp = handle_message(&server, &msg).await;
+        let resp = handle_message(&server, msg).await;
 
         // Should handle encoded input safely
         assert!(resp.is_some());

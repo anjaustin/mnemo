@@ -332,7 +332,7 @@ fn is_likely_heading(line: &str) -> bool {
         let capitalized = words
             .iter()
             .filter(|w| w.len() > 1)
-            .filter(|w| w.chars().next().map_or(false, |c| c.is_uppercase()))
+            .filter(|w| w.chars().next().is_some_and(|c| c.is_uppercase()))
             .count();
         if capitalized >= words.len().saturating_sub(1) && words.len() >= 2 {
             return true;
@@ -449,14 +449,11 @@ fn strip_html_tags(html: &str) -> String {
 fn extract_text_title(text: &str, format: DocumentFormat) -> Option<String> {
     let first_line = text.lines().next()?.trim();
 
-    match format {
-        DocumentFormat::Markdown => {
-            // Look for # heading
-            if first_line.starts_with('#') {
-                return Some(first_line.trim_start_matches('#').trim().to_string());
-            }
+    if format == DocumentFormat::Markdown {
+        // Look for # heading
+        if first_line.starts_with('#') {
+            return Some(first_line.trim_start_matches('#').trim().to_string());
         }
-        _ => {}
     }
 
     // Use first non-empty line if short enough

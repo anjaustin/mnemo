@@ -426,19 +426,16 @@ async fn main() -> anyhow::Result<()> {
             );
             (None, None)
         } else {
-            let handle = match config.transcription.provider.as_str() {
-                // Currently only OpenAI Whisper is supported
-                // Future: add Deepgram, AssemblyAI, local Whisper
-                _ => {
-                    tracing::info!(
-                        model = %config.transcription.model,
-                        "Using OpenAI Whisper transcription provider"
-                    );
-                    Some(TranscriptionHandle::OpenAI(Arc::new(
-                        OpenAITranscriptionProvider::new(transcription_cfg),
-                    )))
-                }
-            };
+            // Currently only OpenAI Whisper is supported
+            // Future: add Deepgram, AssemblyAI, local Whisper based on config.transcription.provider
+            let _provider = config.transcription.provider.as_str();
+            tracing::info!(
+                model = %config.transcription.model,
+                "Using OpenAI Whisper transcription provider"
+            );
+            let handle = Some(TranscriptionHandle::OpenAI(Arc::new(
+                OpenAITranscriptionProvider::new(transcription_cfg),
+            )));
             (handle, Some(config.transcription.clone()))
         }
     } else {

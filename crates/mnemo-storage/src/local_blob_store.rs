@@ -316,7 +316,7 @@ impl BlobStore for LocalBlobStore {
                 let path = entry.path();
 
                 // Skip metadata sidecar files
-                if path.extension().map_or(false, |ext| ext == "meta") {
+                if path.extension().is_some_and(|ext| ext == "meta") {
                     continue;
                 }
 
