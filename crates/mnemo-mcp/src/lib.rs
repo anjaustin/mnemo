@@ -34,6 +34,8 @@
 pub mod context;
 pub mod protocol;
 pub mod resources;
+#[cfg(test)]
+mod security_tests;
 #[cfg(feature = "sse")]
 pub mod sse;
 pub mod subscriptions;

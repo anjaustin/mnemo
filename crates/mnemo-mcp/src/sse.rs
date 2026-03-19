@@ -135,12 +135,40 @@ impl SseState {
     }
 }
 
+/// Maximum allowed length for session IDs.
+const MAX_SESSION_ID_LENGTH: usize = 256;
+
 /// Query parameters for the SSE endpoint.
 #[derive(Debug, Deserialize)]
 pub struct SseQuery {
     /// Optional session ID for resuming a session.
     #[serde(default)]
     pub session_id: Option<String>,
+}
+
+/// Validate a session ID for security issues.
+fn validate_session_id(id: &str) -> Result<(), &'static str> {
+    // Check length
+    if id.len() > MAX_SESSION_ID_LENGTH {
+        return Err("Session ID exceeds maximum length");
+    }
+
+    // Check for path traversal
+    if id.contains("..") || id.contains('/') || id.contains('\\') {
+        return Err("Session ID contains invalid characters");
+    }
+
+    // Check for null bytes
+    if id.contains('\0') {
+        return Err("Session ID contains null bytes");
+    }
+
+    // Check for control characters
+    if id.chars().any(|c| c.is_control()) {
+        return Err("Session ID contains control characters");
+    }
+
+    Ok(())
 }
 
 /// Build the SSE transport router.
@@ -198,10 +226,17 @@ async fn handle_post_message(
 async fn handle_sse_stream(
     State(state): State<Arc<SseState>>,
     Query(query): Query<SseQuery>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let session_id = query.session_id.unwrap_or_else(|| {
-        uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string()
-    });
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, (StatusCode, String)> {
+    // Validate session ID if provided
+    let session_id = match query.session_id {
+        Some(ref id) => {
+            if let Err(e) = validate_session_id(id) {
+                return Err((StatusCode::BAD_REQUEST, e.to_string()));
+            }
+            id.clone()
+        }
+        None => uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string(),
+    };
 
     // Register session
     {
@@ -238,7 +273,7 @@ async fn handle_sse_stream(
 
     let combined = initial.chain(stream);
 
-    Sse::new(combined).keep_alive(KeepAlive::default())
+    Ok(Sse::new(combined).keep_alive(KeepAlive::default()))
 }
 
 /// GET /health - Health check endpoint.

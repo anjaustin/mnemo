@@ -255,6 +255,45 @@ async fn handle_resources_read(
     }
 }
 
+/// Maximum allowed length for subscription URIs (2KB).
+const MAX_SUBSCRIPTION_URI_LENGTH: usize = 2048;
+
+/// Validate a subscription URI for security issues.
+fn validate_subscription_uri(uri: &str) -> Result<(), String> {
+    // Check prefix
+    if !uri.starts_with("mnemo://") {
+        return Err(format!(
+            "Invalid subscription URI: must start with 'mnemo://', got '{}'",
+            uri.chars().take(50).collect::<String>()
+        ));
+    }
+
+    // Check length
+    if uri.len() > MAX_SUBSCRIPTION_URI_LENGTH {
+        return Err(format!(
+            "Subscription URI exceeds maximum length of {} characters",
+            MAX_SUBSCRIPTION_URI_LENGTH
+        ));
+    }
+
+    // Check for path traversal
+    if uri.contains("..") {
+        return Err("Subscription URI contains path traversal pattern '..'".to_string());
+    }
+
+    // Check for null bytes
+    if uri.contains('\0') {
+        return Err("Subscription URI contains null bytes".to_string());
+    }
+
+    // Check for backslashes (Windows path separator)
+    if uri.contains('\\') {
+        return Err("Subscription URI contains invalid backslash character".to_string());
+    }
+
+    Ok(())
+}
+
 fn handle_resources_subscribe(
     params: Option<&serde_json::Value>,
     id: &serde_json::Value,
@@ -279,15 +318,9 @@ fn handle_resources_subscribe(
         }
     };
 
-    // Validate the URI format (must be a valid mnemo:// URI)
-    if !sub_params.uri.starts_with("mnemo://") {
-        let err = JsonRpcError::invalid_params(
-            id.clone(),
-            format!(
-                "Invalid subscription URI: {}. Must start with 'mnemo://'",
-                sub_params.uri
-            ),
-        );
+    // Validate the URI
+    if let Err(e) = validate_subscription_uri(&sub_params.uri) {
+        let err = JsonRpcError::invalid_params(id.clone(), e);
         return serde_json::to_string(&err).unwrap_or_default();
     }
 
@@ -325,6 +358,12 @@ fn handle_resources_unsubscribe(
             return serde_json::to_string(&err).unwrap_or_default();
         }
     };
+
+    // Validate the URI (same rules as subscribe)
+    if let Err(e) = validate_subscription_uri(&unsub_params.uri) {
+        let err = JsonRpcError::invalid_params(id.clone(), e);
+        return serde_json::to_string(&err).unwrap_or_default();
+    }
 
     tracing::debug!(uri = %unsub_params.uri, "Resource unsubscription (stdio)");
 
