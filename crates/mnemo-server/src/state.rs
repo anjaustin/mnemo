@@ -3,12 +3,23 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use mnemo_core::models::entity::ExtractedEntity;
+use mnemo_core::traits::blob::{BlobMetadata, BlobResult, BlobStore, PresignOptions};
+use mnemo_core::traits::document::{
+    DocumentConfig, DocumentFormat, DocumentParser, DocumentResult, ParsedDocument,
+};
 use mnemo_core::traits::llm::{ExtractionResult, LlmProvider, LlmResult, TokenUsage};
+use mnemo_core::traits::transcription::{
+    AudioFormat, Transcription, TranscriptionProvider, TranscriptionResult,
+};
+use mnemo_core::traits::vision::{ImageFormat, VisionAnalysis, VisionProvider, VisionResult};
 use mnemo_graph::GraphEngine;
-use mnemo_llm::{AnthropicProvider, EmbedderKind, OpenAiCompatibleProvider};
+use mnemo_llm::{
+    AnthropicProvider, AnthropicVisionProvider, EmbedderKind, OpenAITranscriptionProvider,
+    OpenAIVisionProvider, OpenAiCompatibleProvider, PdfParser, TextDocumentParser,
+};
 use mnemo_lora::LoraAdaptedEmbedder;
 use mnemo_retrieval::RetrievalEngine;
-use mnemo_storage::{QdrantVectorStore, RedisStateStore};
+use mnemo_storage::{LocalBlobStore, QdrantVectorStore, RedisStateStore, S3BlobStore};
 
 use crate::lora_handle::LoraEmbedderHandle;
 use serde::{Deserialize, Serialize};
@@ -243,6 +254,241 @@ impl LlmHandle {
     }
 }
 
+/// Type-erased blob store handle that is `Clone + Send + Sync`.
+///
+/// Wraps concrete blob store implementations so we can store one in `AppState`
+/// without boxing an `async fn in trait`.
+#[derive(Clone)]
+pub enum BlobHandle {
+    Local(Arc<LocalBlobStore>),
+    S3(Arc<S3BlobStore>),
+}
+
+impl BlobHandle {
+    pub async fn put(&self, key: &str, data: Vec<u8>, content_type: &str) -> BlobResult<BlobMetadata> {
+        match self {
+            BlobHandle::Local(store) => store.put(key, data, content_type).await,
+            BlobHandle::S3(store) => store.put(key, data, content_type).await,
+        }
+    }
+
+    pub async fn get(&self, key: &str) -> BlobResult<(Vec<u8>, BlobMetadata)> {
+        match self {
+            BlobHandle::Local(store) => store.get(key).await,
+            BlobHandle::S3(store) => store.get(key).await,
+        }
+    }
+
+    pub async fn delete(&self, key: &str) -> BlobResult<()> {
+        match self {
+            BlobHandle::Local(store) => store.delete(key).await,
+            BlobHandle::S3(store) => store.delete(key).await,
+        }
+    }
+
+    pub async fn exists(&self, key: &str) -> BlobResult<bool> {
+        match self {
+            BlobHandle::Local(store) => store.exists(key).await,
+            BlobHandle::S3(store) => store.exists(key).await,
+        }
+    }
+
+    pub async fn head(&self, key: &str) -> BlobResult<BlobMetadata> {
+        match self {
+            BlobHandle::Local(store) => store.head(key).await,
+            BlobHandle::S3(store) => store.head(key).await,
+        }
+    }
+
+    pub async fn presign_get(&self, key: &str, options: PresignOptions) -> BlobResult<Option<String>> {
+        match self {
+            BlobHandle::Local(store) => store.presign_get(key, options).await,
+            BlobHandle::S3(store) => store.presign_get(key, options).await,
+        }
+    }
+
+    pub async fn presign_put(
+        &self,
+        key: &str,
+        content_type: &str,
+        options: PresignOptions,
+    ) -> BlobResult<Option<String>> {
+        match self {
+            BlobHandle::Local(store) => store.presign_put(key, content_type, options).await,
+            BlobHandle::S3(store) => store.presign_put(key, content_type, options).await,
+        }
+    }
+
+    /// Get the backend name for logging/debugging.
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            BlobHandle::Local(_) => "local",
+            BlobHandle::S3(_) => "s3",
+        }
+    }
+}
+
+/// Type-erased vision provider handle that is `Clone + Send + Sync`.
+///
+/// Wraps concrete vision provider implementations so we can store one in `AppState`
+/// without boxing an `async fn in trait`.
+#[derive(Clone)]
+pub enum VisionHandle {
+    Anthropic(Arc<AnthropicVisionProvider>),
+    OpenAI(Arc<OpenAIVisionProvider>),
+}
+
+impl VisionHandle {
+    pub async fn analyze(
+        &self,
+        image_data: &[u8],
+        format: ImageFormat,
+        prompt: Option<&str>,
+    ) -> VisionResult<VisionAnalysis> {
+        match self {
+            VisionHandle::Anthropic(provider) => {
+                provider.analyze_image(image_data, format, prompt).await
+            }
+            VisionHandle::OpenAI(provider) => {
+                provider.analyze_image(image_data, format, prompt).await
+            }
+        }
+    }
+
+    pub fn provider_name(&self) -> &str {
+        match self {
+            VisionHandle::Anthropic(provider) => provider.provider_name(),
+            VisionHandle::OpenAI(provider) => provider.provider_name(),
+        }
+    }
+
+    pub fn model_name(&self) -> &str {
+        match self {
+            VisionHandle::Anthropic(provider) => provider.model_name(),
+            VisionHandle::OpenAI(provider) => provider.model_name(),
+        }
+    }
+
+    pub fn max_image_size(&self) -> u64 {
+        match self {
+            VisionHandle::Anthropic(provider) => provider.max_image_size(),
+            VisionHandle::OpenAI(provider) => provider.max_image_size(),
+        }
+    }
+
+    pub fn supports_format(&self, format: ImageFormat) -> bool {
+        match self {
+            VisionHandle::Anthropic(provider) => provider.supports_format(format),
+            VisionHandle::OpenAI(provider) => provider.supports_format(format),
+        }
+    }
+}
+
+/// Type-erased transcription provider handle that is `Clone + Send + Sync`.
+///
+/// Wraps concrete transcription provider implementations so we can store one
+/// in `AppState` without boxing an `async fn in trait`.
+#[derive(Clone)]
+pub enum TranscriptionHandle {
+    OpenAI(Arc<OpenAITranscriptionProvider>),
+}
+
+impl TranscriptionHandle {
+    pub async fn transcribe(
+        &self,
+        audio_data: &[u8],
+        format: AudioFormat,
+        filename: Option<&str>,
+    ) -> TranscriptionResult<Transcription> {
+        match self {
+            TranscriptionHandle::OpenAI(provider) => {
+                provider.transcribe(audio_data, format, filename).await
+            }
+        }
+    }
+
+    pub fn provider_name(&self) -> &str {
+        match self {
+            TranscriptionHandle::OpenAI(provider) => provider.provider_name(),
+        }
+    }
+
+    pub fn model_name(&self) -> &str {
+        match self {
+            TranscriptionHandle::OpenAI(provider) => provider.model_name(),
+        }
+    }
+
+    pub fn max_audio_size(&self) -> u64 {
+        match self {
+            TranscriptionHandle::OpenAI(provider) => provider.max_audio_size(),
+        }
+    }
+
+    pub fn supports_format(&self, format: AudioFormat) -> bool {
+        match self {
+            TranscriptionHandle::OpenAI(provider) => provider.supports_format(format),
+        }
+    }
+
+    pub fn supports_diarization(&self) -> bool {
+        match self {
+            TranscriptionHandle::OpenAI(provider) => provider.supports_diarization(),
+        }
+    }
+}
+
+/// Type-erased document parser handle that is `Clone + Send + Sync`.
+///
+/// Wraps concrete document parser implementations so we can store one
+/// in `AppState` without boxing an `async fn in trait`.
+#[derive(Clone)]
+pub struct DocumentHandle {
+    pdf_parser: Arc<PdfParser>,
+    text_parser: Arc<TextDocumentParser>,
+}
+
+impl DocumentHandle {
+    pub fn new() -> Self {
+        Self {
+            pdf_parser: Arc::new(PdfParser::new()),
+            text_parser: Arc::new(TextDocumentParser::new()),
+        }
+    }
+
+    pub async fn parse(
+        &self,
+        data: &[u8],
+        format: DocumentFormat,
+        config: &DocumentConfig,
+    ) -> DocumentResult<ParsedDocument> {
+        match format {
+            DocumentFormat::Pdf => self.pdf_parser.parse(data, format, config).await,
+            DocumentFormat::Txt | DocumentFormat::Markdown | DocumentFormat::Html => {
+                self.text_parser.parse(data, format, config).await
+            }
+            _ => Err(mnemo_core::error::MnemoError::UnsupportedMediaType(format!(
+                "Document format {:?} not yet supported",
+                format
+            ))),
+        }
+    }
+
+    pub fn supports_format(&self, format: DocumentFormat) -> bool {
+        self.pdf_parser.supports_format(format) || self.text_parser.supports_format(format)
+    }
+
+    pub fn max_document_size(&self) -> u64 {
+        50 * 1024 * 1024 // 50 MB
+    }
+}
+
+impl Default for DocumentHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Re-export LlmSpan from mnemo-core so both the server routes and
 /// the ingest worker share the same concrete type.
 pub use mnemo_core::models::span::LlmSpan;
@@ -265,6 +511,26 @@ pub struct AppState {
     /// LLM provider for on-demand extraction (e.g. `POST /api/v1/memory/extract`).
     /// `None` when no LLM is configured (no-op mode).
     pub llm: Option<LlmHandle>,
+    /// Blob storage for multi-modal attachments (images, audio, documents).
+    /// `None` when blob storage is not configured.
+    pub blob_store: Option<BlobHandle>,
+    /// Blob storage configuration (size limits, allowed types).
+    pub blob_config: Option<crate::config::BlobSection>,
+    /// Vision provider for image analysis (description, OCR, entity extraction).
+    /// `None` when vision processing is not configured.
+    pub vision: Option<VisionHandle>,
+    /// Vision configuration (sync vs async processing, etc.).
+    pub vision_config: Option<crate::config::VisionSection>,
+    /// Transcription provider for audio-to-text (Whisper, etc.).
+    /// `None` when transcription is not configured.
+    pub transcription: Option<TranscriptionHandle>,
+    /// Transcription configuration (sync vs async processing, etc.).
+    pub transcription_config: Option<crate::config::TranscriptionSection>,
+    /// Document parser for PDF, text, and other document formats.
+    /// `None` when document parsing is not configured.
+    pub document: Option<DocumentHandle>,
+    /// Document parsing configuration (chunk strategy, size limits, etc.).
+    pub document_config: Option<crate::config::DocumentSection>,
     pub metadata_prefilter: MetadataPrefilterConfig,
     pub reranker: RerankerMode,
     pub import_jobs: Arc<RwLock<HashMap<Uuid, ImportJobRecord>>>,

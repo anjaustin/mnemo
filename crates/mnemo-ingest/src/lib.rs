@@ -1057,6 +1057,7 @@ mod tests {
             agent_id: None,
             metadata: serde_json::json!({}),
             created_at: None,
+            modality: Default::default(),
         };
         let mut ep = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7(), None);
 

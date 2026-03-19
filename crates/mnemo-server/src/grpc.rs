@@ -954,6 +954,7 @@ impl MemoryService for GrpcState {
             structured: req.structured.unwrap_or(false),
             explain: req.explain.unwrap_or(false),
             tiered_budget: req.tiered_budget.unwrap_or(false),
+            include_modalities: vec![],
         };
 
         let reranker = reranker_for_state(&self.reranker);
@@ -1096,6 +1097,7 @@ impl MemoryService for GrpcState {
             agent_id: None,
             metadata: serde_json::json!({}),
             created_at: None,
+            modality: Default::default(),
         };
 
         let episode = self
@@ -1260,6 +1262,7 @@ impl MemoryService for GrpcState {
             structured: false,
             explain: false,
             tiered_budget: false,
+            include_modalities: vec![],
         };
 
         let reranker = reranker_for_state(&self.reranker);
@@ -1389,6 +1392,7 @@ impl MemoryService for GrpcState {
             agent_id: None,
             metadata: serde_json::Value::Null,
             created_at: None,
+            modality: Default::default(),
         };
 
         let episode = self
@@ -2528,6 +2532,7 @@ impl AgentService for GrpcState {
             structured: false,
             explain: false,
             tiered_budget: false,
+            include_modalities: vec![],
         };
 
         let reranker = reranker_for_state(&self.reranker);

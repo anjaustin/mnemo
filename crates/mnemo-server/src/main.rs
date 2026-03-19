@@ -44,14 +44,16 @@ use mnemo_server::lora_handle::LoraEmbedderHandle;
 use mnemo_server::middleware::{request_context_middleware, AuthConfig, AuthLayer};
 use mnemo_server::routes::{build_router, restore_webhook_state};
 use mnemo_server::state::{
-    AppState, LlmHandle, MetadataPrefilterConfig, RerankerMode, ServerMetrics,
-    WebhookDeliveryConfig,
+    AppState, BlobHandle, DocumentHandle, LlmHandle, MetadataPrefilterConfig, RerankerMode,
+    ServerMetrics, TranscriptionHandle, VisionHandle, WebhookDeliveryConfig,
 };
+use mnemo_storage::{LocalBlobStore, S3BlobStore, S3BlobStoreConfig};
 
 use mnemo_graph::GraphEngine;
 use mnemo_ingest::{IngestConfig, IngestWorker};
 use mnemo_llm::{
-    AnthropicProvider, EmbedderKind, OpenAiCompatibleEmbedder, OpenAiCompatibleProvider,
+    AnthropicProvider, AnthropicVisionProvider, EmbedderKind, OpenAiCompatibleEmbedder,
+    OpenAiCompatibleProvider, OpenAITranscriptionProvider, OpenAIVisionProvider,
 };
 #[cfg(feature = "local-embed")]
 use mnemo_llm::{FastEmbedder, DEFAULT_LOCAL_DIMENSIONS, DEFAULT_LOCAL_MODEL};
@@ -340,6 +342,123 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Blob storage for multi-modal attachments
+    let (blob_store, blob_config) = if config.blob.enabled {
+        let handle = match config.blob.backend.as_str() {
+            "s3" => {
+                let s3_config = S3BlobStoreConfig {
+                    bucket: config.blob.s3_bucket.clone(),
+                    region: config.blob.s3_region.clone(),
+                    endpoint: config.blob.s3_endpoint.clone(),
+                    access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
+                    secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
+                    path_style: config.blob.s3_path_style,
+                };
+                match S3BlobStore::new(s3_config).await {
+                    Ok(store) => {
+                        tracing::info!(bucket = %config.blob.s3_bucket, "S3 blob storage enabled");
+                        Some(BlobHandle::S3(Arc::new(store)))
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "Failed to initialize S3 blob storage");
+                        None
+                    }
+                }
+            }
+            _ => {
+                // Default to local storage
+                let store = LocalBlobStore::new(&config.blob.local_path);
+                tracing::info!(path = %config.blob.local_path, "Local blob storage enabled");
+                Some(BlobHandle::Local(Arc::new(store)))
+            }
+        };
+        (handle, Some(config.blob.clone()))
+    } else {
+        tracing::info!("Blob storage disabled");
+        (None, None)
+    };
+
+    // Vision provider for multi-modal image analysis
+    let (vision_provider, vision_config) = if config.vision.enabled {
+        let vision_cfg = config.vision_config();
+        if vision_cfg.api_key.is_none() {
+            tracing::warn!(
+                provider = %config.vision.provider,
+                "Vision enabled but no API key found; disabling vision processing"
+            );
+            (None, None)
+        } else {
+            let handle = match config.vision.provider.as_str() {
+                "openai" => {
+                    tracing::info!(
+                        model = %config.vision.model,
+                        "Using OpenAI vision provider"
+                    );
+                    Some(VisionHandle::OpenAI(Arc::new(OpenAIVisionProvider::new(
+                        vision_cfg,
+                    ))))
+                }
+                _ => {
+                    // Default to Anthropic
+                    tracing::info!(
+                        model = %config.vision.model,
+                        "Using Anthropic vision provider"
+                    );
+                    Some(VisionHandle::Anthropic(Arc::new(
+                        AnthropicVisionProvider::new(vision_cfg),
+                    )))
+                }
+            };
+            (handle, Some(config.vision.clone()))
+        }
+    } else {
+        tracing::info!("Vision processing disabled");
+        (None, None)
+    };
+
+    // Transcription provider for audio-to-text
+    let (transcription_provider, transcription_config) = if config.transcription.enabled {
+        let transcription_cfg = config.transcription_config();
+        if transcription_cfg.api_key.is_none() {
+            tracing::warn!(
+                provider = %config.transcription.provider,
+                "Transcription enabled but no API key found; disabling transcription"
+            );
+            (None, None)
+        } else {
+            let handle = match config.transcription.provider.as_str() {
+                // Currently only OpenAI Whisper is supported
+                // Future: add Deepgram, AssemblyAI, local Whisper
+                _ => {
+                    tracing::info!(
+                        model = %config.transcription.model,
+                        "Using OpenAI Whisper transcription provider"
+                    );
+                    Some(TranscriptionHandle::OpenAI(Arc::new(
+                        OpenAITranscriptionProvider::new(transcription_cfg),
+                    )))
+                }
+            };
+            (handle, Some(config.transcription.clone()))
+        }
+    } else {
+        tracing::info!("Transcription processing disabled");
+        (None, None)
+    };
+
+    // Document parser for PDF, text, and other document formats
+    let (document_parser, document_config) = if config.document.enabled {
+        tracing::info!(
+            chunk_strategy = %config.document.chunk_strategy,
+            max_size = config.document.max_size_bytes,
+            "Document parsing enabled"
+        );
+        (Some(DocumentHandle::new()), Some(config.document.clone()))
+    } else {
+        tracing::info!("Document parsing disabled");
+        (None, None)
+    };
+
     let app_state = AppState {
         state_store,
         vector_store,
@@ -347,6 +466,14 @@ async fn main() -> anyhow::Result<()> {
         lora_embedder: lora_embedder_opt,
         graph,
         llm: llm_for_state,
+        blob_store,
+        blob_config,
+        vision: vision_provider,
+        vision_config,
+        transcription: transcription_provider,
+        transcription_config,
+        document: document_parser,
+        document_config,
         metadata_prefilter: MetadataPrefilterConfig {
             enabled: config.retrieval.metadata_prefilter_enabled,
             scan_limit: config.retrieval.metadata_scan_limit,

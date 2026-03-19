@@ -285,6 +285,7 @@ export class MnemoClient {
         as_of: options.asOf,
         contract: options.contract,
         retrieval_policy: options.policy,
+        include_modalities: options.includeModalities,
       },
       requestId: options.requestId,
     });
@@ -1161,6 +1162,45 @@ export class MnemoClient {
       requestId: options.requestId,
     });
     return { ...body, request_id: rid };
+  }
+
+  // ─── Multi-modal attachments ─────────────────────────────────────
+
+  /**
+   * Get attachment metadata and download URL.
+   *
+   * @param attachmentId - The attachment ID.
+   * @returns Attachment metadata with pre-signed download URL (expires in 15 min).
+   */
+  async getAttachment(
+    attachmentId: string,
+    requestId?: string,
+  ): Promise<import('./types.js').AttachmentResult> {
+    const [body, rid] = await this.request<import('./types.js').AttachmentResult>({
+      method: 'GET',
+      path: `/api/v1/attachments/${encodeURIComponent(attachmentId)}`,
+      requestId,
+    });
+    return { ...body, request_id: rid };
+  }
+
+  /**
+   * List attachments for an episode.
+   *
+   * @param episodeId - The episode ID.
+   * @param limit - Maximum number of results.
+   */
+  async listAttachments(
+    episodeId: string,
+    limit: number = 20,
+    requestId?: string,
+  ): Promise<import('./types.js').Attachment[]> {
+    const [body] = await this.request<{ data: import('./types.js').Attachment[] }>({
+      method: 'GET',
+      path: `/api/v1/episodes/${encodeURIComponent(episodeId)}/attachments?limit=${limit}`,
+      requestId,
+    });
+    return body.data;
   }
 }
 

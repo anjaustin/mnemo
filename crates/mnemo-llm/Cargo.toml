@@ -18,7 +18,9 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
+base64 = "0.22"
+pdf-extract = "0.7"
 fastembed = { version = "5", default-features = false, features = ["online", "hf-hub-rustls-tls", "ort-load-dynamic"], optional = true }
 
 [dev-dependencies]

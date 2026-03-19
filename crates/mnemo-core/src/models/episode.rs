@@ -4,10 +4,15 @@
 //! memory system. Episodes progress through processing states (`Pending`,
 //! `Processing`, `Done`, `Failed`) and are the source material from which
 //! entities and edges are extracted.
+//!
+//! Episodes support multi-modal content via the `modality` field and linked
+//! attachments (images, audio, video, documents).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use super::attachment::Modality;
 
 /// The type of an episode, determining how it's processed during graph construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -96,6 +101,24 @@ pub struct Episode {
     /// Number of times this episode has been retried after processing failure.
     #[serde(default)]
     pub retry_count: u32,
+
+    /// Primary modality of this episode's content.
+    /// Defaults to `Text` for backward compatibility.
+    #[serde(default)]
+    pub modality: Modality,
+
+    /// IDs of attachments linked to this episode (images, audio, documents).
+    #[serde(default)]
+    pub attachment_ids: Vec<Uuid>,
+
+    /// For document chunks: the parent document's attachment ID.
+    /// Used to link chunks back to the original document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_document_id: Option<Uuid>,
+
+    /// For document chunks: location within the document (e.g., "Page 3", "Section 2.1").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_location: Option<String>,
 }
 
 /// Tracks the async processing state of an episode through the ingestion pipeline.
@@ -141,6 +164,10 @@ pub struct CreateEpisodeRequest {
     /// When this event occurred. If omitted, defaults to now.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<DateTime<Utc>>,
+
+    /// Primary modality of this episode.
+    #[serde(default)]
+    pub modality: Modality,
 }
 
 /// Batch ingestion request for backfilling conversation history.
@@ -192,6 +219,83 @@ impl Episode {
             entity_ids: Vec::new(),
             edge_ids: Vec::new(),
             retry_count: 0,
+            modality: req.modality,
+            attachment_ids: Vec::new(),
+            parent_document_id: None,
+            document_location: None,
+        }
+    }
+
+    /// Create an episode for multi-modal content (image, audio, document).
+    pub fn from_multimodal(
+        session_id: Uuid,
+        user_id: Uuid,
+        modality: Modality,
+        content: String,
+        attachment_id: Uuid,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::now_v7(),
+            session_id,
+            user_id,
+            agent_id: None,
+            episode_type: EpisodeType::Text,
+            content,
+            role: None,
+            name: None,
+            metadata: serde_json::Value::Null,
+            created_at: now,
+            ingested_at: now,
+            processing_status: ProcessingStatus::Pending,
+            processing_error: None,
+            entity_ids: Vec::new(),
+            edge_ids: Vec::new(),
+            retry_count: 0,
+            modality,
+            attachment_ids: vec![attachment_id],
+            parent_document_id: None,
+            document_location: None,
+        }
+    }
+
+    /// Create an episode for a document chunk.
+    pub fn from_document_chunk(
+        session_id: Uuid,
+        user_id: Uuid,
+        content: String,
+        parent_document_id: Uuid,
+        document_location: String,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::now_v7(),
+            session_id,
+            user_id,
+            agent_id: None,
+            episode_type: EpisodeType::Text,
+            content,
+            role: None,
+            name: None,
+            metadata: serde_json::Value::Null,
+            created_at: now,
+            ingested_at: now,
+            processing_status: ProcessingStatus::Pending,
+            processing_error: None,
+            entity_ids: Vec::new(),
+            edge_ids: Vec::new(),
+            retry_count: 0,
+            modality: Modality::Document,
+            attachment_ids: vec![parent_document_id],
+            parent_document_id: Some(parent_document_id),
+            document_location: Some(document_location),
+        }
+    }
+
+    /// Add an attachment to this episode.
+    pub fn add_attachment(&mut self, attachment_id: Uuid) {
+        if !self.attachment_ids.contains(&attachment_id) {
+            self.attachment_ids.push(attachment_id);
         }
     }
 
@@ -261,6 +365,7 @@ mod tests {
             agent_id: None,
             metadata: serde_json::json!({}),
             created_at: None,
+            modality: Default::default(),
         }
     }
 
@@ -347,6 +452,7 @@ mod tests {
             agent_id: None,
             metadata: serde_json::json!({"source": "crm"}),
             created_at: None,
+            modality: Default::default(),
         };
         let episode = Episode::from_request(req, Uuid::now_v7(), Uuid::now_v7(), None);
         assert_eq!(episode.episode_type, EpisodeType::Json);

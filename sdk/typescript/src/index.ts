@@ -109,4 +109,11 @@ export type {
   AgentContextOptions,
   AgentListOptions,
   RollbackOptions,
+  // Multi-modal attachments
+  AttachmentType,
+  Modality,
+  Attachment,
+  AttachmentResult,
+  AttachmentSource,
+  UploadAttachmentOptions,
 } from './types.js';

@@ -59,6 +59,9 @@ pub enum MnemoError {
     #[error("LLM rate limited: retry after {retry_after_ms}ms")]
     RateLimited { retry_after_ms: u64 },
 
+    #[error("Document parsing error: {0}")]
+    DocumentParsing(String),
+
     // ─── Processing errors ─────────────────────────────────────
     #[error("Episode already claimed for processing: {0}")]
     AlreadyClaimed(Uuid),
@@ -73,8 +76,27 @@ pub enum MnemoError {
     #[error("Insufficient permissions")]
     Forbidden,
 
+    #[error("Access denied: {0}")]
+    AccessDenied(String),
+
     #[error("Invalid API key")]
     InvalidApiKey,
+
+    // ─── Request errors ─────────────────────────────────────────
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Unsupported media type: {0}")]
+    UnsupportedMediaType(String),
+
+    #[error("Payload too large: {0}")]
+    PayloadTooLarge(String),
+
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 
     // ─── Infrastructure errors ─────────────────────────────────
     #[error("Configuration error: {0}")]
@@ -95,14 +117,19 @@ impl MnemoError {
             | Self::EdgeNotFound(_)
             | Self::NotFound { .. } => 404,
 
-            Self::Validation(_) => 400,
+            Self::Validation(_) | Self::BadRequest(_) => 400,
             Self::Duplicate(_) => 409,
 
             Self::Unauthorized | Self::InvalidApiKey => 401,
-            Self::Forbidden => 403,
+            Self::Forbidden | Self::AccessDenied(_) => 403,
 
             Self::RateLimited { .. } => 429,
             Self::AlreadyClaimed(_) => 409,
+
+            Self::UnsupportedMediaType(_) => 415,
+            Self::PayloadTooLarge(_) => 413,
+            Self::ServiceUnavailable(_) => 503,
+            Self::NotImplemented(_) => 501,
 
             Self::LlmProvider { .. }
             | Self::EmbeddingProvider { .. }
@@ -125,9 +152,14 @@ impl MnemoError {
             Self::Duplicate(_) => "duplicate",
             Self::Unauthorized => "unauthorized",
             Self::InvalidApiKey => "invalid_api_key",
-            Self::Forbidden => "forbidden",
+            Self::Forbidden | Self::AccessDenied(_) => "forbidden",
             Self::RateLimited { .. } => "rate_limited",
             Self::AlreadyClaimed(_) => "already_claimed",
+            Self::BadRequest(_) => "bad_request",
+            Self::UnsupportedMediaType(_) => "unsupported_media_type",
+            Self::PayloadTooLarge(_) => "payload_too_large",
+            Self::ServiceUnavailable(_) => "service_unavailable",
+            Self::NotImplemented(_) => "not_implemented",
             _ => "internal_error",
         }
     }
@@ -180,6 +212,7 @@ fn sanitize_error_message(err: &MnemoError) -> String {
         MnemoError::Validation(msg) => format!("Validation error: {}", msg),
         MnemoError::Duplicate(msg) => format!("Duplicate resource: {}", msg),
         MnemoError::Forbidden => "Insufficient permissions".to_string(),
+        MnemoError::AccessDenied(msg) => format!("Access denied: {}", msg),
         MnemoError::Unauthorized => "Unauthorized".to_string(),
         MnemoError::InvalidApiKey => "Invalid API key".to_string(),
         MnemoError::RateLimited { retry_after_ms } => {
@@ -187,6 +220,11 @@ fn sanitize_error_message(err: &MnemoError) -> String {
         }
         MnemoError::AlreadyClaimed(_) => "Resource is being processed".to_string(),
         MnemoError::ProcessingTimeout(_) => "Processing timed out".to_string(),
+        MnemoError::BadRequest(msg) => format!("Bad request: {}", msg),
+        MnemoError::UnsupportedMediaType(msg) => format!("Unsupported media type: {}", msg),
+        MnemoError::PayloadTooLarge(msg) => format!("Payload too large: {}", msg),
+        MnemoError::ServiceUnavailable(msg) => format!("Service unavailable: {}", msg),
+        MnemoError::NotImplemented(msg) => format!("Not implemented: {}", msg),
 
         // Internal errors: sanitize to avoid leaking implementation details
         MnemoError::Redis(_) => "Storage service temporarily unavailable".to_string(),
@@ -197,6 +235,7 @@ fn sanitize_error_message(err: &MnemoError) -> String {
         MnemoError::LlmProvider { .. } => "Language model service error".to_string(),
         MnemoError::EmbeddingProvider { .. } => "Embedding service error".to_string(),
         MnemoError::ExtractionFailed(_) => "Content extraction failed".to_string(),
+        MnemoError::DocumentParsing(_) => "Document parsing failed".to_string(),
         MnemoError::Internal(_) => "Internal server error".to_string(),
     }
 }

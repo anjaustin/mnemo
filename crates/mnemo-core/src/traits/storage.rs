@@ -9,6 +9,7 @@ use crate::models::{
         UpdateAgentIdentityRequest,
     },
     api_key::ApiKey,
+    attachment::{Attachment, AttachmentType, ListAttachmentsParams},
     digest::MemoryDigest,
     edge::{BeliefChange, BeliefChangesQuery, Edge, EdgeFilter},
     entity::Entity,
@@ -729,6 +730,48 @@ pub trait LoraStore: Send + Sync {
     async fn list_lora_weights_for_agent(&self, agent_id: &str) -> StorageResult<Vec<LoraWeights>>;
 }
 
+// ─── Attachment Storage ────────────────────────────────────────────
+
+/// Persistence for multi-modal attachments (images, audio, documents).
+/// Metadata is stored in Redis; actual binary content is in the blob store.
+#[allow(async_fn_in_trait)]
+pub trait AttachmentStore: Send + Sync {
+    /// Save attachment metadata.
+    async fn save_attachment(&self, attachment: &Attachment) -> StorageResult<()>;
+
+    /// Get attachment by ID.
+    async fn get_attachment(&self, attachment_id: Uuid) -> StorageResult<Option<Attachment>>;
+
+    /// List attachments for a user with optional filtering.
+    async fn list_attachments(
+        &self,
+        user_id: Uuid,
+        params: &ListAttachmentsParams,
+    ) -> StorageResult<Vec<Attachment>>;
+
+    /// List attachments for an episode.
+    async fn list_attachments_for_episode(
+        &self,
+        episode_id: Uuid,
+    ) -> StorageResult<Vec<Attachment>>;
+
+    /// Delete attachment metadata.
+    async fn delete_attachment(&self, attachment_id: Uuid) -> StorageResult<()>;
+
+    /// Delete all attachments for a user.
+    async fn delete_all_attachments_for_user(&self, user_id: Uuid) -> StorageResult<()>;
+
+    /// Update attachment after processing (set description, transcript, etc.).
+    async fn update_attachment(&self, attachment: &Attachment) -> StorageResult<()>;
+
+    /// Count attachments by type for a user (for quota tracking).
+    async fn count_attachments_by_type(
+        &self,
+        user_id: Uuid,
+        attachment_type: Option<AttachmentType>,
+    ) -> StorageResult<u64>;
+}
+
 // ─── Composite Traits ──────────────────────────────────────────────
 
 /// Combines all state-based storage (Redis side).
@@ -750,6 +793,7 @@ pub trait StateStore:
     + GuardrailStore
     + RegionStore
     + LoraStore
+    + AttachmentStore
 {
 }
 
@@ -771,6 +815,7 @@ impl<T> StateStore for T where
         + GuardrailStore
         + RegionStore
         + LoraStore
+        + AttachmentStore
 {
 }
 

@@ -3173,3 +3173,222 @@ impl LoraStore for RedisStateStore {
         Ok(results)
     }
 }
+
+// ─── AttachmentStore Implementation ────────────────────────────────
+
+use mnemo_core::models::attachment::{Attachment, AttachmentType, ListAttachmentsParams};
+
+impl AttachmentStore for RedisStateStore {
+    async fn save_attachment(&self, attachment: &Attachment) -> StorageResult<()> {
+        let mut conn = self.conn.clone();
+        let key = self.key(&["attachment", &attachment.id.to_string()]);
+        let user_key = self.key(&["attachments_user", &attachment.user_id.to_string()]);
+        let episode_key = self.key(&["attachments_episode", &attachment.episode_id.to_string()]);
+
+        let json = serde_json::to_string(attachment)?;
+        let score = attachment.created_at.timestamp_millis() as f64;
+
+        redis::pipe()
+            .atomic()
+            .set(&key, &json)
+            .zadd(&user_key, &attachment.id.to_string(), score)
+            .zadd(&episode_key, &attachment.id.to_string(), score)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_attachment(&self, attachment_id: Uuid) -> StorageResult<Option<Attachment>> {
+        let key = self.key(&["attachment", &attachment_id.to_string()]);
+        self.get_json::<Attachment>(&key).await
+    }
+
+    async fn list_attachments(
+        &self,
+        user_id: Uuid,
+        params: &ListAttachmentsParams,
+    ) -> StorageResult<Vec<Attachment>> {
+        let mut conn = self.conn.clone();
+        let user_key = self.key(&["attachments_user", &user_id.to_string()]);
+
+        // Get attachment IDs with pagination
+        let start_score = if let Some(after) = params.after {
+            // Get the score of the 'after' attachment
+            let after_key = self.key(&["attachment", &after.to_string()]);
+            if let Some(attachment) = self.get_json::<Attachment>(&after_key).await? {
+                attachment.created_at.timestamp_millis() as f64 + 0.001
+            } else {
+                f64::NEG_INFINITY
+            }
+        } else {
+            f64::NEG_INFINITY
+        };
+
+        let ids: Vec<String> = conn
+            .zrangebyscore_limit(&user_key, start_score, f64::INFINITY, 0, params.limit as isize)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut attachments = Vec::with_capacity(ids.len());
+        for id_str in ids {
+            let key = self.key(&["attachment", &id_str]);
+            if let Some(attachment) = self.get_json::<Attachment>(&key).await? {
+                // Apply type filter if specified
+                if let Some(ref filter_type) = params.attachment_type {
+                    if attachment.attachment_type != *filter_type {
+                        continue;
+                    }
+                }
+                attachments.push(attachment);
+            }
+        }
+
+        Ok(attachments)
+    }
+
+    async fn list_attachments_for_episode(
+        &self,
+        episode_id: Uuid,
+    ) -> StorageResult<Vec<Attachment>> {
+        let mut conn = self.conn.clone();
+        let episode_key = self.key(&["attachments_episode", &episode_id.to_string()]);
+
+        let ids: Vec<String> = conn
+            .zrange(&episode_key, 0, -1)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        let mut attachments = Vec::with_capacity(ids.len());
+        for id_str in ids {
+            let key = self.key(&["attachment", &id_str]);
+            if let Some(attachment) = self.get_json::<Attachment>(&key).await? {
+                attachments.push(attachment);
+            }
+        }
+
+        Ok(attachments)
+    }
+
+    async fn delete_attachment(&self, attachment_id: Uuid) -> StorageResult<()> {
+        let key = self.key(&["attachment", &attachment_id.to_string()]);
+
+        // First get the attachment to find user_id and episode_id for index cleanup
+        let attachment = self.get_json::<Attachment>(&key).await?;
+        let Some(attachment) = attachment else {
+            return Err(MnemoError::NotFound {
+                resource_type: "Attachment".to_string(),
+                id: attachment_id.to_string(),
+            });
+        };
+
+        let mut conn = self.conn.clone();
+        let user_key = self.key(&["attachments_user", &attachment.user_id.to_string()]);
+        let episode_key = self.key(&["attachments_episode", &attachment.episode_id.to_string()]);
+
+        redis::pipe()
+            .atomic()
+            .del(&key)
+            .zrem(&user_key, &attachment_id.to_string())
+            .zrem(&episode_key, &attachment_id.to_string())
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn delete_all_attachments_for_user(&self, user_id: Uuid) -> StorageResult<()> {
+        let mut conn = self.conn.clone();
+        let user_key = self.key(&["attachments_user", &user_id.to_string()]);
+
+        // Get all attachment IDs for this user
+        let ids: Vec<String> = conn
+            .zrange(&user_key, 0, -1)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        // Delete each attachment and its episode index entry
+        for id_str in &ids {
+            let key = self.key(&["attachment", id_str]);
+            if let Some(attachment) = self.get_json::<Attachment>(&key).await? {
+                let episode_key =
+                    self.key(&["attachments_episode", &attachment.episode_id.to_string()]);
+                let _: () = conn
+                    .zrem(&episode_key, id_str)
+                    .await
+                    .map_err(|e| MnemoError::Redis(e.to_string()))?;
+            }
+            let _: () = conn
+                .del(&key)
+                .await
+                .map_err(|e| MnemoError::Redis(e.to_string()))?;
+        }
+
+        // Delete the user index
+        let _: () = conn
+            .del(&user_key)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn update_attachment(&self, attachment: &Attachment) -> StorageResult<()> {
+        let key = self.key(&["attachment", &attachment.id.to_string()]);
+
+        // Verify attachment exists
+        if self.get_json::<Attachment>(&key).await?.is_none() {
+            return Err(MnemoError::NotFound {
+                resource_type: "Attachment".to_string(),
+                id: attachment.id.to_string(),
+            });
+        }
+
+        let json = serde_json::to_string(attachment)?;
+        let mut conn = self.conn.clone();
+        conn.set::<_, _, ()>(&key, &json)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn count_attachments_by_type(
+        &self,
+        user_id: Uuid,
+        attachment_type: Option<AttachmentType>,
+    ) -> StorageResult<u64> {
+        let mut conn = self.conn.clone();
+        let user_key = self.key(&["attachments_user", &user_id.to_string()]);
+
+        // Get all attachment IDs
+        let ids: Vec<String> = conn
+            .zrange(&user_key, 0, -1)
+            .await
+            .map_err(|e| MnemoError::Redis(e.to_string()))?;
+
+        if attachment_type.is_none() {
+            return Ok(ids.len() as u64);
+        }
+
+        let filter_type = attachment_type.unwrap();
+        let mut count = 0u64;
+
+        for id_str in ids {
+            let key = self.key(&["attachment", &id_str]);
+            if let Some(attachment) = self.get_json::<Attachment>(&key).await? {
+                if attachment.attachment_type == filter_type {
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+}

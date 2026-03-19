@@ -175,9 +175,15 @@ class Mnemo:
         as_of: str | None = None,
         temporal_weight: float | None = None,
         filters: dict[str, Any] | None = None,
+        include_modalities: list[str] | None = None,
         request_id: str | None = None,
     ) -> ContextResult:
-        """Retrieve memory context for a user (high-level)."""
+        """Retrieve memory context for a user (high-level).
+
+        Args:
+            include_modalities: Filter by content modality. Supported values:
+                "text", "image", "audio", "document". Empty or None includes all.
+        """
         payload: dict[str, Any] = {"query": query}
         opt(payload, "session", session)
         opt(payload, "max_tokens", max_tokens)
@@ -189,6 +195,7 @@ class Mnemo:
         opt(payload, "as_of", as_of)
         opt(payload, "temporal_weight", temporal_weight)
         opt(payload, "filters", filters)
+        opt(payload, "include_modalities", include_modalities)
         body, rid = self._req(
             "POST", f"/api/v1/memory/{user}/context", payload, request_id=request_id
         )
@@ -1325,6 +1332,88 @@ class Mnemo:
             "DELETE", f"/api/v1/edges/{edge_id}", request_id=request_id
         )
         return DeleteResult(deleted=True, request_id=rid)
+
+    # ── Multi-modal uploads ─────────────────────────────────────────
+
+    def upload_attachment(
+        self,
+        episode_id: str,
+        file_path: str,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload an attachment (image, audio, document) to an episode.
+
+        Args:
+            episode_id: The episode to attach to.
+            file_path: Path to the file to upload.
+
+        Returns:
+            Attachment metadata including id, type, and processing status.
+        """
+        from pathlib import Path
+        import mimetypes
+
+        path = Path(file_path)
+        mime_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+
+        with open(path, "rb") as f:
+            files = {"file": (path.name, f, mime_type)}
+            # Use transport's underlying session for multipart
+            url = f"{self._transport.base_url}/api/v1/episodes/{episode_id}/attachments"
+            headers = {}
+            if self._transport.api_key:
+                headers["Authorization"] = f"Bearer {self._transport.api_key}"
+            if request_id:
+                headers["x-request-id"] = request_id
+
+            import httpx
+
+            response = httpx.post(url, files=files, headers=headers, timeout=60.0)
+            response.raise_for_status()
+            return response.json()
+
+    def get_attachment(
+        self,
+        attachment_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Get attachment metadata and download URL.
+
+        Args:
+            attachment_id: The attachment ID.
+
+        Returns:
+            Attachment metadata including download_url (pre-signed, expires in 15 min).
+        """
+        body, rid = self._req(
+            "GET", f"/api/v1/attachments/{attachment_id}", request_id=request_id
+        )
+        return body
+
+    def list_attachments(
+        self,
+        episode_id: str,
+        *,
+        limit: int = 20,
+        request_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List attachments for an episode.
+
+        Args:
+            episode_id: The episode ID.
+            limit: Maximum number of results.
+
+        Returns:
+            List of attachment metadata objects.
+        """
+        body, rid = self._req(
+            "GET",
+            f"/api/v1/episodes/{episode_id}/attachments?limit={limit}",
+            request_id=request_id,
+        )
+        return body.get("data", [])
 
     # ── Pagination helpers ──────────────────────────────────────────
 

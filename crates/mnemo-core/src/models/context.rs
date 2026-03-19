@@ -9,10 +9,15 @@
 //! - [`StructuredContext`] — structured breakdown of facts, changes, relationships
 //! - [`RetrievalExplanation`] / [`ExplanationCollector`] — why each fact was included
 //! - Tiered token budgeting in [`ContextBlock::assemble_tiered`]
+//!
+//! Multi-modal additions:
+//! - `include_modalities` — filter retrieval by content modality (text, image, audio, document)
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use super::attachment::Modality;
 
 /// A context block is the primary output of Mnemo — a pre-assembled,
 /// token-efficient representation of relevant knowledge for an AI agent.
@@ -68,6 +73,12 @@ pub struct ContextBlock {
     /// The query intent detected by the classifier (always present).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_type: Option<String>,
+
+    // ── Multi-modal additions ──────────────────────────────────────
+    /// Attachment sources referenced in this context (multi-modal memories).
+    /// Only populated when include_modalities includes non-text modalities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentSource>,
 }
 
 // ─── D2: Structured Context ────────────────────────────────────────
@@ -256,6 +267,33 @@ pub struct EpisodeSummary {
     pub relevance: f32,
 }
 
+/// A multi-modal attachment source referenced in the context.
+///
+/// Returned in `ContextBlock::attachments` when the retrieval includes
+/// non-text modalities (images, audio, documents).
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AttachmentSource {
+    /// The attachment ID.
+    pub attachment_id: Uuid,
+    /// The episode this attachment belongs to.
+    pub episode_id: Uuid,
+    /// The modality of this attachment.
+    pub modality: Modality,
+    /// MIME type of the attachment.
+    pub mime_type: String,
+    /// Pre-signed download URL (if available, expires in 15 min).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    /// Pre-signed thumbnail URL for images (if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url: Option<String>,
+    /// Vision-generated description or transcript excerpt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Relevance score (0.0–1.0).
+    pub relevance_score: f32,
+}
+
 /// Which retrieval strategy contributed results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -279,10 +317,11 @@ pub enum SearchType {
 }
 
 /// Temporal intent guides how recency and validity are weighted during retrieval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TemporalIntent {
     /// Let Mnemo infer intent from the query text.
+    #[default]
     Auto,
     /// Prefer currently valid state.
     Current,
@@ -293,7 +332,7 @@ pub enum TemporalIntent {
 }
 
 /// Request for context retrieval.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ContextRequest {
     /// The session to retrieve context for.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -358,6 +397,13 @@ pub struct ContextRequest {
     /// independently. Default: false (uses existing `assemble()` behaviour).
     #[serde(default)]
     pub tiered_budget: bool,
+
+    // ── Multi-modal additions ──────────────────────────────────────
+    /// Filter retrieval to only include memories from specific modalities.
+    /// When empty (default), all modalities are included.
+    /// Example: `["text", "image"]` returns only text and image memories.
+    #[serde(default)]
+    pub include_modalities: Vec<Modality>,
 }
 
 /// A message provided as query context for retrieval.
@@ -469,6 +515,7 @@ impl ContextBlock {
             structured: None,
             explanations: None,
             query_type: None,
+            attachments: Vec::new(),
         }
     }
 

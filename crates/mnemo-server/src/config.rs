@@ -25,6 +25,14 @@ pub struct MnemoConfig {
     pub webhooks: WebhookSection,
     #[serde(default)]
     pub encryption: EncryptionSection,
+    #[serde(default)]
+    pub blob: BlobSection,
+    #[serde(default)]
+    pub vision: VisionSection,
+    #[serde(default)]
+    pub transcription: TranscriptionSection,
+    #[serde(default)]
+    pub document: DocumentSection,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -440,6 +448,322 @@ impl Default for EncryptionSection {
     }
 }
 
+/// Blob storage configuration for multi-modal attachments.
+#[derive(Debug, Deserialize, Clone)]
+pub struct BlobSection {
+    /// Enable blob storage for attachments.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Storage backend: "local" or "s3".
+    #[serde(default = "default_blob_backend")]
+    pub backend: String,
+    /// Local storage path (for backend="local").
+    /// Set via `MNEMO_BLOB_LOCAL_PATH`.
+    #[serde(default = "default_blob_local_path")]
+    pub local_path: String,
+    /// S3 bucket name (for backend="s3").
+    /// Set via `MNEMO_BLOB_S3_BUCKET`.
+    #[serde(default)]
+    pub s3_bucket: String,
+    /// S3 region (for backend="s3").
+    /// Set via `MNEMO_BLOB_S3_REGION`.
+    #[serde(default = "default_blob_s3_region")]
+    pub s3_region: String,
+    /// S3 endpoint (for MinIO, R2, etc.).
+    /// Set via `MNEMO_BLOB_S3_ENDPOINT`.
+    #[serde(default)]
+    pub s3_endpoint: Option<String>,
+    /// Use path-style S3 addressing (for some MinIO setups).
+    /// Set via `MNEMO_BLOB_S3_PATH_STYLE=true`.
+    #[serde(default)]
+    pub s3_path_style: bool,
+    /// Maximum image upload size in bytes.
+    /// Set via `MNEMO_BLOB_MAX_IMAGE_SIZE`.
+    #[serde(default = "default_blob_max_image_size")]
+    pub max_image_size: u64,
+    /// Maximum audio upload size in bytes.
+    /// Set via `MNEMO_BLOB_MAX_AUDIO_SIZE`.
+    #[serde(default = "default_blob_max_audio_size")]
+    pub max_audio_size: u64,
+    /// Maximum document upload size in bytes.
+    /// Set via `MNEMO_BLOB_MAX_DOCUMENT_SIZE`.
+    #[serde(default = "default_blob_max_document_size")]
+    pub max_document_size: u64,
+    /// Allowed image MIME types.
+    #[serde(default = "default_blob_allowed_image_types")]
+    pub allowed_image_types: Vec<String>,
+    /// Allowed audio MIME types.
+    #[serde(default = "default_blob_allowed_audio_types")]
+    pub allowed_audio_types: Vec<String>,
+    /// Allowed document MIME types.
+    #[serde(default = "default_blob_allowed_document_types")]
+    pub allowed_document_types: Vec<String>,
+}
+
+impl Default for BlobSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: default_blob_backend(),
+            local_path: default_blob_local_path(),
+            s3_bucket: String::new(),
+            s3_region: default_blob_s3_region(),
+            s3_endpoint: None,
+            s3_path_style: false,
+            max_image_size: default_blob_max_image_size(),
+            max_audio_size: default_blob_max_audio_size(),
+            max_document_size: default_blob_max_document_size(),
+            allowed_image_types: default_blob_allowed_image_types(),
+            allowed_audio_types: default_blob_allowed_audio_types(),
+            allowed_document_types: default_blob_allowed_document_types(),
+        }
+    }
+}
+
+fn default_blob_backend() -> String {
+    "local".to_string()
+}
+
+fn default_blob_local_path() -> String {
+    "/var/mnemo/blobs".to_string()
+}
+
+fn default_blob_s3_region() -> String {
+    "us-east-1".to_string()
+}
+
+fn default_blob_max_image_size() -> u64 {
+    10 * 1024 * 1024 // 10 MB
+}
+
+fn default_blob_max_audio_size() -> u64 {
+    100 * 1024 * 1024 // 100 MB
+}
+
+fn default_blob_max_document_size() -> u64 {
+    50 * 1024 * 1024 // 50 MB
+}
+
+fn default_blob_allowed_image_types() -> Vec<String> {
+    vec![
+        "image/jpeg".to_string(),
+        "image/png".to_string(),
+        "image/gif".to_string(),
+        "image/webp".to_string(),
+    ]
+}
+
+fn default_blob_allowed_audio_types() -> Vec<String> {
+    vec![
+        "audio/mpeg".to_string(),
+        "audio/mp3".to_string(),
+        "audio/wav".to_string(),
+        "audio/webm".to_string(),
+        "audio/ogg".to_string(),
+        "audio/m4a".to_string(),
+        "audio/x-m4a".to_string(),
+    ]
+}
+
+fn default_blob_allowed_document_types() -> Vec<String> {
+    vec![
+        "application/pdf".to_string(),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+        "text/plain".to_string(),
+        "text/markdown".to_string(),
+    ]
+}
+
+/// Vision provider configuration for image analysis.
+#[derive(Debug, Deserialize, Clone)]
+pub struct VisionSection {
+    /// Enable vision processing for image attachments.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Vision provider: "anthropic" or "openai".
+    /// Set via `MNEMO_VISION_PROVIDER`.
+    #[serde(default = "default_vision_provider")]
+    pub provider: String,
+    /// Vision model name.
+    /// Set via `MNEMO_VISION_MODEL`.
+    #[serde(default = "default_vision_model")]
+    pub model: String,
+    /// API key for vision provider (falls back to LLM provider keys).
+    /// Set via `MNEMO_VISION_API_KEY`.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Base URL override for vision provider.
+    /// Set via `MNEMO_VISION_BASE_URL`.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Max tokens for vision response.
+    /// Set via `MNEMO_VISION_MAX_TOKENS`.
+    #[serde(default = "default_vision_max_tokens")]
+    pub max_tokens: u32,
+    /// Temperature for vision tasks (lower = more consistent).
+    /// Set via `MNEMO_VISION_TEMPERATURE`.
+    #[serde(default = "default_vision_temperature")]
+    pub temperature: f32,
+    /// Process images synchronously (wait for vision) or async (background).
+    /// Set via `MNEMO_VISION_SYNC=true`.
+    #[serde(default)]
+    pub sync_processing: bool,
+}
+
+impl Default for VisionSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: default_vision_provider(),
+            model: default_vision_model(),
+            api_key: None,
+            base_url: None,
+            max_tokens: default_vision_max_tokens(),
+            temperature: default_vision_temperature(),
+            sync_processing: false,
+        }
+    }
+}
+
+fn default_vision_provider() -> String {
+    "anthropic".to_string()
+}
+
+fn default_vision_model() -> String {
+    "claude-sonnet-4-20250514".to_string()
+}
+
+fn default_vision_max_tokens() -> u32 {
+    1024
+}
+
+fn default_vision_temperature() -> f32 {
+    0.2
+}
+
+/// Transcription provider configuration for audio-to-text.
+#[derive(Debug, Deserialize, Clone)]
+pub struct TranscriptionSection {
+    /// Enable transcription processing for audio attachments.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Transcription provider: "openai" (whisper).
+    /// Set via `MNEMO_TRANSCRIPTION_PROVIDER`.
+    #[serde(default = "default_transcription_provider")]
+    pub provider: String,
+    /// Transcription model name.
+    /// Set via `MNEMO_TRANSCRIPTION_MODEL`.
+    #[serde(default = "default_transcription_model")]
+    pub model: String,
+    /// API key for transcription provider (falls back to OpenAI key).
+    /// Set via `MNEMO_TRANSCRIPTION_API_KEY`.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Base URL override for transcription provider.
+    /// Set via `MNEMO_TRANSCRIPTION_BASE_URL`.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Language hint (ISO 639-1 code, e.g., "en", "es").
+    /// Set via `MNEMO_TRANSCRIPTION_LANGUAGE`.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Enable speaker diarization (if supported by provider).
+    /// Set via `MNEMO_TRANSCRIPTION_DIARIZATION=true`.
+    #[serde(default)]
+    pub diarization: bool,
+    /// Process audio synchronously (wait for transcription) or async (background).
+    /// Set via `MNEMO_TRANSCRIPTION_SYNC=true`.
+    #[serde(default)]
+    pub sync_processing: bool,
+}
+
+impl Default for TranscriptionSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: default_transcription_provider(),
+            model: default_transcription_model(),
+            api_key: None,
+            base_url: None,
+            language: None,
+            diarization: false,
+            sync_processing: false,
+        }
+    }
+}
+
+fn default_transcription_provider() -> String {
+    "openai".to_string()
+}
+
+fn default_transcription_model() -> String {
+    "whisper-1".to_string()
+}
+
+/// Document parsing configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct DocumentSection {
+    /// Enable document parsing for document attachments.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum document size in bytes.
+    /// Set via `MNEMO_DOCUMENT_MAX_SIZE`.
+    #[serde(default = "default_document_max_size")]
+    pub max_size_bytes: u64,
+    /// Chunking strategy: "structural", "fixed", or "page".
+    /// Set via `MNEMO_DOCUMENT_CHUNK_STRATEGY`.
+    #[serde(default = "default_chunk_strategy")]
+    pub chunk_strategy: String,
+    /// Target chunk size in characters (for fixed chunking).
+    /// Set via `MNEMO_DOCUMENT_CHUNK_SIZE`.
+    #[serde(default = "default_chunk_size")]
+    pub chunk_size: usize,
+    /// Overlap between chunks in characters.
+    /// Set via `MNEMO_DOCUMENT_CHUNK_OVERLAP`.
+    #[serde(default = "default_chunk_overlap")]
+    pub chunk_overlap: usize,
+    /// Extract embedded images for vision processing.
+    /// Set via `MNEMO_DOCUMENT_EXTRACT_IMAGES=true`.
+    #[serde(default)]
+    pub extract_images: bool,
+    /// Process documents synchronously or async (background).
+    /// Set via `MNEMO_DOCUMENT_SYNC=true`.
+    #[serde(default)]
+    pub sync_processing: bool,
+}
+
+impl Default for DocumentSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_size_bytes: default_document_max_size(),
+            chunk_strategy: default_chunk_strategy(),
+            chunk_size: default_chunk_size(),
+            chunk_overlap: default_chunk_overlap(),
+            extract_images: false,
+            sync_processing: false,
+        }
+    }
+}
+
+fn default_document_max_size() -> u64 {
+    50 * 1024 * 1024 // 50 MB
+}
+
+fn default_chunk_strategy() -> String {
+    "structural".to_string()
+}
+
+fn default_chunk_size() -> usize {
+    1500
+}
+
+fn default_chunk_overlap() -> usize {
+    200
+}
+
 // Default value functions
 fn default_host() -> String {
     "0.0.0.0".into()
@@ -767,6 +1091,35 @@ impl MnemoConfig {
             config.encryption.retired_keys = v;
         }
 
+        // Document parsing overrides
+        if let Ok(v) = std::env::var("MNEMO_DOCUMENT_ENABLED") {
+            config.document.enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_DOCUMENT_MAX_SIZE") {
+            if let Ok(n) = v.parse() {
+                config.document.max_size_bytes = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_DOCUMENT_CHUNK_STRATEGY") {
+            config.document.chunk_strategy = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_DOCUMENT_CHUNK_SIZE") {
+            if let Ok(n) = v.parse() {
+                config.document.chunk_size = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_DOCUMENT_CHUNK_OVERLAP") {
+            if let Ok(n) = v.parse() {
+                config.document.chunk_overlap = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_DOCUMENT_EXTRACT_IMAGES") {
+            config.document.extract_images = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("MNEMO_DOCUMENT_SYNC") {
+            config.document.sync_processing = v == "true" || v == "1";
+        }
+
         Ok(config)
     }
 
@@ -804,6 +1157,95 @@ impl MnemoConfig {
                 Some(self.embedding.base_url.clone())
             },
             dimensions: self.embedding.dimensions,
+        }
+    }
+
+    /// Convert VisionSection to VisionConfig for provider initialization.
+    ///
+    /// Falls back to LLM provider API key if vision-specific key not set.
+    pub fn vision_config(&self) -> mnemo_core::traits::vision::VisionConfig {
+        // Try vision-specific API key first, then fall back to the corresponding
+        // LLM provider's API key based on the vision provider type.
+        let api_key = self.vision.api_key.clone().or_else(|| {
+            match self.vision.provider.as_str() {
+                "anthropic" => {
+                    // Try ANTHROPIC_API_KEY env var, then LLM key if provider is anthropic
+                    std::env::var("ANTHROPIC_API_KEY").ok().or_else(|| {
+                        if self.llm.provider == "anthropic" && !self.llm.api_key.is_empty() {
+                            Some(self.llm.api_key.clone())
+                        } else {
+                            None
+                        }
+                    })
+                }
+                "openai" => {
+                    // Try OPENAI_API_KEY env var, then LLM key if provider is openai
+                    std::env::var("OPENAI_API_KEY").ok().or_else(|| {
+                        if self.llm.provider != "anthropic" && !self.llm.api_key.is_empty() {
+                            Some(self.llm.api_key.clone())
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            }
+        });
+
+        mnemo_core::traits::vision::VisionConfig {
+            provider: self.vision.provider.clone(),
+            model: self.vision.model.clone(),
+            api_key,
+            base_url: self.vision.base_url.clone(),
+            max_tokens: self.vision.max_tokens,
+            temperature: self.vision.temperature,
+        }
+    }
+
+    /// Convert TranscriptionSection to TranscriptionConfig for provider initialization.
+    ///
+    /// Falls back to OpenAI API key if transcription-specific key not set.
+    pub fn transcription_config(&self) -> mnemo_core::traits::transcription::TranscriptionConfig {
+        // Try transcription-specific API key first, then fall back to OpenAI key
+        let api_key = self.transcription.api_key.clone().or_else(|| {
+            // OpenAI Whisper uses the same API key as the LLM/embedding providers
+            std::env::var("OPENAI_API_KEY").ok().or_else(|| {
+                // If LLM provider is openai-compatible, use that key
+                if self.llm.provider != "anthropic" && !self.llm.api_key.is_empty() {
+                    Some(self.llm.api_key.clone())
+                } else {
+                    None
+                }
+            })
+        });
+
+        mnemo_core::traits::transcription::TranscriptionConfig {
+            provider: self.transcription.provider.clone(),
+            model: self.transcription.model.clone(),
+            api_key,
+            base_url: self.transcription.base_url.clone(),
+            diarization: self.transcription.diarization,
+            language: self.transcription.language.clone(),
+            ..Default::default()
+        }
+    }
+
+    /// Convert DocumentSection to DocumentConfig for parser initialization.
+    pub fn document_config(&self) -> mnemo_core::traits::document::DocumentConfig {
+        let chunk_strategy = match self.document.chunk_strategy.as_str() {
+            "fixed" => mnemo_core::traits::document::ChunkStrategy::Fixed,
+            "page" => mnemo_core::traits::document::ChunkStrategy::Page,
+            _ => mnemo_core::traits::document::ChunkStrategy::Structural,
+        };
+
+        mnemo_core::traits::document::DocumentConfig {
+            enabled: self.document.enabled,
+            max_size_bytes: self.document.max_size_bytes,
+            chunk_strategy,
+            chunk_size: self.document.chunk_size,
+            chunk_overlap: self.document.chunk_overlap,
+            extract_images: self.document.extract_images,
+            sync_processing: self.document.sync_processing,
         }
     }
 }

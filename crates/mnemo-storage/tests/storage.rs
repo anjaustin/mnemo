@@ -5,6 +5,7 @@
 
 use uuid::Uuid;
 
+use mnemo_core::models::attachment::Modality;
 use mnemo_core::models::episode::{
     CreateEpisodeRequest, EpisodeType, MessageRole, ProcessingStatus,
 };
@@ -48,6 +49,7 @@ fn test_episode_req(content: &str) -> CreateEpisodeRequest {
         agent_id: None,
         metadata: serde_json::json!({}),
         created_at: None,
+        modality: Modality::Text,
     }
 }
 

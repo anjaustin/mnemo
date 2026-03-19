@@ -1,5 +1,6 @@
-use axum::extract::{DefaultBodyLimit, Extension, Json, Path, Query, State};
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::extract::{DefaultBodyLimit, Extension, Json, Multipart, Path, Query, State};
+use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
@@ -52,11 +53,18 @@ use mnemo_core::models::{
     user::{CreateUserRequest, UpdateUserRequest, User},
 };
 use mnemo_core::traits::llm::EmbeddingProvider;
+use mnemo_core::traits::blob::{attachment_key, PresignOptions};
 use mnemo_core::traits::storage::{
-    AgentStore, ApiKeyStore, ClarificationStore, EdgeStore, EntityStore, EpisodeStore, GoalStore,
-    GuardrailStore, LoraStore, NarrativeStore, RawVectorStore, RegionStore, SessionStore,
-    SpanStore, UserStore, VectorStore, ViewStore,
+    AgentStore, ApiKeyStore, AttachmentStore, ClarificationStore, EdgeStore, EntityStore,
+    EpisodeStore, GoalStore, GuardrailStore, LoraStore, NarrativeStore, RawVectorStore,
+    RegionStore, SessionStore, SpanStore, UserStore, VectorStore, ViewStore,
 };
+use mnemo_core::models::attachment::{
+    Attachment, AttachmentResponse, AttachmentType, ListAttachmentsParams,
+};
+use mnemo_core::traits::document::DocumentFormat;
+use mnemo_core::traits::transcription::AudioFormat;
+use mnemo_core::traits::vision::ImageFormat;
 
 use mnemo_retrieval::router::{classify_query, RetrievalStrategy, RoutingSource};
 use mnemo_retrieval::Reranker;
@@ -1670,6 +1678,23 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/v1/vectors/:namespace/count", get(vectors_count))
         .route("/api/v1/vectors/:namespace/exists", get(vectors_exists))
+        // Attachments (multi-modal support)
+        .route(
+            "/api/v1/episodes/:episode_id/attachments",
+            post(upload_attachment).get(list_attachments),
+        )
+        .route(
+            "/api/v1/attachments/:attachment_id",
+            get(get_attachment).delete(delete_attachment),
+        )
+        .route(
+            "/api/v1/attachments/:attachment_id/download",
+            get(download_attachment),
+        )
+        .route(
+            "/api/v1/attachments/:attachment_id/presign",
+            post(presign_attachment),
+        )
         // Allow larger request bodies for import payloads.
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state)
@@ -5086,6 +5111,7 @@ async fn remember_memory(
         agent_id: None,
         metadata: metadata_with_request_id(serde_json::json!({}), request_id.as_deref()),
         created_at: None,
+        modality: Default::default(),
     };
 
     let episode = state
@@ -5649,6 +5675,7 @@ async fn get_memory_context(
         structured: false,
         explain: false,
         tiered_budget: false,
+        include_modalities: vec![],
     };
 
     let mut context = state
@@ -6308,6 +6335,7 @@ async fn time_travel_trace(
         structured: false,
         explain: false,
         tiered_budget: false,
+        include_modalities: vec![],
     };
 
     let mut context_from = state
@@ -6765,6 +6793,7 @@ async fn time_travel_summary(
         structured: false,
         explain: false,
         tiered_budget: false,
+        include_modalities: vec![],
     };
 
     let mut context_from = state
@@ -7097,6 +7126,7 @@ async fn causal_recall_chains(
         explain: false,
         tiered_budget: false,
         region_ids: vec![],
+        include_modalities: vec![],
     };
 
     let mut context = state
@@ -9288,6 +9318,7 @@ async fn get_agent_context(
         structured: false,
         explain: false,
         tiered_budget: false,
+        include_modalities: vec![],
     };
 
     let mut context = state
@@ -9907,6 +9938,7 @@ async fn run_import_job(
             agent_id: None,
             metadata: serde_json::json!({ "import_source": source.as_str() }),
             created_at: Some(message.created_at),
+            modality: Default::default(),
         };
 
         match state
@@ -12937,6 +12969,7 @@ async fn counterfactual_context(
         structured: false,
         explain: false,
         tiered_budget: false,
+        include_modalities: vec![],
     };
 
     let mut context = state
@@ -14251,6 +14284,1206 @@ async fn list_agent_lora_users(
     stats.sort_by(|a, b| b.last_updated.cmp(&a.last_updated));
 
     Ok((StatusCode::OK, Json(stats)))
+}
+
+// ─── Attachments (Multi-Modal Support) ─────────────────────────────
+
+/// Upload an attachment to an episode.
+///
+/// Accepts multipart/form-data with a single file field.
+/// The episode must exist and belong to the authenticated user.
+#[utoipa::path(
+    post,
+    path = "/api/v1/episodes/{episode_id}/attachments",
+    params(
+        ("episode_id" = Uuid, Path, description = "Episode ID to attach to")
+    ),
+    responses(
+        (status = 201, description = "Attachment uploaded", body = AttachmentResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Episode not found"),
+        (status = 413, description = "File too large"),
+        (status = 415, description = "Unsupported media type"),
+        (status = 503, description = "Blob storage not configured"),
+    ),
+    tag = "attachments"
+)]
+async fn upload_attachment(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(episode_id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<impl IntoResponse, AppError> {
+    // Check blob storage is configured
+    let blob_store = state.blob_store.as_ref().ok_or_else(|| {
+        MnemoError::ServiceUnavailable("Blob storage not configured".to_string())
+    })?;
+    let blob_config = state.blob_config.as_ref().ok_or_else(|| {
+        MnemoError::ServiceUnavailable("Blob storage not configured".to_string())
+    })?;
+
+    // Verify episode exists and get user_id
+    let episode = state.state_store.get_episode(episode_id).await?;
+    let user_id = episode.user_id;
+
+    // Authorization: verify caller can access this user's data
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(user_id)?;
+
+    // Process multipart upload
+    let mut file_data: Option<Vec<u8>> = None;
+    let mut file_name: Option<String> = None;
+    let mut content_type: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| MnemoError::BadRequest(format!("Multipart error: {}", e)))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            file_name = field.file_name().map(|s| s.to_string());
+            content_type = field.content_type().map(|s| s.to_string());
+
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| MnemoError::BadRequest(format!("Failed to read file: {}", e)))?;
+            file_data = Some(data.to_vec());
+            break;
+        }
+    }
+
+    let data = file_data.ok_or_else(|| MnemoError::BadRequest("No file provided".to_string()))?;
+    let mime_type = content_type
+        .ok_or_else(|| MnemoError::BadRequest("Content-Type required".to_string()))?;
+
+    // Determine attachment type from MIME
+    let attachment_type = AttachmentType::from_mime_type(&mime_type).ok_or_else(|| {
+        MnemoError::UnsupportedMediaType(format!("Unsupported file type: {}", mime_type))
+    })?;
+
+    // Validate file size based on type
+    let size_bytes = data.len() as u64;
+    let max_size = match attachment_type {
+        AttachmentType::Image => blob_config.max_image_size,
+        AttachmentType::Audio => blob_config.max_audio_size,
+        AttachmentType::Document => blob_config.max_document_size,
+        AttachmentType::Video => blob_config.max_document_size, // Use document limit for now
+    };
+
+    if size_bytes > max_size {
+        return Err(MnemoError::PayloadTooLarge(format!(
+            "File size {} exceeds limit {} for {:?}",
+            size_bytes, max_size, attachment_type
+        ))
+        .into());
+    }
+
+    // Validate allowed MIME types
+    let allowed_types = match attachment_type {
+        AttachmentType::Image => &blob_config.allowed_image_types,
+        AttachmentType::Audio => &blob_config.allowed_audio_types,
+        AttachmentType::Document => &blob_config.allowed_document_types,
+        AttachmentType::Video => &blob_config.allowed_audio_types, // Use audio types for now
+    };
+
+    if !allowed_types.iter().any(|t| t == &mime_type) {
+        return Err(MnemoError::UnsupportedMediaType(format!(
+            "MIME type {} not allowed for {:?}. Allowed: {:?}",
+            mime_type, attachment_type, allowed_types
+        ))
+        .into());
+    }
+
+    // Generate attachment ID and storage key
+    let attachment_id = Uuid::now_v7();
+    let safe_filename = file_name
+        .as_deref()
+        .map(sanitize_filename)
+        .unwrap_or_else(|| format!("attachment.{}", mime_extension(&mime_type)));
+    let storage_key = attachment_key(&user_id, &attachment_id, &safe_filename);
+
+    // P2-V1: Validate image size before vision processing to prevent memory exhaustion
+    // P2-V5: Use Arc to share image data instead of cloning
+    let image_data_for_vision: Option<std::sync::Arc<Vec<u8>>> =
+        if attachment_type == AttachmentType::Image {
+            // Only keep reference if we might do vision processing
+            if state.vision.is_some() && state.vision_config.is_some() {
+                // Validate size against vision provider limits
+                let vision = state.vision.as_ref().unwrap();
+                let max_vision_size = vision.max_image_size();
+                if size_bytes > max_vision_size {
+                    tracing::warn!(
+                        size = size_bytes,
+                        max = max_vision_size,
+                        "Image exceeds vision provider size limit, skipping vision processing"
+                    );
+                    None
+                } else {
+                    Some(std::sync::Arc::new(data.clone()))
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+    // P3: Audio data for transcription processing
+    let audio_data_for_transcription: Option<std::sync::Arc<Vec<u8>>> =
+        if attachment_type == AttachmentType::Audio {
+            // Only keep reference if we might do transcription processing
+            if state.transcription.is_some() && state.transcription_config.is_some() {
+                // Validate size against transcription provider limits
+                let transcription = state.transcription.as_ref().unwrap();
+                let max_audio_size = transcription.max_audio_size();
+                if size_bytes > max_audio_size {
+                    tracing::warn!(
+                        size = size_bytes,
+                        max = max_audio_size,
+                        "Audio exceeds transcription provider size limit, skipping transcription"
+                    );
+                    None
+                } else {
+                    Some(std::sync::Arc::new(data.clone()))
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+    // Upload to blob storage
+    blob_store
+        .put(&storage_key, data, &mime_type)
+        .await
+        .map_err(|e| MnemoError::Storage(format!("Failed to upload: {}", e)))?;
+
+    // Create attachment record
+    let mut attachment = Attachment::new(
+        episode_id,
+        user_id,
+        attachment_type,
+        mime_type.clone(),
+        file_name,
+        size_bytes,
+        storage_key.clone(),
+    );
+
+    // Process vision for images if configured
+    // P2-V2: Only use default prompt (no custom prompts to prevent injection)
+    if let (Some(image_data), Some(vision), Some(vision_config)) = (
+        image_data_for_vision,
+        state.vision.as_ref(),
+        state.vision_config.as_ref(),
+    ) {
+        // Parse image format from MIME type
+        if let Some(image_format) = ImageFormat::from_mime(&mime_type) {
+            // Check if vision provider supports this format
+            if vision.supports_format(image_format) {
+                if vision_config.sync_processing {
+                    // Synchronous processing: wait for vision result
+                    attachment.mark_processing();
+                    // P2-V2: Always use None for prompt (uses default prompt, no injection)
+                    match vision.analyze(&image_data, image_format, None).await {
+                        Ok(analysis) => {
+                            attachment.set_description(analysis.description);
+                            attachment.mark_completed(vision.model_name());
+                            tracing::info!(
+                                attachment_id = %attachment.id,
+                                model = %vision.model_name(),
+                                "Vision processing completed synchronously"
+                            );
+                        }
+                        Err(e) => {
+                            // P2-V3: Sanitize error message (avoid leaking sensitive info)
+                            let safe_error = sanitize_vision_error(&e);
+                            tracing::warn!(
+                                attachment_id = %attachment.id,
+                                error = %safe_error,
+                                "Vision processing failed"
+                            );
+                            attachment.mark_failed(format!("Vision processing failed: {}", safe_error));
+                        }
+                    }
+                } else {
+                    // Async processing: spawn background task
+                    attachment.mark_processing();
+                    let state_clone = state.clone();
+                    let attachment_id = attachment.id;
+                    let vision_clone = vision.clone();
+                    let model_name = vision.model_name().to_string();
+                    // P2-V5: Arc is already shared, no extra cloning needed
+
+                    tokio::spawn(async move {
+                        // P2-V2: Always use None for prompt (uses default prompt, no injection)
+                        match vision_clone.analyze(&image_data, image_format, None).await {
+                            Ok(analysis) => {
+                                // Update attachment with vision results
+                                if let Err(e) = update_attachment_with_vision(
+                                    &state_clone,
+                                    attachment_id,
+                                    analysis.description,
+                                    &model_name,
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        attachment_id = %attachment_id,
+                                        error = %e,
+                                        "Failed to update attachment with vision results"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                // P2-V3: Sanitize error message
+                                let safe_error = sanitize_vision_error(&e);
+                                tracing::warn!(
+                                    attachment_id = %attachment_id,
+                                    error = %safe_error,
+                                    "Background vision processing failed"
+                                );
+                                // Mark as failed
+                                if let Err(update_err) = mark_attachment_failed(
+                                    &state_clone,
+                                    attachment_id,
+                                    format!("Vision processing failed: {}", safe_error),
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        attachment_id = %attachment_id,
+                                        error = %update_err,
+                                        "Failed to mark attachment as failed"
+                                    );
+                                }
+                            }
+                        }
+                    });
+                }
+            } else {
+                tracing::debug!(
+                    attachment_id = %attachment.id,
+                    format = ?image_format,
+                    "Image format not supported by vision provider"
+                );
+            }
+        }
+    }
+
+    // Process transcription for audio if configured
+    if let (Some(audio_data), Some(transcription), Some(transcription_config)) = (
+        audio_data_for_transcription,
+        state.transcription.as_ref(),
+        state.transcription_config.as_ref(),
+    ) {
+        // Parse audio format from MIME type
+        if let Some(audio_format) = AudioFormat::from_mime(&mime_type) {
+            // Check if transcription provider supports this format
+            if transcription.supports_format(audio_format) {
+                if transcription_config.sync_processing {
+                    // Synchronous processing: wait for transcription result
+                    attachment.mark_processing();
+                    match transcription
+                        .transcribe(&audio_data, audio_format, attachment.filename.as_deref())
+                        .await
+                    {
+                        Ok(result) => {
+                            attachment.set_transcript(result.text);
+                            if let Some(duration) = result.duration_secs {
+                                attachment.set_duration(duration);
+                            }
+                            attachment.mark_completed(transcription.model_name());
+                            tracing::info!(
+                                attachment_id = %attachment.id,
+                                model = %transcription.model_name(),
+                                "Transcription completed synchronously"
+                            );
+                        }
+                        Err(e) => {
+                            let safe_error = sanitize_transcription_error(&e);
+                            tracing::warn!(
+                                attachment_id = %attachment.id,
+                                error = %safe_error,
+                                "Transcription failed"
+                            );
+                            attachment.mark_failed(format!("Transcription failed: {}", safe_error));
+                        }
+                    }
+                } else {
+                    // Async processing: spawn background task
+                    attachment.mark_processing();
+                    let state_clone = state.clone();
+                    let attachment_id = attachment.id;
+                    let transcription_clone = transcription.clone();
+                    let model_name = transcription.model_name().to_string();
+                    let filename = attachment.filename.clone();
+
+                    tokio::spawn(async move {
+                        match transcription_clone
+                            .transcribe(&audio_data, audio_format, filename.as_deref())
+                            .await
+                        {
+                            Ok(result) => {
+                                // Update attachment with transcription results
+                                if let Err(e) = update_attachment_with_transcription(
+                                    &state_clone,
+                                    attachment_id,
+                                    result.text,
+                                    result.duration_secs,
+                                    &model_name,
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        attachment_id = %attachment_id,
+                                        error = %e,
+                                        "Failed to update attachment with transcription results"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                let safe_error = sanitize_transcription_error(&e);
+                                tracing::warn!(
+                                    attachment_id = %attachment_id,
+                                    error = %safe_error,
+                                    "Background transcription failed"
+                                );
+                                // Mark as failed
+                                if let Err(update_err) = mark_attachment_failed(
+                                    &state_clone,
+                                    attachment_id,
+                                    format!("Transcription failed: {}", safe_error),
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        attachment_id = %attachment_id,
+                                        error = %update_err,
+                                        "Failed to mark attachment as failed"
+                                    );
+                                }
+                            }
+                        }
+                    });
+                }
+            } else {
+                tracing::debug!(
+                    attachment_id = %attachment.id,
+                    format = ?audio_format,
+                    "Audio format not supported by transcription provider"
+                );
+            }
+        }
+    }
+
+    // Process document parsing if configured
+    // P4-1: Document parsing is local (no external API calls), uses pdf-extract crate
+    // P4-2: Size limits enforced before upload (max_document_size from blob_config)
+    // P4-3: Error messages sanitized via sanitize_document_error()
+    if attachment_type == AttachmentType::Document {
+        if let (Some(document_parser), Some(document_config)) = (
+            state.document.as_ref(),
+            state.document_config.as_ref(),
+        ) {
+            // Parse document format from MIME type
+            if let Some(doc_format) = DocumentFormat::from_mime(&mime_type) {
+                // Check if document parser supports this format
+                if document_parser.supports_format(doc_format) {
+                    // P4-4: Validate size again against document-specific limit
+                    // (defense in depth - blob_config.max_document_size already checked)
+                    if size_bytes > document_config.max_size_bytes {
+                        tracing::warn!(
+                            size = size_bytes,
+                            max = document_config.max_size_bytes,
+                            "Document exceeds parsing size limit, skipping"
+                        );
+                    } else {
+                    // Get document data - we need to fetch from blob storage since we already stored it
+                    let doc_data = blob_store
+                        .get(&storage_key)
+                        .await
+                        .map(|(data, _)| data)
+                        .ok();
+
+                    if let Some(data) = doc_data {
+                        let config = state
+                            .document_config
+                            .as_ref()
+                            .map(|c| {
+                                use mnemo_core::traits::document::{ChunkStrategy, DocumentConfig};
+                                DocumentConfig {
+                                    enabled: c.enabled,
+                                    max_size_bytes: c.max_size_bytes,
+                                    chunk_strategy: match c.chunk_strategy.as_str() {
+                                        "fixed" => ChunkStrategy::Fixed,
+                                        "page" => ChunkStrategy::Page,
+                                        _ => ChunkStrategy::Structural,
+                                    },
+                                    chunk_size: c.chunk_size,
+                                    chunk_overlap: c.chunk_overlap,
+                                    extract_images: c.extract_images,
+                                    sync_processing: c.sync_processing,
+                                }
+                            })
+                            .unwrap_or_default();
+
+                        if document_config.sync_processing {
+                            // Synchronous processing: wait for parse result
+                            attachment.mark_processing();
+                            match document_parser.parse(&data, doc_format, &config).await {
+                                Ok(parsed) => {
+                                    // Combine chunks into a description/content summary
+                                    let chunk_text: String = parsed
+                                        .chunks
+                                        .iter()
+                                        .take(3) // First 3 chunks for summary
+                                        .map(|c| c.text.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join("\n\n");
+
+                                    let description = if let Some(title) = &parsed.title {
+                                        format!(
+                                            "Document: {}\nPages: {}\n\n{}",
+                                            title,
+                                            parsed.page_count,
+                                            &chunk_text[..chunk_text.len().min(1000)]
+                                        )
+                                    } else {
+                                        format!(
+                                            "Document ({} pages, {} chunks)\n\n{}",
+                                            parsed.page_count,
+                                            parsed.chunks.len(),
+                                            &chunk_text[..chunk_text.len().min(1000)]
+                                        )
+                                    };
+
+                                    attachment.set_description(description);
+                                    attachment.mark_completed("document-parser");
+                                    tracing::info!(
+                                        attachment_id = %attachment.id,
+                                        chunks = parsed.chunks.len(),
+                                        pages = parsed.page_count,
+                                        "Document parsing completed synchronously"
+                                    );
+                                }
+                                Err(e) => {
+                                    let safe_error = sanitize_document_error(&e);
+                                    tracing::warn!(
+                                        attachment_id = %attachment.id,
+                                        error = %safe_error,
+                                        "Document parsing failed"
+                                    );
+                                    attachment.mark_failed(format!(
+                                        "Document parsing failed: {}",
+                                        safe_error
+                                    ));
+                                }
+                            }
+                        } else {
+                            // Async processing: spawn background task
+                            attachment.mark_processing();
+                            let state_clone = state.clone();
+                            let attachment_id = attachment.id;
+                            let document_clone = document_parser.clone();
+
+                            tokio::spawn(async move {
+                                match document_clone.parse(&data, doc_format, &config).await {
+                                    Ok(parsed) => {
+                                        // Combine chunks into description
+                                        let chunk_text: String = parsed
+                                            .chunks
+                                            .iter()
+                                            .take(3)
+                                            .map(|c| c.text.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("\n\n");
+
+                                        let description = if let Some(title) = &parsed.title {
+                                            format!(
+                                                "Document: {}\nPages: {}\n\n{}",
+                                                title,
+                                                parsed.page_count,
+                                                &chunk_text[..chunk_text.len().min(1000)]
+                                            )
+                                        } else {
+                                            format!(
+                                                "Document ({} pages, {} chunks)\n\n{}",
+                                                parsed.page_count,
+                                                parsed.chunks.len(),
+                                                &chunk_text[..chunk_text.len().min(1000)]
+                                            )
+                                        };
+
+                                        if let Err(e) = update_attachment_with_document(
+                                            &state_clone,
+                                            attachment_id,
+                                            description,
+                                        )
+                                        .await
+                                        {
+                                            tracing::error!(
+                                                attachment_id = %attachment_id,
+                                                error = %e,
+                                                "Failed to update attachment with document results"
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let safe_error = sanitize_document_error(&e);
+                                        tracing::warn!(
+                                            attachment_id = %attachment_id,
+                                            error = %safe_error,
+                                            "Background document parsing failed"
+                                        );
+                                        if let Err(update_err) = mark_attachment_failed(
+                                            &state_clone,
+                                            attachment_id,
+                                            format!("Document parsing failed: {}", safe_error),
+                                        )
+                                        .await
+                                        {
+                                            tracing::error!(
+                                                attachment_id = %attachment_id,
+                                                error = %update_err,
+                                                "Failed to mark attachment as failed"
+                                            );
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    } // end size check
+                } else {
+                    tracing::debug!(
+                        attachment_id = %attachment.id,
+                        format = ?doc_format,
+                        "Document format not supported by parser"
+                    );
+                }
+            }
+        }
+    }
+
+    // Save attachment metadata
+    state.state_store.save_attachment(&attachment).await?;
+
+    // Generate presigned download URL (if supported)
+    let download_url = blob_store
+        .presign_get(&storage_key, PresignOptions::default())
+        .await
+        .ok()
+        .flatten();
+
+    let response = AttachmentResponse {
+        attachment,
+        download_url,
+        thumbnail_url: None,
+    };
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Helper function to update attachment with vision analysis results.
+async fn update_attachment_with_vision(
+    state: &AppState,
+    attachment_id: Uuid,
+    description: String,
+    model_name: &str,
+) -> Result<(), MnemoError> {
+    // Get the current attachment
+    let mut attachment = state
+        .state_store
+        .get_attachment(attachment_id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "Attachment".to_string(),
+            id: attachment_id.to_string(),
+        })?;
+
+    // Update with vision results
+    attachment.set_description(description);
+    attachment.mark_completed(model_name);
+
+    // Save updated attachment
+    state.state_store.save_attachment(&attachment).await?;
+
+    tracing::info!(
+        attachment_id = %attachment_id,
+        model = %model_name,
+        "Vision processing completed (background)"
+    );
+
+    Ok(())
+}
+
+/// Helper function to mark an attachment as failed.
+async fn mark_attachment_failed(
+    state: &AppState,
+    attachment_id: Uuid,
+    error: String,
+) -> Result<(), MnemoError> {
+    // Get the current attachment
+    let mut attachment = state
+        .state_store
+        .get_attachment(attachment_id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "Attachment".to_string(),
+            id: attachment_id.to_string(),
+        })?;
+
+    // Mark as failed
+    attachment.mark_failed(error);
+
+    // Save updated attachment
+    state.state_store.save_attachment(&attachment).await?;
+
+    Ok(())
+}
+
+/// P2-V3: Sanitize vision error messages to avoid leaking sensitive information.
+///
+/// Removes API keys, authorization tokens, and other sensitive details from
+/// error messages before logging or returning to users.
+fn sanitize_vision_error(error: &MnemoError) -> String {
+    let error_str = error.to_string();
+
+    // Check for common patterns that might contain sensitive info
+    // Remove anything that looks like an API key or token
+    let sanitized = if error_str.contains("API") || error_str.contains("key") {
+        // If the error mentions API/key, provide a generic message
+        if error_str.contains("401") || error_str.contains("Unauthorized") {
+            "Authentication failed with vision provider".to_string()
+        } else if error_str.contains("403") || error_str.contains("Forbidden") {
+            "Access denied by vision provider".to_string()
+        } else if error_str.contains("429") || error_str.contains("rate") {
+            "Rate limit exceeded for vision provider".to_string()
+        } else if error_str.contains("500") || error_str.contains("502") || error_str.contains("503") {
+            "Vision provider temporarily unavailable".to_string()
+        } else {
+            // Keep original but redact potential secrets (base64 or hex strings > 20 chars)
+            redact_secrets(&error_str)
+        }
+    } else {
+        // For non-API errors, still redact potential secrets
+        redact_secrets(&error_str)
+    };
+
+    sanitized
+}
+
+/// Redact potential secrets (long hex/base64 strings) from error messages.
+fn redact_secrets(s: &str) -> String {
+    // Simple heuristic: redact any alphanumeric string longer than 24 chars
+    // that looks like a token (no spaces, contains mix of chars)
+    let mut result = s.to_string();
+
+    // Find and redact long token-like strings
+    let words: Vec<&str> = s.split_whitespace().collect();
+    for word in words {
+        // Strip quotes and punctuation
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+        if clean.len() > 24 {
+            // Check if it looks like a token (mix of alphanumeric)
+            let has_letters = clean.chars().any(|c| c.is_alphabetic());
+            let has_digits = clean.chars().any(|c| c.is_ascii_digit());
+            if has_letters && has_digits {
+                result = result.replace(clean, "[REDACTED]");
+            }
+        }
+    }
+
+    result
+}
+
+/// Helper function to update attachment with transcription results.
+async fn update_attachment_with_transcription(
+    state: &AppState,
+    attachment_id: Uuid,
+    transcript: String,
+    duration_secs: Option<f32>,
+    model_name: &str,
+) -> Result<(), MnemoError> {
+    // Get the current attachment
+    let mut attachment = state
+        .state_store
+        .get_attachment(attachment_id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "Attachment".to_string(),
+            id: attachment_id.to_string(),
+        })?;
+
+    // Update with transcription results
+    attachment.set_transcript(transcript);
+    if let Some(duration) = duration_secs {
+        attachment.set_duration(duration);
+    }
+    attachment.mark_completed(model_name);
+
+    // Save updated attachment
+    state.state_store.save_attachment(&attachment).await?;
+
+    tracing::info!(
+        attachment_id = %attachment_id,
+        model = %model_name,
+        "Transcription completed (background)"
+    );
+
+    Ok(())
+}
+
+/// P3: Sanitize transcription error messages to avoid leaking sensitive information.
+fn sanitize_transcription_error(error: &MnemoError) -> String {
+    let error_str = error.to_string();
+
+    // Check for common patterns that might contain sensitive info
+    let sanitized = if error_str.contains("API") || error_str.contains("key") {
+        if error_str.contains("401") || error_str.contains("Unauthorized") {
+            "Authentication failed with transcription provider".to_string()
+        } else if error_str.contains("403") || error_str.contains("Forbidden") {
+            "Access denied by transcription provider".to_string()
+        } else if error_str.contains("429") || error_str.contains("rate") {
+            "Rate limit exceeded for transcription provider".to_string()
+        } else if error_str.contains("500") || error_str.contains("502") || error_str.contains("503")
+        {
+            "Transcription provider temporarily unavailable".to_string()
+        } else {
+            redact_secrets(&error_str)
+        }
+    } else {
+        redact_secrets(&error_str)
+    };
+
+    sanitized
+}
+
+/// Helper function to update attachment with document parsing results.
+async fn update_attachment_with_document(
+    state: &AppState,
+    attachment_id: Uuid,
+    description: String,
+) -> Result<(), MnemoError> {
+    // Get the current attachment
+    let mut attachment = state
+        .state_store
+        .get_attachment(attachment_id)
+        .await?
+        .ok_or_else(|| MnemoError::NotFound {
+            resource_type: "Attachment".to_string(),
+            id: attachment_id.to_string(),
+        })?;
+
+    // Update with document parsing results
+    attachment.set_description(description);
+    attachment.mark_completed("document-parser");
+
+    // Save updated attachment
+    state.state_store.save_attachment(&attachment).await?;
+
+    tracing::info!(
+        attachment_id = %attachment_id,
+        "Document parsing completed (background)"
+    );
+
+    Ok(())
+}
+
+/// P4: Sanitize document parsing error messages to avoid leaking sensitive information.
+fn sanitize_document_error(error: &MnemoError) -> String {
+    let error_str = error.to_string();
+
+    // Document parsing errors are generally safe, but redact file paths
+    let sanitized = if error_str.contains('/') || error_str.contains('\\') {
+        // Might contain file paths, provide generic message
+        "Document parsing failed".to_string()
+    } else if error_str.contains("memory") || error_str.contains("allocation") {
+        // Memory-related errors might leak system info
+        "Document too complex to parse".to_string()
+    } else if error_str.contains("corrupt") || error_str.contains("invalid") {
+        "Document format invalid or corrupted".to_string()
+    } else {
+        // For other errors, redact any long token-like strings
+        redact_secrets(&error_str)
+    };
+
+    sanitized
+}
+
+/// List attachments for an episode.
+#[utoipa::path(
+    get,
+    path = "/api/v1/episodes/{episode_id}/attachments",
+    params(
+        ("episode_id" = Uuid, Path, description = "Episode ID"),
+        ("limit" = Option<u32>, Query, description = "Max results (default 20)"),
+        ("after" = Option<Uuid>, Query, description = "Cursor for pagination"),
+    ),
+    responses(
+        (status = 200, description = "List of attachments", body = Vec<Attachment>),
+        (status = 404, description = "Episode not found"),
+    ),
+    tag = "attachments"
+)]
+async fn list_attachments(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(episode_id): Path<Uuid>,
+    Query(_params): Query<ListAttachmentsParams>,
+) -> Result<impl IntoResponse, AppError> {
+    // Verify episode exists and get user for auth check
+    let episode = state.state_store.get_episode(episode_id).await?;
+
+    // Authorization: verify caller can access this user's data
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(episode.user_id)?;
+
+    let attachments = state
+        .state_store
+        .list_attachments_for_episode(episode_id)
+        .await?;
+
+    Ok((StatusCode::OK, Json(ListResponse::new(attachments))))
+}
+
+/// Get attachment metadata.
+#[utoipa::path(
+    get,
+    path = "/api/v1/attachments/{attachment_id}",
+    params(
+        ("attachment_id" = Uuid, Path, description = "Attachment ID")
+    ),
+    responses(
+        (status = 200, description = "Attachment metadata", body = AttachmentResponse),
+        (status = 404, description = "Attachment not found"),
+    ),
+    tag = "attachments"
+)]
+async fn get_attachment(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(attachment_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let attachment = state
+        .state_store
+        .get_attachment(attachment_id)
+        .await?
+        .ok_or_else(|| {
+            MnemoError::NotFound {
+                resource_type: "Attachment".to_string(),
+                id: attachment_id.to_string(),
+            }
+        })?;
+
+    // Authorization: verify caller can access this user's data
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(attachment.user_id)?;
+
+    // Generate presigned URL if blob storage is available
+    let download_url = if let Some(ref blob_store) = state.blob_store {
+        blob_store
+            .presign_get(&attachment.storage_key, PresignOptions::default())
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    let response = AttachmentResponse {
+        attachment,
+        download_url,
+        thumbnail_url: None,
+    };
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+/// Download attachment content.
+#[utoipa::path(
+    get,
+    path = "/api/v1/attachments/{attachment_id}/download",
+    params(
+        ("attachment_id" = Uuid, Path, description = "Attachment ID")
+    ),
+    responses(
+        (status = 200, description = "Binary file content"),
+        (status = 404, description = "Attachment not found"),
+        (status = 503, description = "Blob storage not configured"),
+    ),
+    tag = "attachments"
+)]
+async fn download_attachment(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(attachment_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let blob_store = state.blob_store.as_ref().ok_or_else(|| {
+        MnemoError::ServiceUnavailable("Blob storage not configured".to_string())
+    })?;
+
+    let attachment = state
+        .state_store
+        .get_attachment(attachment_id)
+        .await?
+        .ok_or_else(|| {
+            MnemoError::NotFound {
+                resource_type: "Attachment".to_string(),
+                id: attachment_id.to_string(),
+            }
+        })?;
+
+    // Authorization: verify caller can access this user's data
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(attachment.user_id)?;
+
+    // Fetch from blob storage
+    let (data, _metadata) = blob_store
+        .get(&attachment.storage_key)
+        .await
+        .map_err(|e| MnemoError::Storage(format!("Failed to fetch: {}", e)))?;
+
+    // Build response with appropriate headers
+    // P2-5: Sanitize filename to prevent Content-Disposition header injection
+    let filename = attachment.filename.as_deref().unwrap_or("attachment");
+    let content_disposition = safe_content_disposition(filename);
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, attachment.mime_type.clone()),
+            (header::CONTENT_DISPOSITION, content_disposition),
+            (header::CONTENT_LENGTH, attachment.size_bytes.to_string()),
+            // P2-3: Prevent MIME sniffing attacks
+            (header::HeaderName::from_static("x-content-type-options"), "nosniff".to_string()),
+        ],
+        Body::from(data),
+    ))
+}
+
+/// Delete an attachment.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/attachments/{attachment_id}",
+    params(
+        ("attachment_id" = Uuid, Path, description = "Attachment ID")
+    ),
+    responses(
+        (status = 200, description = "Attachment deleted"),
+        (status = 404, description = "Attachment not found"),
+    ),
+    tag = "attachments"
+)]
+async fn delete_attachment(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(attachment_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let attachment = state
+        .state_store
+        .get_attachment(attachment_id)
+        .await?
+        .ok_or_else(|| {
+            MnemoError::NotFound {
+                resource_type: "Attachment".to_string(),
+                id: attachment_id.to_string(),
+            }
+        })?;
+
+    // Authorization: verify caller can access this user's data
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(attachment.user_id)?;
+
+    // Delete from blob storage (if configured)
+    if let Some(ref blob_store) = state.blob_store {
+        // Ignore errors - blob might already be deleted
+        let _ = blob_store.delete(&attachment.storage_key).await;
+    }
+
+    // Delete metadata
+    state.state_store.delete_attachment(attachment_id).await?;
+
+    Ok((StatusCode::OK, Json(DeleteResponse { deleted: true })))
+}
+
+/// Request for generating presigned URLs.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct PresignRequest {
+    /// Operation: "get" for download, "put" for upload.
+    #[serde(default = "default_presign_op")]
+    operation: String,
+    /// Expiration time in seconds (default 900 = 15 minutes).
+    #[serde(default = "default_presign_expires")]
+    expires_in_secs: u64,
+}
+
+fn default_presign_op() -> String {
+    "get".to_string()
+}
+
+fn default_presign_expires() -> u64 {
+    900
+}
+
+/// Response with presigned URL.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+struct PresignResponse {
+    url: String,
+    expires_in_secs: u64,
+}
+
+/// Generate a presigned URL for an attachment.
+#[utoipa::path(
+    post,
+    path = "/api/v1/attachments/{attachment_id}/presign",
+    params(
+        ("attachment_id" = Uuid, Path, description = "Attachment ID")
+    ),
+    request_body = PresignRequest,
+    responses(
+        (status = 200, description = "Presigned URL", body = PresignResponse),
+        (status = 404, description = "Attachment not found"),
+        (status = 501, description = "Presigning not supported by backend"),
+        (status = 503, description = "Blob storage not configured"),
+    ),
+    tag = "attachments"
+)]
+async fn presign_attachment(
+    State(state): State<AppState>,
+    caller: Option<Extension<CallerContext>>,
+    Path(attachment_id): Path<Uuid>,
+    Json(request): Json<PresignRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let blob_store = state.blob_store.as_ref().ok_or_else(|| {
+        MnemoError::ServiceUnavailable("Blob storage not configured".to_string())
+    })?;
+
+    let attachment = state
+        .state_store
+        .get_attachment(attachment_id)
+        .await?
+        .ok_or_else(|| {
+            MnemoError::NotFound {
+                resource_type: "Attachment".to_string(),
+                id: attachment_id.to_string(),
+            }
+        })?;
+
+    // Authorization: verify caller can access this user's data
+    let caller = caller_from_extension(caller);
+    caller.require_user_access(attachment.user_id)?;
+
+    // P2-2: Limit presigned URL expiration to 24 hours max
+    const MAX_PRESIGN_EXPIRY_SECS: u64 = 86400; // 24 hours
+    let expires_in_secs = request.expires_in_secs.min(MAX_PRESIGN_EXPIRY_SECS);
+
+    let options = PresignOptions {
+        expires_in: Duration::from_secs(expires_in_secs),
+        content_disposition: Some(format!(
+            "attachment; filename=\"{}\"",
+            attachment.filename.as_deref().unwrap_or("attachment")
+        )),
+    };
+
+    let url = match request.operation.as_str() {
+        "get" => blob_store
+            .presign_get(&attachment.storage_key, options)
+            .await
+            .map_err(|e| MnemoError::Storage(format!("Presign failed: {}", e)))?,
+        "put" => blob_store
+            .presign_put(&attachment.storage_key, &attachment.mime_type, options)
+            .await
+            .map_err(|e| MnemoError::Storage(format!("Presign failed: {}", e)))?,
+        _ => {
+            return Err(
+                MnemoError::BadRequest(format!("Invalid operation: {}", request.operation)).into(),
+            )
+        }
+    };
+
+    let url = url.ok_or_else(|| {
+        MnemoError::NotImplemented("Presigning not supported by this backend".to_string())
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(PresignResponse {
+            url,
+            expires_in_secs, // Return actual (possibly capped) value
+        }),
+    ))
+}
+
+/// Sanitize a filename for safe storage.
+fn sanitize_filename(name: &str) -> String {
+    // Remove path separators and other dangerous characters
+    name.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .take(255)
+        .collect()
+}
+
+/// P2-5: Create a safe Content-Disposition header value.
+/// Strips control characters and escapes quotes to prevent header injection.
+fn safe_content_disposition(filename: &str) -> String {
+    // Remove control characters, quotes, and backslashes
+    let safe: String = filename
+        .chars()
+        .filter(|c| !c.is_control() && *c != '"' && *c != '\\' && *c != '\r' && *c != '\n')
+        .take(255)
+        .collect();
+
+    // If filename is ASCII-safe, use simple form
+    if safe.is_ascii() {
+        format!("attachment; filename=\"{}\"", safe)
+    } else {
+        // Use RFC 5987 extended notation for Unicode
+        // Percent-encode non-ASCII characters
+        let encoded: String = safe
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || "-_.~".contains(c) {
+                    c.to_string()
+                } else {
+                    c.to_string()
+                        .bytes()
+                        .map(|b| format!("%{:02X}", b))
+                        .collect()
+                }
+            })
+            .collect();
+        format!("attachment; filename=\"{}\"; filename*=UTF-8''{}",
+                safe.chars().filter(|c| c.is_ascii()).collect::<String>(),
+                encoded)
+    }
+}
+
+/// Get file extension from MIME type.
+fn mime_extension(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/wav" => "wav",
+        "audio/webm" => "webm",
+        "audio/ogg" => "ogg",
+        "audio/m4a" | "audio/x-m4a" => "m4a",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "application/pdf" => "pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+        "text/plain" => "txt",
+        "text/markdown" => "md",
+        _ => "bin",
+    }
 }
 
 #[cfg(test)]

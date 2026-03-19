@@ -363,6 +363,11 @@ export interface ContextOptions {
   contract?: string;
   policy?: string;
   requestId?: string;
+  /**
+   * Filter by content modality. Supported: 'text', 'image', 'audio', 'document'.
+   * Empty array includes all modalities.
+   */
+  includeModalities?: Array<'text' | 'image' | 'audio' | 'document' | 'video'>;
 }
 
 export interface GraphEntitiesOptions {
@@ -718,5 +723,52 @@ export interface AgentListOptions {
 
 export interface RollbackOptions {
   reason?: string;
+  requestId?: string;
+}
+
+// ─── Multi-modal attachments ───────────────────────────────────────
+
+export type AttachmentType = 'image' | 'audio' | 'video' | 'document';
+export type Modality = 'text' | 'image' | 'audio' | 'video' | 'document';
+
+export interface Attachment {
+  id: string;
+  episode_id: string;
+  user_id: string;
+  attachment_type: AttachmentType;
+  mime_type: string;
+  filename?: string;
+  size_bytes: number;
+  storage_key: string;
+  processing_status: 'pending' | 'processing' | 'completed' | 'failed';
+  description?: string;
+  transcript?: string;
+  duration_secs?: number;
+  created_at: string;
+  updated_at: string;
+  processed_at?: string;
+  processor_model?: string;
+  error?: string;
+}
+
+export interface AttachmentResult {
+  attachment: Attachment;
+  download_url?: string;
+  thumbnail_url?: string;
+  request_id?: string;
+}
+
+export interface AttachmentSource {
+  attachment_id: string;
+  episode_id: string;
+  modality: Modality;
+  mime_type: string;
+  download_url?: string;
+  thumbnail_url?: string;
+  description?: string;
+  relevance_score: number;
+}
+
+export interface UploadAttachmentOptions {
   requestId?: string;
 }

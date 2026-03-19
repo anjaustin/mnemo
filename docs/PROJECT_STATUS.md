@@ -1,6 +1,91 @@
 # Project Status
 
-Current version: **v0.9.0**
+Current version: **v0.9.1**
+
+---
+
+## Latest: Security Red-Team Audit Complete
+
+**Date**: March 2026  
+**Scope**: Comprehensive security audit of all Mnemo subsystems
+
+### Audit Coverage
+- Auth & API Keys
+- Encryption (BYOK, at-rest)
+- gRPC API
+- Webhooks
+- Memory/Retrieval endpoints
+- Graph API
+- Import/Export
+- Agent Identity
+- Guardrails/Policies
+- SDKs
+
+### Remediations by Severity
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| P0 (Critical) | 4 | ✅ Complete |
+| P1 (High) | 5 | ✅ Complete |
+| P2 (Medium) | 7 | ✅ Complete |
+| P3 (Low) | 7 | ✅ Complete |
+| **Total** | **23** | **✅ All Complete** |
+
+### Key Fixes
+- **P0-1**: User-scoped access control on all REST + gRPC endpoints
+- **P0-2**: CSPRNG API key generation (moved from UUID to OsRng)
+- **P0-3**: SSRF protection with IP validation and redirect blocking
+- **P0-4**: gRPC entity/edge ownership verification
+- **P1-1**: Timestamp validation on imports (±5min future, ≤10 years past)
+- **P1-4**: ReDoS protection with regex size limits
+- **P1-5**: DNS rebinding protection at webhook delivery
+- **P2-1**: Constant-time API key comparison (subtle crate)
+- **P3-5**: Nil UUID collision fix (distinct sentinel UUIDs)
+
+See [SECURITY_REMEDIATION_PLAN.md](SECURITY_REMEDIATION_PLAN.md) for full details.
+
+---
+
+## Roadmap: Next Step-Changes
+
+### Multi-Tenancy (v0.10.0) — PRD Complete
+Organization → Workspace → User hierarchy with shared memory pools, RBAC, and scoped API keys. See [MULTI_TENANCY_PRD.md](MULTI_TENANCY_PRD.md).
+
+### Multi-Modal Memory (v0.11.0) — In Progress
+Image, audio, and document memory support. See [MULTI_MODAL_PRD.md](MULTI_MODAL_PRD.md).
+
+**Phase 1 Foundation — COMPLETE ✅**
+- `Modality` enum and `Attachment` model (`crates/mnemo-core/src/models/attachment.rs`)
+- `BlobStore` trait (`crates/mnemo-core/src/traits/blob.rs`)
+- `LocalBlobStore` implementation (`crates/mnemo-storage/src/local_blob_store.rs`)
+- `S3BlobStore` implementation (`crates/mnemo-storage/src/s3_blob_store.rs`)
+- `AttachmentStore` trait and Redis implementation
+- `BlobSection` configuration (`crates/mnemo-server/src/config.rs`)
+- Episode model extended with `modality`, `attachment_ids`, `parent_document_id`
+- `BlobHandle` type-erased wrapper in AppState (`crates/mnemo-server/src/state.rs`)
+- REST endpoints for attachments:
+  - `POST /api/v1/episodes/{episode_id}/attachments` - Upload attachment
+  - `GET /api/v1/episodes/{episode_id}/attachments` - List attachments
+  - `GET /api/v1/attachments/{attachment_id}` - Get metadata
+  - `GET /api/v1/attachments/{attachment_id}/download` - Download content
+  - `DELETE /api/v1/attachments/{attachment_id}` - Delete attachment
+  - `POST /api/v1/attachments/{attachment_id}/presign` - Get presigned URL
+
+**Phase 1 Security Fixes:**
+- P1-1: Authorization checks on all attachment endpoints (CallerContext)
+- P1-2: Path traversal protection in LocalBlobStore (canonicalization)
+- P1-3: Symlink traversal protection in list() function
+- P2-2: Presigned URL expiration capped at 24 hours
+- P2-5: Content-Disposition header injection prevention
+- P3-3: Async file existence checks (tokio::fs::try_exists)
+
+**Remaining Phases:**
+- Phase 2: VisionProvider + image upload endpoints
+- Phase 3: TranscriptionProvider + audio upload endpoints
+- Phase 4: Document parsing and chunking
+- Phase 5: Multi-modal retrieval and SDK extensions
+
+---
 
 ## Completed Phases
 
@@ -134,9 +219,40 @@ gh release download --repo anjaustin/mnemo --pattern 'mnemo-server-*'
 docker pull ghcr.io/anjaustin/mnemo/mnemo-server:latest
 ```
 
+## Existing Capabilities (Verified)
+
+The following capabilities were verified as fully implemented during the security audit:
+
+### Memory Consolidation & Forgetting
+- Sleep-time consolidation pipeline with idle-triggered digest generation
+- EWC++ (Elastic Weight Consolidation) for experience decay resistance
+- Exponential decay curves with configurable half-life (30 days experiences, 90 days edges)
+- Tiered embedding compression (f32 → f16 → int8 → binary)
+- Contradiction detection (LLM-based + GNN ContraGat classifier)
+- Automatic fact supersession for conflicting facts
+- Stale fact detection and revalidation endpoints
+
+### Distributed/Federated Support
+- CRDT sync module (1551 lines) with HLC, vector clocks, GCounter, LWWRegister, ORSet
+- Multi-node sync via `MNEMO_SYNC_ENABLED` configuration
+- Qdrant distributed mode ready (documented scaling path)
+- Stateless architecture for horizontal scaling
+
+### Active Memory Framework
+- 13 webhook event types for memory lifecycle events
+- Self-healing clarification system (detect → question → answer → heal)
+- Sleep-time compute with proactive re-ranking
+- Evolving user narrative summaries
+- Goal-conditioned retrieval
+- Memory digests with topic extraction
+
+---
+
 ## Roadmap
 
 See:
 - [P0_ROADMAP.md](P0_ROADMAP.md) — completed capability gaps
+- [MULTI_TENANCY_PRD.md](MULTI_TENANCY_PRD.md) — next major feature (v0.10.0)
+- [MULTI_MODAL_PRD.md](MULTI_MODAL_PRD.md) — multi-modal memory (v0.11.0)
 - [DOMAIN_READINESS_MATRIX.md](DOMAIN_READINESS_MATRIX.md) — domain-by-domain readiness
 - [FACE_MELTER_FEATURES.md](FACE_MELTER_FEATURES.md) — differentiation features (10/12 shipped)
