@@ -149,8 +149,7 @@ impl OpenAIVisionProvider {
                 MnemoError::Config("MNEMO_VISION_API_KEY or OPENAI_API_KEY is required".to_string())
             })?;
 
-        let model =
-            std::env::var("MNEMO_VISION_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+        let model = std::env::var("MNEMO_VISION_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
 
         let config = VisionConfig {
             provider: "openai".to_string(),
@@ -171,12 +170,14 @@ impl VisionProvider for OpenAIVisionProvider {
         format: ImageFormat,
         prompt: Option<&str>,
     ) -> VisionResult<VisionAnalysis> {
-        let api_key = self.config.api_key.as_deref().ok_or_else(|| {
-            MnemoError::LlmProvider {
+        let api_key = self
+            .config
+            .api_key
+            .as_deref()
+            .ok_or_else(|| MnemoError::LlmProvider {
                 provider: "openai_vision".into(),
                 message: "API key is required".into(),
-            }
-        })?;
+            })?;
 
         // Encode image as base64 data URL
         let image_b64 = BASE64.encode(image_data);
@@ -231,12 +232,11 @@ impl VisionProvider for OpenAIVisionProvider {
             });
         }
 
-        let api_response: VisionResponse = response.json().await.map_err(|e| {
-            MnemoError::LlmProvider {
+        let api_response: VisionResponse =
+            response.json().await.map_err(|e| MnemoError::LlmProvider {
                 provider: "openai_vision".into(),
                 message: format!("Failed to parse response: {}", e),
-            }
-        })?;
+            })?;
 
         // Extract text from response
         let response_text = api_response
@@ -355,8 +355,7 @@ mod tests {
 
     #[test]
     fn test_parse_vision_response_json() {
-        let json =
-            r#"{"description": "A test image", "entities": [], "tags": ["test"], "scene_type": "photo"}"#;
+        let json = r#"{"description": "A test image", "entities": [], "tags": ["test"], "scene_type": "photo"}"#;
         let result = parse_vision_response(json).unwrap();
         assert_eq!(result.description, "A test image");
         assert_eq!(result.tags, vec!["test"]);

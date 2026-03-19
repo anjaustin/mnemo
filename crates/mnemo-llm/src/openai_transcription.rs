@@ -89,8 +89,8 @@ impl OpenAITranscriptionProvider {
                 )
             })?;
 
-        let model = std::env::var("MNEMO_TRANSCRIPTION_MODEL")
-            .unwrap_or_else(|_| "whisper-1".to_string());
+        let model =
+            std::env::var("MNEMO_TRANSCRIPTION_MODEL").unwrap_or_else(|_| "whisper-1".to_string());
 
         let language = std::env::var("MNEMO_TRANSCRIPTION_LANGUAGE").ok();
 
@@ -114,12 +114,14 @@ impl TranscriptionProvider for OpenAITranscriptionProvider {
         format: AudioFormat,
         filename: Option<&str>,
     ) -> TranscriptionResult<Transcription> {
-        let api_key = self.config.api_key.as_deref().ok_or_else(|| {
-            MnemoError::LlmProvider {
+        let api_key = self
+            .config
+            .api_key
+            .as_deref()
+            .ok_or_else(|| MnemoError::LlmProvider {
                 provider: "openai_transcription".into(),
                 message: "API key is required".into(),
-            }
-        })?;
+            })?;
 
         // Determine filename for the multipart upload
         let file_name = filename
@@ -178,12 +180,11 @@ impl TranscriptionProvider for OpenAITranscriptionProvider {
         }
 
         // Parse verbose JSON response
-        let api_response: VerboseTranscriptionResponse = response.json().await.map_err(|e| {
-            MnemoError::LlmProvider {
+        let api_response: VerboseTranscriptionResponse =
+            response.json().await.map_err(|e| MnemoError::LlmProvider {
                 provider: "openai_transcription".into(),
                 message: format!("Failed to parse response: {}", e),
-            }
-        })?;
+            })?;
 
         // Convert segments
         let segments: Vec<TranscriptSegment> = api_response
@@ -216,9 +217,9 @@ impl TranscriptionProvider for OpenAITranscriptionProvider {
             .collect();
 
         // Calculate duration from segments if not provided
-        let duration_secs = api_response.duration.or_else(|| {
-            segments.last().map(|s| s.end)
-        });
+        let duration_secs = api_response
+            .duration
+            .or_else(|| segments.last().map(|s| s.end));
 
         let transcription = Transcription {
             text: api_response.text.trim().to_string(),

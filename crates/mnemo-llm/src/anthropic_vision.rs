@@ -167,12 +167,14 @@ impl VisionProvider for AnthropicVisionProvider {
         format: ImageFormat,
         prompt: Option<&str>,
     ) -> VisionResult<VisionAnalysis> {
-        let api_key = self.config.api_key.as_deref().ok_or_else(|| {
-            MnemoError::LlmProvider {
+        let api_key = self
+            .config
+            .api_key
+            .as_deref()
+            .ok_or_else(|| MnemoError::LlmProvider {
                 provider: "anthropic_vision".into(),
                 message: "API key is required".into(),
-            }
-        })?;
+            })?;
 
         // Encode image as base64
         let image_b64 = BASE64.encode(image_data);
@@ -228,12 +230,11 @@ impl VisionProvider for AnthropicVisionProvider {
             });
         }
 
-        let api_response: VisionResponse = response.json().await.map_err(|e| {
-            MnemoError::LlmProvider {
+        let api_response: VisionResponse =
+            response.json().await.map_err(|e| MnemoError::LlmProvider {
                 provider: "anthropic_vision".into(),
                 message: format!("Failed to parse response: {}", e),
-            }
-        })?;
+            })?;
 
         // Extract text from response
         let response_text = api_response

@@ -27,8 +27,8 @@
 
 use std::sync::Arc;
 
-use mnemo_mcp::{McpConfig, McpServer};
 use mnemo_mcp::sse::{run_sse, SseConfig};
+use mnemo_mcp::{McpConfig, McpServer};
 
 #[tokio::main]
 async fn main() {

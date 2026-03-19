@@ -236,7 +236,9 @@ impl DocumentFormat {
             Self::Pdf => "application/pdf",
             Self::Docx => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             Self::Doc => "application/msword",
-            Self::Pptx => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            Self::Pptx => {
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            }
             Self::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             Self::Rtf => "application/rtf",
             Self::Txt => "text/plain",
@@ -258,9 +260,7 @@ impl DocumentFormat {
             "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
                 Some(Self::Pptx)
             }
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
-                Some(Self::Xlsx)
-            }
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some(Self::Xlsx),
             "application/rtf" | "text/rtf" => Some(Self::Rtf),
             "text/plain" => Some(Self::Txt),
             "text/markdown" | "text/x-markdown" => Some(Self::Markdown),

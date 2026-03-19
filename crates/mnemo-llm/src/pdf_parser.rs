@@ -53,10 +53,7 @@ impl DocumentParser for PdfParser {
             MnemoError::DocumentParsing(format!("Failed to extract text from PDF: {}", e))
         })?;
 
-        debug!(
-            text_length = text.len(),
-            "Extracted text from PDF"
-        );
+        debug!(text_length = text.len(), "Extracted text from PDF");
 
         // Split by pages (pdf-extract uses form feed character \x0c as page separator)
         let pages: Vec<&str> = text.split('\x0c').collect();
@@ -321,7 +318,11 @@ fn is_likely_heading(line: &str) -> bool {
     }
 
     // All caps (common for headings)
-    if line.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase()) {
+    if line
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .all(|c| c.is_uppercase())
+    {
         return line.len() > 3 && line.len() < 60;
     }
 
@@ -476,7 +477,9 @@ mod tests {
         assert!(is_likely_heading("1. Introduction"));
         assert!(is_likely_heading("Chapter 1"));
         assert!(is_likely_heading("The Quick Brown Fox")); // Title case
-        assert!(!is_likely_heading("This is a regular sentence with many words."));
+        assert!(!is_likely_heading(
+            "This is a regular sentence with many words."
+        ));
         assert!(!is_likely_heading("a")); // Too short
     }
 

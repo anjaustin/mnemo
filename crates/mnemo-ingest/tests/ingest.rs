@@ -473,7 +473,7 @@ async fn test_ingest_entity_dedup_across_episodes() {
                     metadata: serde_json::json!({}),
                     agent_id: None,
                     created_at: None,
-                modality: Default::default(),
+                    modality: Default::default(),
                 },
                 session_id,
                 user_id,

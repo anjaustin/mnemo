@@ -205,8 +205,7 @@ mod sse_tests {
         // Should either reject or sanitize, not use the malicious session_id
         // For now, we just verify it doesn't panic
         assert!(
-            response.status() == StatusCode::OK
-                || response.status() == StatusCode::BAD_REQUEST
+            response.status() == StatusCode::OK || response.status() == StatusCode::BAD_REQUEST
         );
     }
 
@@ -287,8 +286,7 @@ mod sse_tests {
 
         // Should reject or sanitize null bytes
         assert!(
-            response.status() == StatusCode::OK
-                || response.status() == StatusCode::BAD_REQUEST
+            response.status() == StatusCode::OK || response.status() == StatusCode::BAD_REQUEST
         );
     }
 }

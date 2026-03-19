@@ -53,9 +53,9 @@ impl LocalBlobStore {
 
         // For existing files, canonicalize and verify containment
         if path.exists() {
-            let canonical = path.canonicalize().map_err(|e| {
-                MnemoError::Storage(format!("Failed to canonicalize path: {}", e))
-            })?;
+            let canonical = path
+                .canonicalize()
+                .map_err(|e| MnemoError::Storage(format!("Failed to canonicalize path: {}", e)))?;
             let base_canonical = self.base_path.canonicalize().map_err(|e| {
                 MnemoError::Storage(format!("Failed to canonicalize base path: {}", e))
             })?;
@@ -110,9 +110,9 @@ impl BlobStore for LocalBlobStore {
 
         let size_bytes = data.len() as u64;
 
-        fs::write(&path, &data).await.map_err(|e| {
-            MnemoError::Storage(format!("Failed to write blob {:?}: {}", path, e))
-        })?;
+        fs::write(&path, &data)
+            .await
+            .map_err(|e| MnemoError::Storage(format!("Failed to write blob {:?}: {}", path, e)))?;
 
         // Store content type in sidecar file
         self.write_content_type(key, content_type).await?;
@@ -142,25 +142,24 @@ impl BlobStore for LocalBlobStore {
         let path = self.full_path(key)?;
         self.ensure_parent_dir(&path).await?;
 
-        let mut file = fs::File::create(&path).await.map_err(|e| {
-            MnemoError::Storage(format!("Failed to create file {:?}: {}", path, e))
-        })?;
+        let mut file = fs::File::create(&path)
+            .await
+            .map_err(|e| MnemoError::Storage(format!("Failed to create file {:?}: {}", path, e)))?;
 
         let mut total_bytes = 0u64;
 
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| {
-                MnemoError::Storage(format!("Failed to read stream chunk: {}", e))
-            })?;
+            let chunk = chunk_result
+                .map_err(|e| MnemoError::Storage(format!("Failed to read stream chunk: {}", e)))?;
             total_bytes += chunk.len() as u64;
             file.write_all(&chunk).await.map_err(|e| {
                 MnemoError::Storage(format!("Failed to write chunk to {:?}: {}", path, e))
             })?;
         }
 
-        file.flush().await.map_err(|e| {
-            MnemoError::Storage(format!("Failed to flush file {:?}: {}", path, e))
-        })?;
+        file.flush()
+            .await
+            .map_err(|e| MnemoError::Storage(format!("Failed to flush file {:?}: {}", path, e)))?;
 
         // Store content type in sidecar file
         self.write_content_type(key, content_type).await?;
@@ -263,7 +262,11 @@ impl BlobStore for LocalBlobStore {
 
     /// Local blob store does not support pre-signed URLs.
     /// Use a reverse proxy or serve files directly for local access.
-    async fn presign_get(&self, _key: &str, _options: PresignOptions) -> BlobResult<Option<String>> {
+    async fn presign_get(
+        &self,
+        _key: &str,
+        _options: PresignOptions,
+    ) -> BlobResult<Option<String>> {
         Ok(None)
     }
 
@@ -287,9 +290,10 @@ impl BlobStore for LocalBlobStore {
         }
 
         // P1-3: Get canonical base path for symlink containment checks
-        let base_canonical = self.base_path.canonicalize().map_err(|e| {
-            MnemoError::Storage(format!("Failed to canonicalize base path: {}", e))
-        })?;
+        let base_canonical = self
+            .base_path
+            .canonicalize()
+            .map_err(|e| MnemoError::Storage(format!("Failed to canonicalize base path: {}", e)))?;
 
         let mut results = Vec::new();
         let mut stack = vec![base];
@@ -404,7 +408,10 @@ mod tests {
         let (store, _temp) = create_test_store().await;
 
         let data = b"Hello, World!".to_vec();
-        let metadata = store.put("test/hello.txt", data.clone(), "text/plain").await.unwrap();
+        let metadata = store
+            .put("test/hello.txt", data.clone(), "text/plain")
+            .await
+            .unwrap();
 
         assert_eq!(metadata.key, "test/hello.txt");
         assert_eq!(metadata.size_bytes, 13);
@@ -429,7 +436,10 @@ mod tests {
 
         assert!(!store.exists("test.txt").await.unwrap());
 
-        store.put("test.txt", b"data".to_vec(), "text/plain").await.unwrap();
+        store
+            .put("test.txt", b"data".to_vec(), "text/plain")
+            .await
+            .unwrap();
 
         assert!(store.exists("test.txt").await.unwrap());
     }
@@ -438,7 +448,10 @@ mod tests {
     async fn test_delete() {
         let (store, _temp) = create_test_store().await;
 
-        store.put("test.txt", b"data".to_vec(), "text/plain").await.unwrap();
+        store
+            .put("test.txt", b"data".to_vec(), "text/plain")
+            .await
+            .unwrap();
         assert!(store.exists("test.txt").await.unwrap());
 
         store.delete("test.txt").await.unwrap();
@@ -449,7 +462,10 @@ mod tests {
     async fn test_head() {
         let (store, _temp) = create_test_store().await;
 
-        store.put("test.txt", b"Hello".to_vec(), "text/plain").await.unwrap();
+        store
+            .put("test.txt", b"Hello".to_vec(), "text/plain")
+            .await
+            .unwrap();
 
         let metadata = store.head("test.txt").await.unwrap();
         assert_eq!(metadata.size_bytes, 5);
@@ -460,7 +476,10 @@ mod tests {
     async fn test_copy() {
         let (store, _temp) = create_test_store().await;
 
-        store.put("source.txt", b"data".to_vec(), "text/plain").await.unwrap();
+        store
+            .put("source.txt", b"data".to_vec(), "text/plain")
+            .await
+            .unwrap();
 
         let metadata = store.copy("source.txt", "dest.txt").await.unwrap();
         assert_eq!(metadata.key, "dest.txt");
@@ -474,9 +493,18 @@ mod tests {
     async fn test_list() {
         let (store, _temp) = create_test_store().await;
 
-        store.put("prefix/a.txt", b"a".to_vec(), "text/plain").await.unwrap();
-        store.put("prefix/b.txt", b"b".to_vec(), "text/plain").await.unwrap();
-        store.put("other/c.txt", b"c".to_vec(), "text/plain").await.unwrap();
+        store
+            .put("prefix/a.txt", b"a".to_vec(), "text/plain")
+            .await
+            .unwrap();
+        store
+            .put("prefix/b.txt", b"b".to_vec(), "text/plain")
+            .await
+            .unwrap();
+        store
+            .put("other/c.txt", b"c".to_vec(), "text/plain")
+            .await
+            .unwrap();
 
         let results = store.list("prefix", 100).await.unwrap();
         assert_eq!(results.len(), 2);
@@ -491,7 +519,10 @@ mod tests {
         let (store, _temp) = create_test_store().await;
 
         let data = b"nested data".to_vec();
-        store.put("a/b/c/d/file.txt", data.clone(), "text/plain").await.unwrap();
+        store
+            .put("a/b/c/d/file.txt", data.clone(), "text/plain")
+            .await
+            .unwrap();
 
         let (retrieved, _) = store.get("a/b/c/d/file.txt").await.unwrap();
         assert_eq!(retrieved, data);
@@ -501,10 +532,16 @@ mod tests {
     async fn test_presign_not_supported() {
         let (store, _temp) = create_test_store().await;
 
-        let url = store.presign_get("test.txt", PresignOptions::default()).await.unwrap();
+        let url = store
+            .presign_get("test.txt", PresignOptions::default())
+            .await
+            .unwrap();
         assert!(url.is_none());
 
-        let url = store.presign_put("test.txt", "text/plain", PresignOptions::default()).await.unwrap();
+        let url = store
+            .presign_put("test.txt", "text/plain", PresignOptions::default())
+            .await
+            .unwrap();
         assert!(url.is_none());
     }
 }

@@ -265,7 +265,12 @@ pub enum BlobHandle {
 }
 
 impl BlobHandle {
-    pub async fn put(&self, key: &str, data: Vec<u8>, content_type: &str) -> BlobResult<BlobMetadata> {
+    pub async fn put(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> BlobResult<BlobMetadata> {
         match self {
             BlobHandle::Local(store) => store.put(key, data, content_type).await,
             BlobHandle::S3(store) => store.put(key, data, content_type).await,
@@ -300,7 +305,11 @@ impl BlobHandle {
         }
     }
 
-    pub async fn presign_get(&self, key: &str, options: PresignOptions) -> BlobResult<Option<String>> {
+    pub async fn presign_get(
+        &self,
+        key: &str,
+        options: PresignOptions,
+    ) -> BlobResult<Option<String>> {
         match self {
             BlobHandle::Local(store) => store.presign_get(key, options).await,
             BlobHandle::S3(store) => store.presign_get(key, options).await,
@@ -467,10 +476,9 @@ impl DocumentHandle {
             DocumentFormat::Txt | DocumentFormat::Markdown | DocumentFormat::Html => {
                 self.text_parser.parse(data, format, config).await
             }
-            _ => Err(mnemo_core::error::MnemoError::UnsupportedMediaType(format!(
-                "Document format {:?} not yet supported",
-                format
-            ))),
+            _ => Err(mnemo_core::error::MnemoError::UnsupportedMediaType(
+                format!("Document format {:?} not yet supported", format),
+            )),
         }
     }
 

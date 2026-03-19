@@ -26,7 +26,8 @@ pub fn list_resource_templates() -> Vec<ResourceTemplate> {
         ResourceTemplate {
             uri_template: "mnemo://users/{user}/entities".to_string(),
             name: "User Entities".to_string(),
-            description: "List of entities in the user's knowledge graph (default: 50).".to_string(),
+            description: "List of entities in the user's knowledge graph (default: 50)."
+                .to_string(),
             mime_type: "application/json".to_string(),
         },
         ResourceTemplate {
@@ -59,7 +60,8 @@ pub fn list_resource_templates() -> Vec<ResourceTemplate> {
         ResourceTemplate {
             uri_template: "mnemo://agents/{agent_id}/experience".to_string(),
             name: "Agent Experience".to_string(),
-            description: "Recent experience events for agent identity evolution (default: 20).".to_string(),
+            description: "Recent experience events for agent identity evolution (default: 20)."
+                .to_string(),
             mime_type: "application/json".to_string(),
         },
         ResourceTemplate {
@@ -775,7 +777,9 @@ mod tests {
         // Missing query parameter
         let result = read_resource(&server, "mnemo://users/alice/search").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("requires a 'q' query parameter"));
+        assert!(result
+            .unwrap_err()
+            .contains("requires a 'q' query parameter"));
     }
 
     #[tokio::test]

@@ -27,11 +27,7 @@ const MAX_PROMPT_NAME_DISPLAY: usize = 64;
 
 /// Validate and sanitize a prompt argument.
 /// Returns an error if the argument exceeds the max length or contains dangerous characters.
-fn validate_argument(
-    name: &str,
-    value: &str,
-    max_length: usize,
-) -> Result<(), String> {
+fn validate_argument(name: &str, value: &str, max_length: usize) -> Result<(), String> {
     // Check length
     if value.len() > max_length {
         return Err(format!(
@@ -42,10 +38,7 @@ fn validate_argument(
 
     // Check for null bytes (could cause issues in C libraries or logging)
     if value.contains('\0') {
-        return Err(format!(
-            "Argument '{}' contains invalid null byte",
-            name
-        ));
+        return Err(format!("Argument '{}' contains invalid null byte", name));
     }
 
     // Check for path traversal attempts in identifier-type arguments
@@ -212,13 +205,12 @@ async fn get_memory_context_prompt(
     );
 
     let memories = match server.get(&path).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            resp.json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                .unwrap_or_else(|| "No memories found.".to_string())
-        }
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| serde_json::to_string_pretty(&v).ok())
+            .unwrap_or_else(|| "No memories found.".to_string()),
         _ => "Unable to retrieve memories.".to_string(),
     };
 
@@ -242,22 +234,19 @@ async fn get_memory_summary_prompt(
     server: &McpServer,
     args: &HashMap<String, String>,
 ) -> Result<PromptGetResult, String> {
-    let user = args
-        .get("user")
-        .ok_or("Missing required argument: user")?;
+    let user = args.get("user").ok_or("Missing required argument: user")?;
     validate_argument("user", user, MAX_IDENTIFIER_LENGTH)?;
 
     // Fetch digest
     let path = format!("/api/v1/users/{}/digest", urlencoding::encode(user));
 
     let digest = match server.get(&path).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            resp.json::<serde_json::Value>()
-                .await
-                .ok()
-                .and_then(|v| v.get("digest").and_then(|d| d.as_str()).map(String::from))
-                .unwrap_or_else(|| "No summary available.".to_string())
-        }
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("digest").and_then(|d| d.as_str()).map(String::from))
+            .unwrap_or_else(|| "No summary available.".to_string()),
         _ => "Unable to retrieve memory summary.".to_string(),
     };
 
@@ -342,9 +331,7 @@ async fn get_entity_analysis_prompt(
         .ok_or("Missing required argument: entity")?;
     validate_argument("entity", entity, MAX_IDENTIFIER_LENGTH)?;
 
-    let user = args
-        .get("user")
-        .ok_or("Missing required argument: user")?;
+    let user = args.get("user").ok_or("Missing required argument: user")?;
     validate_argument("user", user, MAX_IDENTIFIER_LENGTH)?;
 
     // Fetch entity neighbors
@@ -393,9 +380,7 @@ fn get_remember_conversation_prompt(
         .ok_or("Missing required argument: conversation")?;
     validate_argument("conversation", conversation, MAX_CONVERSATION_LENGTH)?;
 
-    let user = args
-        .get("user")
-        .ok_or("Missing required argument: user")?;
+    let user = args.get("user").ok_or("Missing required argument: user")?;
     validate_argument("user", user, MAX_IDENTIFIER_LENGTH)?;
 
     Ok(PromptGetResult {
@@ -443,14 +428,22 @@ mod tests {
     #[test]
     fn test_all_prompts_have_descriptions() {
         for prompt in list_prompts() {
-            assert!(prompt.description.is_some(), "Prompt {} missing description", prompt.name);
+            assert!(
+                prompt.description.is_some(),
+                "Prompt {} missing description",
+                prompt.name
+            );
         }
     }
 
     #[test]
     fn test_all_prompts_have_titles() {
         for prompt in list_prompts() {
-            assert!(prompt.title.is_some(), "Prompt {} missing title", prompt.name);
+            assert!(
+                prompt.title.is_some(),
+                "Prompt {} missing title",
+                prompt.name
+            );
         }
     }
 
@@ -512,7 +505,10 @@ mod tests {
         });
 
         let mut args = HashMap::new();
-        args.insert("conversation".to_string(), "User: Hello\nAssistant: Hi there!".to_string());
+        args.insert(
+            "conversation".to_string(),
+            "User: Hello\nAssistant: Hi there!".to_string(),
+        );
         args.insert("user".to_string(), "alice".to_string());
 
         let result = get_prompt(&server, "remember-conversation", Some(&args)).await;

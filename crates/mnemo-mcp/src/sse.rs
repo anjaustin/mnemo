@@ -57,8 +57,7 @@ impl Default for SseConfig {
 impl SseConfig {
     pub fn from_env() -> Self {
         Self {
-            host: std::env::var("MNEMO_MCP_SSE_HOST")
-                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            host: std::env::var("MNEMO_MCP_SSE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("MNEMO_MCP_SSE_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -184,10 +183,7 @@ pub fn router(state: Arc<SseState>) -> Router {
 ///
 /// Accepts a JSON-RPC request body and returns a JSON-RPC response.
 /// This is the primary endpoint for MCP tool calls over HTTP.
-async fn handle_post_message(
-    State(state): State<Arc<SseState>>,
-    body: String,
-) -> Response {
+async fn handle_post_message(State(state): State<Arc<SseState>>, body: String) -> Response {
     let body = body.trim();
     if body.is_empty() {
         return (
@@ -226,7 +222,8 @@ async fn handle_post_message(
 async fn handle_sse_stream(
     State(state): State<Arc<SseState>>,
     Query(query): Query<SseQuery>,
-) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, (StatusCode, String)> {
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, (StatusCode, String)>
+{
     // Validate session ID if provided
     let session_id = match query.session_id {
         Some(ref id) => {
@@ -289,7 +286,10 @@ async fn handle_health() -> impl IntoResponse {
 ///
 /// This starts an HTTP server that handles MCP requests over HTTP/SSE.
 /// Use this for web-based agents or remote integrations.
-pub async fn run_sse(mcp: Arc<McpServer>, config: SseConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run_sse(
+    mcp: Arc<McpServer>,
+    config: SseConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(SseState::new(mcp));
     let app = router(state);
 
@@ -446,13 +446,15 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast_notification() {
         let state = test_state();
-        
+
         // Subscribe before broadcasting
         let mut rx = state.notifications.subscribe();
-        
+
         // Broadcast a notification
-        state.broadcast(SseNotification::resource_updated("mnemo://users/test/memory"));
-        
+        state.broadcast(SseNotification::resource_updated(
+            "mnemo://users/test/memory",
+        ));
+
         // Should receive the notification
         let received = rx.try_recv();
         assert!(received.is_ok());

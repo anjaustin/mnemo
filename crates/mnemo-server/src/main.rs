@@ -52,8 +52,8 @@ use mnemo_storage::{LocalBlobStore, S3BlobStore, S3BlobStoreConfig};
 use mnemo_graph::GraphEngine;
 use mnemo_ingest::{IngestConfig, IngestWorker};
 use mnemo_llm::{
-    AnthropicProvider, AnthropicVisionProvider, EmbedderKind, OpenAiCompatibleEmbedder,
-    OpenAiCompatibleProvider, OpenAITranscriptionProvider, OpenAIVisionProvider,
+    AnthropicProvider, AnthropicVisionProvider, EmbedderKind, OpenAITranscriptionProvider,
+    OpenAIVisionProvider, OpenAiCompatibleEmbedder, OpenAiCompatibleProvider,
 };
 #[cfg(feature = "local-embed")]
 use mnemo_llm::{FastEmbedder, DEFAULT_LOCAL_DIMENSIONS, DEFAULT_LOCAL_MODEL};

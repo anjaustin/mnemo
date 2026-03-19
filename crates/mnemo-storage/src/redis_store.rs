@@ -3227,7 +3227,13 @@ impl AttachmentStore for RedisStateStore {
         };
 
         let ids: Vec<String> = conn
-            .zrangebyscore_limit(&user_key, start_score, f64::INFINITY, 0, params.limit as isize)
+            .zrangebyscore_limit(
+                &user_key,
+                start_score,
+                f64::INFINITY,
+                0,
+                params.limit as isize,
+            )
             .await
             .map_err(|e| MnemoError::Redis(e.to_string()))?;
 

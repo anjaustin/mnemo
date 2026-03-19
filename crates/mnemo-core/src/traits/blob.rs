@@ -113,7 +113,9 @@ pub trait BlobStore: Send + Sync {
     async fn put_stream(
         &self,
         key: &str,
-        stream: Box<dyn futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send + Unpin>,
+        stream: Box<
+            dyn futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send + Unpin,
+        >,
         content_type: &str,
         content_length: u64,
     ) -> BlobResult<BlobMetadata>;

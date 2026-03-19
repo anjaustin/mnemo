@@ -47,7 +47,8 @@ impl S3BlobStoreConfig {
 
         Ok(Self {
             bucket,
-            region: std::env::var("MNEMO_BLOB_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+            region: std::env::var("MNEMO_BLOB_S3_REGION")
+                .unwrap_or_else(|_| "us-east-1".to_string()),
             endpoint: std::env::var("MNEMO_BLOB_S3_ENDPOINT").ok(),
             access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
             secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
@@ -99,8 +100,8 @@ impl S3BlobStore {
                 .region(Region::new(config.region.clone()))
                 .load()
                 .await;
-            s3_config_builder =
-                s3_config_builder.credentials_provider(sdk_config.credentials_provider().unwrap().clone());
+            s3_config_builder = s3_config_builder
+                .credentials_provider(sdk_config.credentials_provider().unwrap().clone());
         }
 
         let s3_config = s3_config_builder.build();
@@ -177,9 +178,8 @@ impl BlobStore for S3BlobStore {
         let mut stream = stream;
 
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| {
-                MnemoError::Storage(format!("Failed to read stream chunk: {}", e))
-            })?;
+            let chunk = chunk_result
+                .map_err(|e| MnemoError::Storage(format!("Failed to read stream chunk: {}", e)))?;
             data.extend_from_slice(&chunk);
         }
 
@@ -249,7 +249,14 @@ impl BlobStore for S3BlobStore {
 
     #[instrument(skip(self), fields(key = %key))]
     async fn exists(&self, key: &str) -> BlobResult<bool> {
-        match self.client.head_object().bucket(&self.bucket).key(key).send().await {
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
             Ok(_) => Ok(true),
             Err(e) => {
                 let err_str = e.to_string();
@@ -304,11 +311,7 @@ impl BlobStore for S3BlobStore {
             .build()
             .map_err(|e| MnemoError::Storage(format!("Failed to build presign config: {}", e)))?;
 
-        let mut request = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key);
+        let mut request = self.client.get_object().bucket(&self.bucket).key(key);
 
         if let Some(disposition) = options.content_disposition {
             request = request.response_content_disposition(disposition);
@@ -357,7 +360,9 @@ impl BlobStore for S3BlobStore {
             .max_keys(max_keys as i32)
             .send()
             .await
-            .map_err(|e| MnemoError::Storage(format!("S3 list failed for prefix '{}': {}", prefix, e)))?;
+            .map_err(|e| {
+                MnemoError::Storage(format!("S3 list failed for prefix '{}': {}", prefix, e))
+            })?;
 
         let mut results: Vec<BlobMetadata> = Vec::new();
         for object in response.contents() {

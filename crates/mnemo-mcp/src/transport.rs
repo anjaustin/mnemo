@@ -810,7 +810,8 @@ mod tests {
     #[tokio::test]
     async fn test_prompts_get_unknown_prompt() {
         let server = test_server();
-        let msg = r#"{"jsonrpc":"2.0","id":302,"method":"prompts/get","params":{"name":"nonexistent"}}"#;
+        let msg =
+            r#"{"jsonrpc":"2.0","id":302,"method":"prompts/get","params":{"name":"nonexistent"}}"#;
         let resp = handle_message(&server, msg).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 

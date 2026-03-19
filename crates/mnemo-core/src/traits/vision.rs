@@ -155,7 +155,10 @@ pub trait VisionProvider: Send + Sync {
     /// Check if the provider supports a given image format.
     fn supports_format(&self, format: ImageFormat) -> bool {
         // Most providers support all common formats
-        matches!(format, ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::Gif | ImageFormat::Webp)
+        matches!(
+            format,
+            ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::Gif | ImageFormat::Webp
+        )
     }
 
     /// Get the maximum supported image size in bytes.
@@ -197,10 +200,16 @@ mod tests {
 
     #[test]
     fn test_image_format_from_mime() {
-        assert_eq!(ImageFormat::from_mime("image/jpeg"), Some(ImageFormat::Jpeg));
+        assert_eq!(
+            ImageFormat::from_mime("image/jpeg"),
+            Some(ImageFormat::Jpeg)
+        );
         assert_eq!(ImageFormat::from_mime("image/png"), Some(ImageFormat::Png));
         assert_eq!(ImageFormat::from_mime("image/gif"), Some(ImageFormat::Gif));
-        assert_eq!(ImageFormat::from_mime("image/webp"), Some(ImageFormat::Webp));
+        assert_eq!(
+            ImageFormat::from_mime("image/webp"),
+            Some(ImageFormat::Webp)
+        );
         assert_eq!(ImageFormat::from_mime("image/bmp"), None);
         assert_eq!(ImageFormat::from_mime("text/plain"), None);
     }

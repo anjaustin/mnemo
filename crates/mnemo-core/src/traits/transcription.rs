@@ -300,8 +300,14 @@ mod tests {
         assert_eq!(AudioFormat::from_mime("audio/mp3"), Some(AudioFormat::Mp3));
         assert_eq!(AudioFormat::from_mime("audio/mp4"), Some(AudioFormat::Mp4));
         assert_eq!(AudioFormat::from_mime("audio/wav"), Some(AudioFormat::Wav));
-        assert_eq!(AudioFormat::from_mime("audio/webm"), Some(AudioFormat::Webm));
-        assert_eq!(AudioFormat::from_mime("audio/flac"), Some(AudioFormat::Flac));
+        assert_eq!(
+            AudioFormat::from_mime("audio/webm"),
+            Some(AudioFormat::Webm)
+        );
+        assert_eq!(
+            AudioFormat::from_mime("audio/flac"),
+            Some(AudioFormat::Flac)
+        );
         assert_eq!(AudioFormat::from_mime("audio/ogg"), Some(AudioFormat::Ogg));
         assert_eq!(AudioFormat::from_mime("video/mp4"), None);
         assert_eq!(AudioFormat::from_mime("text/plain"), None);
@@ -318,7 +324,10 @@ mod tests {
     fn test_transcription_format_openai() {
         assert_eq!(TranscriptionFormat::Text.openai_format(), "text");
         assert_eq!(TranscriptionFormat::Json.openai_format(), "json");
-        assert_eq!(TranscriptionFormat::VerboseJson.openai_format(), "verbose_json");
+        assert_eq!(
+            TranscriptionFormat::VerboseJson.openai_format(),
+            "verbose_json"
+        );
         assert_eq!(TranscriptionFormat::Srt.openai_format(), "srt");
         assert_eq!(TranscriptionFormat::Vtt.openai_format(), "vtt");
     }

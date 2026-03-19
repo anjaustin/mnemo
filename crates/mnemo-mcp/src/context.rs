@@ -105,9 +105,9 @@ impl AgentContext {
     ///
     /// This allows agents to have their own memory space without a real user.
     pub fn synthetic_user_id(&self) -> Option<Uuid> {
-        self.agent_id.as_ref().map(|agent_id| {
-            Uuid::new_v5(&Uuid::NAMESPACE_OID, agent_id.as_bytes())
-        })
+        self.agent_id
+            .as_ref()
+            .map(|agent_id| Uuid::new_v5(&Uuid::NAMESPACE_OID, agent_id.as_bytes()))
     }
 }
 
