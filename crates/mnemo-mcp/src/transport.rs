@@ -297,7 +297,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
 
         let templates = parsed["result"]["resourceTemplates"].as_array().unwrap();
-        assert_eq!(templates.len(), 5);
+        assert_eq!(templates.len(), 11); // 5 user, 1 episode, 3 agent, 2 graph
     }
 
     #[tokio::test]
