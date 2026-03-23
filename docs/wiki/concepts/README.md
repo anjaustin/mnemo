@@ -12,6 +12,7 @@ Understanding Mnemo's data model and architecture.
 | **[Episodes](episodes.md)** | The atomic unit of memory |
 | **[Entities & Edges](entities-and-edges.md)** | The knowledge graph |
 | **[Temporal Model](temporal-model.md)** | How facts change over time |
+| **[Evidence-First Memory](evidence-first-memory.md)** | Why evidence visibility matters in hybrid retrieval |
 
 Sessions and Users are covered in the [Overview](overview.md).
 
@@ -34,6 +35,10 @@ Every fact has `valid_at` (when it became true) and `invalid_at` (when supersede
 ### 4. Retrieval is Hybrid
 
 Context assembly combines semantic search, full-text search, and graph traversal for comprehensive recall.
+
+### 5. Evidence Matters
+
+Hybrid retrieval is powerful, but different retrieval paths can disagree. Mnemo treats that as an important design consideration for future diagnostics, evaluation, and context assembly.
 
 ---
 
@@ -62,3 +67,4 @@ Output: Context ("Alice works at Acme Corp as VP Sales")
 2. **[Episodes](episodes.md)** - Understand input types
 3. **[Entities & Edges](entities-and-edges.md)** - Understand the graph
 4. **[Temporal Model](temporal-model.md)** - Understand time handling
+5. **[Evidence-First Memory](evidence-first-memory.md)** - Explore evidence visibility in hybrid retrieval

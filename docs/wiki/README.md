@@ -39,6 +39,7 @@ Understanding Mnemo's data model:
 - **[Episodes](concepts/episodes.md)** - The atomic unit of memory
 - **[Entities & Edges](concepts/entities-and-edges.md)** - The knowledge graph
 - **[Temporal Model](concepts/temporal-model.md)** - How facts change over time
+- **[Evidence-First Memory](concepts/evidence-first-memory.md)** - Why disagreement and evidence visibility matter
 
 For sessions and users, see the [Overview](concepts/overview.md).
 
