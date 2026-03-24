@@ -7,13 +7,13 @@ Last updated: 2026-03-23
 
 ## 1) Goal
 
-Preserve semantic, full-text, and graph retrieval results long enough to inspect them separately before fusion, without intentionally changing default fused retrieval output or ranking behavior.
+Preserve semantic, full-text, and graph-derived results long enough to inspect them separately before fusion or final assembly, without intentionally changing default fused retrieval output or ranking behavior.
 
 This is the simplest prior-signal opportunity because it adds observability first. It does not require evidence-deference policies, LoRA gating, or replacing the default retrieval contract.
 
 ## 2) Problem
 
-Today Mnemo fuses retrieval channels before returning context. That means:
+Today Mnemo fuses retrieval channels before returning context, and graph-derived context is added after fused entity selection. That means:
 
 - disagreement is hard to inspect
 - evaluation cannot easily compare channels on the same query
@@ -24,7 +24,7 @@ Today Mnemo fuses retrieval channels before returning context. That means:
 ### In scope
 
 - retain per-channel retrieval results inside the retrieval pipeline before fusion
-- add an internal diagnostics structure for semantic, full-text, and graph channel outputs
+- add an internal diagnostics structure for semantic, full-text, and graph-derived outputs
 - optionally expose that structure behind a request flag or debug field
 - keep default context behavior unchanged
 
@@ -45,6 +45,8 @@ Today Mnemo fuses retrieval channels before returning context. That means:
 
 When diagnostics are explicitly requested, the response includes an optional channel-level retrieval diagnostics object.
 
+In v1, the graph-related field should be named to reflect what it actually is: graph expansion from fused seeds, not a fully independent graph retrieval lane.
+
 Proposed request surface (non-final):
 
 ```json
@@ -60,7 +62,7 @@ Candidate response shape:
 ```json
 {
   "context": "...",
-  "sources": ["semantic", "full_text", "graph"],
+  "sources": ["semantic", "full_text", "graph_expansion"],
   "retrieval_channels": {
     "semantic": {
       "backend": "qdrant",
@@ -70,8 +72,9 @@ Candidate response shape:
       "backend": "redis_fulltext",
       "results": [ ... ]
     },
-    "graph": {
+    "graph_expansion": {
       "backend": "graph_traversal",
+      "derived_from": "fused_entity_seeds",
       "results": [ ... ]
     }
   }
@@ -83,6 +86,7 @@ Notes:
 - `retrieval_channels` should be optional and omitted by default
 - current fused fields remain the primary contract
 - open question: whether a later public-facing payload should use `literal` for readability; v1 should stay consistent with `full_text`
+- in v1, `graph_expansion` is intentionally named to avoid overstating graph independence
 
 ## 5) Technical Design
 
@@ -106,7 +110,7 @@ Add optional types similar to:
 pub struct RetrievalChannels {
     pub semantic: Option<ChannelResults>,
     pub full_text: Option<ChannelResults>,
-    pub graph: Option<ChannelResults>,
+    pub graph_expansion: Option<ChannelResults>,
 }
 
 pub struct ChannelResults {
@@ -117,6 +121,8 @@ pub struct ChannelResults {
 ```
 
 `ChannelHit` should be intentionally minimal in v1. It only needs enough information for debugging and evals, not a second full public retrieval API.
+
+For `graph_expansion`, the diagnostics should also make the derivation explicit, for example with a field such as `derived_from: "fused_entity_seeds"`.
 
 Recommended fields:
 
@@ -134,9 +140,9 @@ Do not expose every internal reranker detail in v1. The goal is channel visibili
 
 1. Default context responses remain backward compatible.
 2. A request flag enables channel diagnostics on the primary user context endpoint in v1.
-3. Semantic, literal, and graph outputs can be inspected separately before fusion.
+3. Semantic and full-text outputs can be inspected pre-fusion, and graph-derived outputs can be inspected as post-seed expansion.
 4. Tests verify that channel diagnostics are omitted by default and present when requested.
-5. Docs clearly state that these diagnostics are observational and do not imply authority ordering.
+5. Docs clearly state that these diagnostics are observational, do not imply authority ordering, and do not treat `graph_expansion` as a fully independent retrieval lane.
 
 ## 7) Risks
 
@@ -166,3 +172,4 @@ This is the best first step because it creates learning without forcing a produc
 - useful on its own for debugging and evals
 - safe relative to stronger policy features
 - creates the baseline needed for future disagreement scoring, evidence annotations, or policy modes
+- keeps the graph path honest in v1 by exposing it as expansion rather than overstating it as an independent lane

@@ -15,7 +15,7 @@ This PRD captures the strategic opportunities that follow from that framing.
 
 ## 2) Problem Statement
 
-Today Mnemo assembles context from semantic, full-text, and graph retrieval. But the system currently optimizes for fused relevance, which means:
+Today Mnemo assembles context from semantic retrieval, full-text retrieval, and graph-derived expansion. But the system currently optimizes for fused relevance, which means:
 
 1. disagreement between retrieval channels can be hidden before operators or agents see it
 2. personalization effects can shape retrieval without corresponding observability
@@ -26,7 +26,7 @@ This is not a condemnation of current Mnemo. It is a logical next area if we wan
 
 ## 3) Product Goals
 
-1. **Make disagreement visible.** Preserve and expose useful differences between semantic, literal, and graph retrieval behavior.
+1. **Make disagreement visible.** Preserve and expose useful differences between semantic retrieval, full-text retrieval, and graph-derived expansion behavior.
 2. **Make personalization inspectable.** Add observability around TinyLoRA's effect when it is enabled.
 3. **Improve operator trust.** Help users understand why context was assembled the way it was.
 4. **Create evidence-first options.** Over time, support risk-aware context behaviors for use cases that need more caution.
@@ -44,7 +44,7 @@ This is not a condemnation of current Mnemo. It is a logical next area if we wan
 
 ### 5.1) Channel Visibility
 
-Preserve semantic, full-text, and graph outputs long enough to inspect them separately before fusion.
+Preserve semantic outputs, full-text outputs, and graph-derived expansion long enough to inspect them separately before fusion or final assembly.
 
 Why it matters:
 
@@ -54,7 +54,7 @@ Why it matters:
 
 Competitive edge:
 
-- most systems talk about hybrid retrieval; fewer help users understand when hybrid signals conflict
+- most systems talk about hybrid retrieval; fewer help users understand when semantic, full-text, and graph-derived signals conflict
 
 ### 5.2) Evidence-Annotated Context
 
@@ -135,7 +135,7 @@ Rationale:
 
 This initiative is directionally successful when:
 
-- Mnemo can inspect channel behavior separately before fusion
+- Mnemo can inspect semantic and full-text behavior pre-fusion and graph-derived expansion behavior before final assembly
 - live usage and evals can identify disagreement-driven failures
 - docs and operator materials can explain evidence visibility honestly and precisely
 - future policy work, if any, is grounded in actual observations rather than design intuition alone
@@ -156,4 +156,4 @@ This initiative is directionally successful when:
 
 ## 9) Decision
 
-The first concrete step should be channel visibility before fusion. It improves observability, evaluation quality, and future option value without forcing immediate user-facing behavioral changes.
+The first concrete step should be channel visibility before fusion and final assembly. In v1, that means exposing semantic and full-text retrieval directly while labeling the graph path honestly as `graph_expansion` derived from fused entity seeds. This improves observability, evaluation quality, and future option value without forcing immediate user-facing behavioral changes.

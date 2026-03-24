@@ -23,6 +23,7 @@ This checklist maps `docs/PRIOR_SIGNAL_CHANNEL_VISIBILITY_SPEC.md` onto the curr
 - Add `retrieval_channels: Option<RetrievalChannels>` to `ContextBlock`.
 - Keep `retrieval_channels` omitted by default with `skip_serializing_if = "Option::is_none"`.
 - Update `ContextBlock::empty()` in `crates/mnemo-core/src/models/context.rs` to initialize the field as `None`.
+- Name the v1 graph-related field `graph_expansion`, not `graph`, to reflect that it is derived from fused entity seeds.
 - If gRPC is included in v1, add corresponding optional response fields in `proto/mnemo/v1/memory.proto`.
 
 ## 3. Retrieval Engine Changes
@@ -30,6 +31,7 @@ This checklist maps `docs/PRIOR_SIGNAL_CHANNEL_VISIBILITY_SPEC.md` onto the curr
 - In `crates/mnemo-retrieval/src/lib.rs`, preserve semantic hits before `merge_hits` for entities, facts, and episodes.
 - Preserve full-text hits before fusion in the same retrieval path.
 - Preserve graph-derived results around the graph traversal block before they are folded into final context assembly.
+- Treat graph-derived diagnostics as post-seed expansion, not as a pre-fusion peer to semantic and full-text retrieval.
 - Build channel diagnostics before later steps mutate the results, including:
   - temporal scoring
   - structured context assembly
@@ -53,7 +55,8 @@ This checklist maps `docs/PRIOR_SIGNAL_CHANNEL_VISIBILITY_SPEC.md` onto the curr
   - omitted serialization when the flag is absent
   - omitted serialization when `retrieval_channels` is `None`
 - Add retrieval tests in `crates/mnemo-retrieval/src/lib.rs` to verify:
-  - semantic/full-text/graph snapshots are captured pre-fusion
+  - semantic and full-text snapshots are captured pre-fusion
+  - graph expansion is captured as post-seed diagnostics rather than a fully independent lane
   - diagnostics are absent when not requested
 - Add REST integration tests in `crates/mnemo-server/tests/memory_api.rs` for:
   - `/api/v1/users/{id}/context`
@@ -76,10 +79,11 @@ This checklist maps `docs/PRIOR_SIGNAL_CHANNEL_VISIBILITY_SPEC.md` onto the curr
 - Should the diagnostics key use `full_text` in v1 for consistency with internals?
 - Should channel diagnostics represent raw retrieval output only, or post-policy output after memory-route contract and view mutations?
 - What is the exact absent-vs-empty contract for channels?
+- Should `graph_expansion` also expose `derived_from` metadata in v1?
 
 ## 8. Known Traps in the Current Codebase
 
-- The graph channel is not a fully independent ranked retrieval path today; it is derived from already-fused entity seeds.
+- The graph path is not a fully independent ranked retrieval path today; it is derived from already-fused entity seeds.
 - Memory routes mutate `ContextBlock` after retrieval through contracts, views, guardrails, and goal logic, so diagnostics timing must be explicit.
 - Current storage and full-text traits return compact hit tuples, not rich preview payloads.
 - GNN reranking happens after semantic/full-text entity fusion, so channel snapshots must be captured before that if v1 means truly pre-fusion diagnostics.
@@ -92,6 +96,7 @@ The smallest credible v1 is:
 - `POST /api/v1/users/{user_id}/context` first
 - optional `include_retrieval_channels`
 - minimal channel payloads with IDs, kind, and score
+- use `graph_expansion` with explicit derivation metadata rather than implying an independent graph lane
 - no SDK changes required yet
 - no gRPC or MCP surface changes in the first cut
 
@@ -100,4 +105,4 @@ The smallest credible v1 is:
 - A context request flag enables pre-fusion channel diagnostics on the primary user context endpoint.
 - Default behavior remains backward compatible.
 - Tests cover absent/default behavior and diagnostics-enabled behavior.
-- Documentation clearly states that the field is diagnostic and does not imply authority ordering.
+- Documentation clearly states that the field is diagnostic, does not imply authority ordering, and treats `graph_expansion` as derived context rather than an independent retrieval channel.
