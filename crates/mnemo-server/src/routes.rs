@@ -14408,30 +14408,30 @@ async fn upload_attachment(
 
     // P2-V1: Validate image size before vision processing to prevent memory exhaustion
     // P2-V5: Use Arc to share image data instead of cloning
-    let image_data_for_vision: Option<std::sync::Arc<Vec<u8>>> =
-        if attachment_type == AttachmentType::Image {
-            // Only keep reference if we might do vision processing
-            if let (Some(vision), Some(_config)) =
-                (state.vision.as_ref(), state.vision_config.as_ref())
-            {
-                // Validate size against vision provider limits
-                let max_vision_size = vision.max_image_size();
-                if size_bytes > max_vision_size {
-                    tracing::warn!(
-                        size = size_bytes,
-                        max = max_vision_size,
-                        "Image exceeds vision provider size limit, skipping vision processing"
-                    );
-                    None
-                } else {
-                    Some(std::sync::Arc::new(data.clone()))
-                }
-            } else {
+    let image_data_for_vision: Option<std::sync::Arc<Vec<u8>>> = if attachment_type
+        == AttachmentType::Image
+    {
+        // Only keep reference if we might do vision processing
+        if let (Some(vision), Some(_config)) = (state.vision.as_ref(), state.vision_config.as_ref())
+        {
+            // Validate size against vision provider limits
+            let max_vision_size = vision.max_image_size();
+            if size_bytes > max_vision_size {
+                tracing::warn!(
+                    size = size_bytes,
+                    max = max_vision_size,
+                    "Image exceeds vision provider size limit, skipping vision processing"
+                );
                 None
+            } else {
+                Some(std::sync::Arc::new(data.clone()))
             }
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
 
     // P3: Audio data for transcription processing
     let audio_data_for_transcription: Option<std::sync::Arc<Vec<u8>>> =
@@ -14961,7 +14961,6 @@ fn sanitize_vision_error(error: &MnemoError) -> String {
 
     // Check for common patterns that might contain sensitive info
     // Remove anything that looks like an API key or token
-    
 
     if error_str.contains("API") || error_str.contains("key") {
         // If the error mentions API/key, provide a generic message
@@ -15052,7 +15051,6 @@ fn sanitize_transcription_error(error: &MnemoError) -> String {
     let error_str = error.to_string();
 
     // Check for common patterns that might contain sensitive info
-    
 
     if error_str.contains("API") || error_str.contains("key") {
         if error_str.contains("401") || error_str.contains("Unauthorized") {
@@ -15110,7 +15108,6 @@ fn sanitize_document_error(error: &MnemoError) -> String {
     let error_str = error.to_string();
 
     // Document parsing errors are generally safe, but redact file paths
-    
 
     if error_str.contains('/') || error_str.contains('\\') {
         // Might contain file paths, provide generic message
