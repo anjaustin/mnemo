@@ -218,6 +218,76 @@ jobs:
             kill "$(cat /tmp/mnemo-server.pid)" || true
           fi
 
+  docker-local-override-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and start local-source Docker stack
+        env:
+          MNEMO_LLM_PROVIDER: none
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+
+      - name: Wait for Mnemo health
+        run: |
+          python3 - <<'PY'
+          import time
+          import urllib.request
+
+          deadline = time.time() + 180
+          url = "http://127.0.0.1:8080/healthz"
+          while True:
+              try:
+                  with urllib.request.urlopen(url, timeout=2) as resp:
+                      if resp.status == 200:
+                          print("mnemo server healthy")
+                          break
+              except Exception:
+                  pass
+              if time.time() > deadline:
+                  raise SystemExit("Timed out waiting for local-source Docker stack")
+              time.sleep(2)
+          PY
+
+      - name: Exercise remember and immediate recall
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          base = "http://127.0.0.1:8080"
+
+          remember_req = urllib.request.Request(
+              base + "/api/v1/memory",
+              data=json.dumps({
+                  "user": "ci-local-override",
+                  "text": "I prefer hand-ground espresso.",
+                  "role": "user",
+              }).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(remember_req, timeout=10) as resp:
+              remember = json.load(resp)
+          assert remember["ok"] is True, remember
+
+          context_req = urllib.request.Request(
+              base + "/api/v1/memory/ci-local-override/context",
+              data=json.dumps({"query": "How do I like my coffee?"}).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(context_req, timeout=10) as resp:
+              context = json.load(resp)
+          assert "hand-ground espresso" in context["context"], context
+          PY
+
+      - name: Stop local-source Docker stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
+
       - name: Dump Mnemo server log on failure
         if: failure()
         run: |

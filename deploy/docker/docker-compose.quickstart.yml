@@ -59,9 +59,6 @@ services:
   # ── Mnemo Server ──────────────────────────────────────────────────
   mnemo:
     image: ghcr.io/anjaustin/mnemo/mnemo-server:${MNEMO_VERSION:-latest}
-    # Published image is currently amd64-only; Docker Desktop can emulate it on
-    # Apple Silicon until a multi-arch image is available.
-    platform: linux/amd64
     container_name: mnemo-server
     restart: unless-stopped
     ports:

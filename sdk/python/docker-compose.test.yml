@@ -50,9 +50,6 @@ services:
 
   # ── Mnemo Server ─────────────────────────────────────────────────────────
   test-mnemo:
-    # Keep SDK integration builds aligned with the published amd64 runtime image
-    # until the Dockerfile and release images are fully multi-arch.
-    platform: linux/amd64
     build:
       context: ../..
       dockerfile: Dockerfile

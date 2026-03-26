@@ -9,6 +9,7 @@ FROM rust:slim-bookworm AS builder
 WORKDIR /build
 
 ARG ORT_VERSION=1.23.0
+ARG TARGETARCH
 
 # Install build dependencies (protobuf-compiler needed by mnemo-proto / tonic-build)
 RUN apt-get update && apt-get install -y \
@@ -21,7 +22,12 @@ RUN apt-get update && apt-get install -y \
 
 # Download ONNX Runtime shared library for fastembed local embeddings.
 RUN mkdir -p /opt/ort \
-    && curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" -o /tmp/onnxruntime.tgz \
+    && case "${TARGETARCH}" in \
+        amd64) ORT_ARCH="x64" ;; \
+        arm64) ORT_ARCH="aarch64" ;; \
+        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ORT_ARCH}-${ORT_VERSION}.tgz" -o /tmp/onnxruntime.tgz \
     && tar -xzf /tmp/onnxruntime.tgz -C /opt/ort \
     && rm /tmp/onnxruntime.tgz
 
@@ -68,20 +74,37 @@ RUN cargo build --release --bin mnemo-server --bin mnemo-mcp-server
 FROM debian:bookworm-slim AS runtime-rootfs
 
 ARG ORT_VERSION=1.23.0
+ARG TARGETARCH
 
 RUN mkdir -p /rootfs/app/lib /rootfs/app/config /rootfs/app/.fastembed_cache
 
+RUN --mount=from=builder,source=/opt/ort,target=/builder-ort,ro \
+    --mount=from=builder,source=/,target=/builder-root,ro \
+    case "${TARGETARCH}" in \
+      amd64) \
+        ORT_ARCH="x64"; \
+        GNU_TRIPLE="x86_64-linux-gnu" \
+        ;; \
+      arm64) \
+        ORT_ARCH="aarch64"; \
+        GNU_TRIPLE="aarch64-linux-gnu" \
+        ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && LIBDIR="/builder-root/lib/${GNU_TRIPLE}" \
+    && if [ ! -f "${LIBDIR}/libssl.so.3" ]; then LIBDIR="/builder-root/usr/lib/${GNU_TRIPLE}"; fi \
+    && cp "/builder-ort/onnxruntime-linux-${ORT_ARCH}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION}" /rootfs/app/lib/libonnxruntime.so.${ORT_VERSION} \
+    && cp "${LIBDIR}/libssl.so.3" /rootfs/app/lib/libssl.so.3 \
+    && cp "${LIBDIR}/libcrypto.so.3" /rootfs/app/lib/libcrypto.so.3 \
+    && cp "${LIBDIR}/libgcc_s.so.1" /rootfs/app/lib/libgcc_s.so.1 \
+    && cp "${LIBDIR}/libstdc++.so.6" /rootfs/app/lib/libstdc++.so.6
+
 COPY --from=builder /build/target/release/mnemo-server /rootfs/app/mnemo-server
 COPY --from=builder /build/target/release/mnemo-mcp-server /rootfs/app/mnemo-mcp-server
-COPY --from=builder /opt/ort/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.1.23.0 /rootfs/app/lib/libonnxruntime.so.1.23.0
 COPY config/ /rootfs/app/config/
-COPY --from=builder /lib/x86_64-linux-gnu/libssl.so.3 /rootfs/app/lib/libssl.so.3
-COPY --from=builder /lib/x86_64-linux-gnu/libcrypto.so.3 /rootfs/app/lib/libcrypto.so.3
-COPY --from=builder /lib/x86_64-linux-gnu/libgcc_s.so.1 /rootfs/app/lib/libgcc_s.so.1
-COPY --from=builder /lib/x86_64-linux-gnu/libstdc++.so.6 /rootfs/app/lib/libstdc++.so.6
 
-RUN ln -s libonnxruntime.so.1.23.0 /rootfs/app/lib/libonnxruntime.so.1 \
-    && ln -s libonnxruntime.so.1.23.0 /rootfs/app/lib/libonnxruntime.so
+RUN ln -s "libonnxruntime.so.${ORT_VERSION}" /rootfs/app/lib/libonnxruntime.so.1 \
+    && ln -s "libonnxruntime.so.${ORT_VERSION}" /rootfs/app/lib/libonnxruntime.so
 
 # ── Stage 3: Final image ────────────────────────────────────────────
 FROM gcr.io/distroless/base-nossl-debian12:nonroot AS runtime

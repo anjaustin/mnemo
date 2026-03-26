@@ -10,9 +10,6 @@
 
 services:
   mnemo:
-    # The Dockerfile currently packages the published amd64 runtime layout, so
-    # local source builds use the same target platform for parity.
-    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile

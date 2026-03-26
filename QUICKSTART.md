@@ -39,9 +39,8 @@ instead of pulling the published image:
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 ```
 
-On Apple Silicon, the published quickstart image runs under Docker's amd64
-emulation. The local source override uses the same Docker target platform for
-now, but rebuilds from your checkout so code changes are reflected.
+The Docker image and local-source override support both `linux/amd64` and
+`linux/arm64`, so Apple Silicon and ARM servers can run natively.
 
 ## 2. Verify it works
 
