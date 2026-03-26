@@ -9,7 +9,7 @@ Complete reference for all Mnemo configuration options.
 Mnemo configuration is loaded in order (later sources override earlier):
 
 1. **Built-in defaults**
-2. **TOML file** (`config/default.toml` or `MNEMO_CONFIG_PATH`)
+2. **TOML file** (`config/default.toml` or `MNEMO_CONFIG`)
 3. **Environment variables** (prefix: `MNEMO_`)
 
 ---
@@ -20,27 +20,25 @@ Mnemo configuration is loaded in order (later sources override earlier):
 
 | Variable | TOML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `MNEMO_HOST` | `server.host` | `0.0.0.0` | Bind address |
-| `MNEMO_PORT` | `server.port` | `8080` | HTTP/gRPC port |
-| `MNEMO_WORKERS` | `server.workers` | CPU count | Async workers |
-| `MNEMO_REQUEST_TIMEOUT` | `server.request_timeout` | `30` | Request timeout (seconds) |
-| `MNEMO_CORS_ORIGINS` | `server.cors_origins` | `*` | CORS allowed origins (CSV) |
+| `MNEMO_SERVER_HOST` | `server.host` | `0.0.0.0` | Bind address |
+| `MNEMO_SERVER_PORT` | `server.port` | `8080` | HTTP port |
+| `MNEMO_GRPC_PORT` | `server.grpc_port` | unset | Optional dedicated gRPC port |
+| `MNEMO_CORS_ALLOWED_ORIGINS` | `server.cors_allowed_origins` | `*` | CORS allowed origins (CSV) |
 
 ### Redis
 
 | Variable | TOML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `REDIS_URL` | `redis.url` | `redis://localhost:6379` | Redis connection URL |
-| `REDIS_POOL_SIZE` | `redis.pool_size` | `10` | Connection pool size |
-| `REDIS_KEY_PREFIX` | `redis.key_prefix` | `mnemo` | Key prefix for all data |
+| `MNEMO_REDIS_URL` | `redis.url` | `redis://localhost:6379` | Redis connection URL |
+| `MNEMO_REDIS_PREFIX` | `redis.prefix` | `mnemo:` | Key prefix for all data |
 
 ### Qdrant
 
 | Variable | TOML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `QDRANT_URL` | `qdrant.url` | `http://localhost:6333` | Qdrant server URL |
-| `QDRANT_API_KEY` | `qdrant.api_key` | None | Qdrant API key (if auth enabled) |
-| `QDRANT_COLLECTION` | `qdrant.collection` | `mnemo_episodes` | Collection name |
+| `MNEMO_QDRANT_URL` | `qdrant.url` | `http://localhost:6334` | Qdrant server URL |
+| `MNEMO_QDRANT_API_KEY` | `qdrant.api_key` | None | Qdrant API key |
+| `MNEMO_QDRANT_PREFIX` | `qdrant.collection_prefix` | `mnemo_` | Collection prefix |
 
 ---
 
@@ -49,8 +47,7 @@ Mnemo configuration is loaded in order (later sources override earlier):
 | Variable | TOML Key | Default | Description |
 |----------|----------|---------|-------------|
 | `MNEMO_AUTH_ENABLED` | `auth.enabled` | `false` | Enable API key auth |
-| `MNEMO_AUTH_KEYS` | `auth.keys` | None | Bootstrap API keys (CSV) |
-| `MNEMO_AUTH_ADMIN_KEY` | `auth.admin_key` | None | Admin bootstrap key |
+| `MNEMO_AUTH_API_KEYS` | `auth.api_keys` | None | Bootstrap API keys (CSV) |
 
 ### API Key Format
 
@@ -67,10 +64,15 @@ Keys can be specified as:
 
 | Variable | TOML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `LLM_PROVIDER` | `llm.provider` | `anthropic` | Primary LLM provider |
-| `EMBEDDING_PROVIDER` | `embedding.provider` | `fastembed` | Embedding provider |
-| `VISION_PROVIDER` | `vision.provider` | `openai` | Vision provider |
-| `TRANSCRIPTION_PROVIDER` | `transcription.provider` | `openai` | Transcription provider |
+| `MNEMO_LLM_PROVIDER` | `llm.provider` | `anthropic` | Primary LLM provider |
+| `MNEMO_LLM_API_KEY` | `llm.api_key` | empty | LLM API key |
+| `MNEMO_LLM_MODEL` | `llm.model` | `claude-sonnet-4-20250514` | LLM model |
+| `MNEMO_LLM_BASE_URL` | `llm.base_url` | empty | Custom LLM base URL |
+| `MNEMO_EMBEDDING_PROVIDER` | `embedding.provider` | `openai` | Embedding provider |
+| `MNEMO_EMBEDDING_API_KEY` | `embedding.api_key` | empty | Embedding API key |
+| `MNEMO_EMBEDDING_MODEL` | `embedding.model` | `text-embedding-3-small` | Embedding model |
+| `MNEMO_EMBEDDING_BASE_URL` | `embedding.base_url` | empty | Custom embedding base URL |
+| `MNEMO_EMBEDDING_DIMENSIONS` | `embedding.dimensions` | `1536` | Embedding vector dimensions |
 
 ### Anthropic
 
@@ -175,11 +177,8 @@ Keys can be specified as:
 
 | Variable | TOML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `MNEMO_WEBHOOK_ENABLED` | `webhook.enabled` | `false` | Enable webhooks |
-| `MNEMO_WEBHOOK_URL` | `webhook.url` | None | Webhook endpoint URL |
-| `MNEMO_WEBHOOK_SECRET` | `webhook.secret` | None | HMAC signing secret |
-| `MNEMO_WEBHOOK_TIMEOUT` | `webhook.timeout_ms` | `5000` | Request timeout (ms) |
-| `MNEMO_WEBHOOK_RETRY_MAX` | `webhook.retry_max` | `3` | Max retries |
+| `MNEMO_WEBHOOKS_ENABLED` | `webhooks.enabled` | `true` | Enable webhook subsystem |
+| `MNEMO_WEBHOOKS_MAX_ATTEMPTS` | `webhooks.max_attempts` | `3` | Max delivery attempts |
 
 ---
 

@@ -7,16 +7,16 @@ Common issues and solutions when running Mnemo.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `Connection refused` on Redis | Redis is not running or wrong URL | Check `MNEMO_REDIS_URL` (default: `redis://localhost:6379`). Run `redis-cli ping`. |
-| `Connection refused` on Qdrant | Qdrant is not running or wrong URL | Check `MNEMO_QDRANT_URL` (default: `http://localhost:6334`). Qdrant REST uses port 6334, gRPC uses 6333. |
+| `Connection refused` on Qdrant | Qdrant is not running or wrong URL | Check `MNEMO_QDRANT_URL` (default: `http://localhost:6334`). Mnemo expects Qdrant on port `6334`; avoid HTTP health probes against that port because they can fail even when Qdrant is healthy. |
 | `Address already in use` | Another process on port 8080 | Set `MNEMO_SERVER_PORT=8081` or stop the conflicting process. |
-| `MNEMO_LLM_API_KEY not set` warning | No LLM key configured | Set `MNEMO_LLM_API_KEY` for entity extraction. Mnemo works without it (rules-only extraction) but quality is lower. |
+| `MNEMO_LLM_API_KEY not set` warning | No LLM key configured | Set `MNEMO_LLM_PROVIDER` and `MNEMO_LLM_API_KEY` for entity extraction and summaries. Mnemo still supports immediate recall without an LLM, but enrichment is disabled. |
 
 ## Memory operations
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `POST /api/v1/memory` returns 401 | Auth is enabled but no key provided | Pass `Authorization: Bearer <key>` or `x-api-key: <key>` header. Keys are set via `MNEMO_AUTH_API_KEYS`. |
-| Memory added but context returns empty | Extraction is still processing | Extraction is async. Wait a few seconds and retry. Check `/health` for queue depth. |
+| Memory added but context returns empty | Query is racing async ingest or enrichment is disabled | Immediate recall usually returns freshly written text right away. If you are waiting on extracted entities, graph edges, or summaries, confirm `MNEMO_LLM_PROVIDER` is not `none`, then wait a few seconds and retry. |
 | Context results seem stale | Cached digest or stale embeddings | Force a digest refresh: `POST /api/v1/memory/:user/digest`. |
 | `NotFound` error for user | User hasn't been created yet | Users are auto-created on first `POST /api/v1/memory`. Verify the user name matches exactly (case-sensitive). |
 

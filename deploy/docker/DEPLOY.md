@@ -29,7 +29,8 @@ Required variables to review:
 |---|---|---|
 | `MNEMO_VERSION` | `latest` | Pin to `0.4.0` (or a newer release) for reproducibility |
 | `MNEMO_SERVER_PORT` | `8080` | Host port Mnemo listens on |
-| `MNEMO_LLM_API_KEY` | _(empty)_ | OpenAI/Anthropic key; leave blank to skip enrichment |
+| `MNEMO_LLM_PROVIDER` | `none` | Set `none` for immediate-recall-only mode, or `anthropic`/`openai`/`ollama`/`liquid` to enable enrichment |
+| `MNEMO_LLM_API_KEY` | _(empty)_ | Required when `MNEMO_LLM_PROVIDER` is not `none` |
 | `MNEMO_AUTH_ENABLED` | `false` | Set `true` + `MNEMO_AUTH_API_KEYS` before public exposure |
 
 ### 2. Start
@@ -55,6 +56,9 @@ curl -s -X POST http://localhost:8080/api/v1/memory/alice/context \
   -H "Content-Type: application/json" \
   -d '{"query":"deployment","limit":5}'
 ```
+
+With `MNEMO_LLM_PROVIDER=none`, immediate recall works but extracted entities,
+graph edges, and summaries remain minimal by design.
 
 ### 4. Logs
 

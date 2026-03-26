@@ -1,0 +1,18 @@
+# ============================================================================
+# Mnemo Local Source Override
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# This keeps Redis and Qdrant from the root compose file, but rebuilds the
+# Mnemo server image from your local checkout so source edits are reflected.
+# ============================================================================
+
+services:
+  mnemo:
+    # The Dockerfile currently packages the published amd64 runtime layout, so
+    # local source builds use the same target platform for parity.
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile

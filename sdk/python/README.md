@@ -2,7 +2,7 @@
 
 Production-grade Python SDK for the [Mnemo](https://github.com/anjaustin/mnemo) memory API.
 
-**Compatibility**: SDK v0.7.0 requires Mnemo server v0.7.0+. Older SDK versions (v0.5.x–v0.6.x) work with server v0.5.0+.
+**Compatibility**: SDK v0.9.0 targets Mnemo server v0.9.0+.
 
 Covers all memory, knowledge graph, LLM span tracing, memory digest, agent identity, governance,
 webhooks, operator, import, and session-message endpoints. Zero runtime dependencies for the sync client.
@@ -483,4 +483,4 @@ pytest tests/test_async_client.py -v
 | `langchain` | `pip install mnemo-client[langchain]` | `MnemoChatMessageHistory` |
 | `llamaindex` | `pip install mnemo-client[llamaindex]` | `MnemoChatStore` |
 | `all` | `pip install mnemo-client[all]` | Everything above |
-| `dev` | `pip install mnemo-client[dev]` | pytest, pytest-asyncio, requests |
+| `dev` | `pip install mnemo-client[dev]` | pytest, pytest-asyncio, aioresponses, requests |

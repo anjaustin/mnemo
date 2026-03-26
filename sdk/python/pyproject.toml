@@ -16,7 +16,7 @@ dependencies = []
 async = ["aiohttp>=3.9"]
 langchain = ["langchain-core>=0.2"]
 llamaindex = ["llama-index-core>=0.10"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "requests>=2.31"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "aioresponses>=0.7.8", "requests>=2.31"]
 all = ["mnemo-client[async,langchain,llamaindex]"]
 
 [tool.setuptools]

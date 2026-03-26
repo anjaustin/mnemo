@@ -85,6 +85,12 @@ def mnemo_client(mnemo_base_url: str):
 
 
 @pytest.fixture(scope="session")
+def client(mnemo_client):
+    """Backward-compatible alias for the session-scoped sync client fixture."""
+    yield mnemo_client
+
+
+@pytest.fixture(scope="session")
 def async_mnemo_client(mnemo_base_url: str):
     """Session-scoped async Mnemo client for use with pytest-asyncio tests.
 

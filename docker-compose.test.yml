@@ -19,15 +19,15 @@ services:
       - /data
 
   qdrant-test:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.4
     ports:
-      - "6364:6334"
+      - "6334:6334"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6334/readyz"]
+      test: ["CMD-SHELL", "pidof qdrant || exit 1"]
       interval: 1s
       timeout: 3s
       retries: 10
     environment:
-      QDRANT__SERVICE__GRPC_PORT: "6335"
+      QDRANT__SERVICE__GRPC_PORT: "6334"
     tmpfs:
       - /qdrant/storage

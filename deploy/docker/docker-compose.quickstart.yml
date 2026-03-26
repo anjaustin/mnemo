@@ -59,6 +59,9 @@ services:
   # ── Mnemo Server ──────────────────────────────────────────────────
   mnemo:
     image: ghcr.io/anjaustin/mnemo/mnemo-server:${MNEMO_VERSION:-latest}
+    # Published image is currently amd64-only; Docker Desktop can emulate it on
+    # Apple Silicon until a multi-arch image is available.
+    platform: linux/amd64
     container_name: mnemo-server
     restart: unless-stopped
     ports:
@@ -90,12 +93,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+    # NOTE: The published runtime image is distroless, so container-side health
+    # checks that rely on curl/wget are not available. The quickstart script
+    # polls http://localhost:8080/healthz from the host instead.
 
 volumes:
   redis-data:

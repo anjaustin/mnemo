@@ -50,6 +50,9 @@ services:
 
   # ── Mnemo Server ─────────────────────────────────────────────────────────
   test-mnemo:
+    # Keep SDK integration builds aligned with the published amd64 runtime image
+    # until the Dockerfile and release images are fully multi-arch.
+    platform: linux/amd64
     build:
       context: ../..
       dockerfile: Dockerfile
@@ -68,9 +71,6 @@ services:
         condition: service_healthy
       test-qdrant:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/healthz"]
-      interval: 5s
-      timeout: 4s
-      retries: 12
-      start_period: 10s
+    # NOTE: The built runtime image is distroless, so the SDK Makefile polls
+    # http://localhost:8181/healthz from the host instead of using a container
+    # healthcheck here.

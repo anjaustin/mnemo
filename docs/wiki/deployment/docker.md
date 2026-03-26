@@ -2,6 +2,10 @@
 
 Deploy Mnemo using Docker and Docker Compose.
 
+For the canonical, maintained deployment docs, prefer `deploy/docker/DEPLOY.md`
+and `docs/CONFIGURATION.md`. This wiki page is an overview and should follow
+those source-of-truth docs.
+
 ---
 
 ## Quick Start
@@ -35,24 +39,28 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - REDIS_URL=redis://redis:6379
-      - QDRANT_URL=http://qdrant:6333
-      - EMBEDDING_PROVIDER=fastembed
+      - MNEMO_REDIS_URL=redis://redis:6379
+      - MNEMO_QDRANT_URL=http://qdrant:6334
+      - MNEMO_LLM_PROVIDER=none
+      - MNEMO_EMBEDDING_PROVIDER=local
+      - MNEMO_EMBEDDING_MODEL=AllMiniLML6V2
+      - MNEMO_EMBEDDING_DIMENSIONS=384
     depends_on:
       - redis
       - qdrant
 
   redis:
-    image: redis/redis-stack:latest
+    image: redis/redis-stack:7.4.0-v1
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.4
     ports:
       - "6333:6333"
+      - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
 
@@ -71,7 +79,7 @@ docker compose up -d
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"healthy","version":"0.9.0"}
+# {"status":"ok","version":"0.9.0"}
 ```
 
 ---
@@ -87,14 +95,16 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - REDIS_URL=redis://redis:6379
-      - QDRANT_URL=http://qdrant:6333
-      - LLM_PROVIDER=anthropic
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - EMBEDDING_PROVIDER=openai
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MNEMO_REDIS_URL=redis://redis:6379
+      - MNEMO_QDRANT_URL=http://qdrant:6334
+      - MNEMO_LLM_PROVIDER=anthropic
+      - MNEMO_LLM_API_KEY=${MNEMO_LLM_API_KEY}
+      - MNEMO_LLM_MODEL=claude-haiku-4-20250514
+      - MNEMO_EMBEDDING_PROVIDER=openai
+      - MNEMO_EMBEDDING_API_KEY=${MNEMO_EMBEDDING_API_KEY}
+      - MNEMO_EMBEDDING_MODEL=text-embedding-3-small
       - MNEMO_AUTH_ENABLED=true
-      - MNEMO_AUTH_ADMIN_KEY=${MNEMO_ADMIN_KEY}
+      - MNEMO_AUTH_API_KEYS=${MNEMO_AUTH_API_KEYS}
     depends_on:
       - redis
       - qdrant
@@ -105,7 +115,7 @@ services:
           memory: 512M
 
   redis:
-    image: redis/redis-stack:latest
+    image: redis/redis-stack:7.4.0-v1
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -115,7 +125,7 @@ services:
           memory: 1G
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.4
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
@@ -129,16 +139,17 @@ volumes:
   qdrant_data:
 ```
 
-### With Webhooks
+### Webhook Delivery Tuning
 
 ```yaml
 services:
   mnemo:
     environment:
-      # ... other vars
-      - MNEMO_WEBHOOK_ENABLED=true
-      - MNEMO_WEBHOOK_URL=https://hooks.example.com/mnemo
-      - MNEMO_WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - MNEMO_WEBHOOKS_ENABLED=true
+      - MNEMO_WEBHOOKS_MAX_ATTEMPTS=5
+
+# Webhook targets themselves are created via the Memory Webhooks API,
+# not configured as a single global URL in compose.
 ```
 
 ### With S3 Blob Storage
@@ -174,13 +185,8 @@ Add health checks for reliability:
 
 ```yaml
 services:
-  mnemo:
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+  # Mnemo runs in a distroless image, so probe /healthz from your orchestrator
+  # or host instead of using an in-container curl healthcheck.
 
   redis:
     healthcheck:
@@ -191,7 +197,7 @@ services:
 
   qdrant:
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "pidof qdrant || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -318,12 +324,13 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # For gRPC
-        grpc_pass grpc://mnemo;
     }
 }
 ```
+
+Do not combine `proxy_pass` and `grpc_pass` in the same `location` block. If
+you expose Mnemo gRPC separately, route it with a dedicated gRPC-aware virtual
+host or location.
 
 ---
 
@@ -441,13 +448,10 @@ docker compose logs mnemo
 ### Connection Refused
 
 ```bash
-# Check network
-docker compose exec mnemo ping redis
-docker compose exec mnemo ping qdrant
-
-# Check ports
-docker compose exec mnemo curl http://redis:6379
-docker compose exec mnemo curl http://qdrant:6333/healthz
+# Mnemo runs in a distroless image, so debug from the host or sibling services
+docker compose logs mnemo
+docker compose exec redis redis-cli ping
+curl http://localhost:6333/healthz
 ```
 
 ### Out of Memory

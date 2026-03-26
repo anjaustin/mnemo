@@ -20,12 +20,28 @@ This starts three containers:
 
 No API keys are required. Embeddings run locally using AllMiniLML6V2.
 
+Mnemo writes are available for immediate recall right away, but ingest-derived
+structure is built asynchronously. Right after a `POST /api/v1/memory`, the
+stored text is still recallable; extracted entities, graph links, and summaries
+appear a few seconds later only when an LLM provider is configured.
+
 Or start manually:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/anjaustin/mnemo/main/deploy/docker/docker-compose.quickstart.yml -o docker-compose.quickstart.yml
 docker compose -f docker-compose.quickstart.yml up -d
 ```
+
+If you are working from a local clone and want Docker to rebuild from source
+instead of pulling the published image:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+```
+
+On Apple Silicon, the published quickstart image runs under Docker's amd64
+emulation. The local source override uses the same Docker target platform for
+now, but rebuilds from your checkout so code changes are reflected.
 
 ## 2. Verify it works
 
@@ -43,6 +59,9 @@ curl -X POST http://localhost:8080/api/v1/memory/alice/context \
   -H 'Content-Type: application/json' \
   -d '{"query":"What does Alice enjoy?"}'
 ```
+
+If you just wrote a memory and want to inspect richer extracted graph or digest
+data, enable an LLM provider first, then wait a few seconds and query again.
 
 ## 3. Connect an MCP-compatible agent (30 seconds)
 
@@ -126,7 +145,8 @@ print(ctx.text)
 ## Adding LLM extraction (optional)
 
 By default the quickstart runs without an LLM. Memory storage and retrieval
-work, but entity/relationship extraction and summarization are disabled.
+work, including immediate recall of freshly written text, but entity and
+relationship extraction plus summarization stay disabled.
 
 To enable extraction, pass your LLM provider as environment variables:
 

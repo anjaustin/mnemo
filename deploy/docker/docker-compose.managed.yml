@@ -36,12 +36,9 @@ services:
       - MNEMO_WEBHOOKS_ENABLED=${MNEMO_WEBHOOKS_ENABLED:-true}
       - MNEMO_WEBHOOKS_MAX_ATTEMPTS=${MNEMO_WEBHOOKS_MAX_ATTEMPTS:-3}
       - RUST_LOG=${RUST_LOG:-mnemo=info}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+    # NOTE: The published runtime image is distroless, so container-side health
+    # checks that rely on curl/wget are not available. Probe /healthz from your
+    # orchestrator or external monitoring instead.
     deploy:
       resources:
         limits:

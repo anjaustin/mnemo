@@ -22,6 +22,16 @@ curl -fsSL https://raw.githubusercontent.com/anjaustin/mnemo/main/deploy/docker/
 
 No API keys required. Starts Mnemo with local embeddings, Redis, and Qdrant. See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough.
 
+Writes return immediately, but ingest-derived entities, graph edges, and summaries are built asynchronously in the background. Right after a write, `context` still includes immediate-recall fallback text; richer extracted structure appears a few seconds later when an LLM provider is configured. In the no-LLM quickstart, immediate recall works, but extracted graph and summary features stay minimal by design.
+
+For local source iteration from a clone, use:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+```
+
+That keeps Redis and Qdrant in Docker but rebuilds `mnemo-server` from your local checkout.
+
 ## 30-Second Demo
 
 ```bash

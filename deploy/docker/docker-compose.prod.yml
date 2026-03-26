@@ -87,12 +87,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+    # NOTE: The published runtime image is distroless, so container-side health
+    # checks that rely on curl/wget are not available. Probe /healthz from your
+    # orchestrator or external monitoring instead.
     deploy:
       resources:
         limits:

@@ -11,7 +11,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 - Rust 1.85+ (`rustup update stable`)
 - `protoc` (Protocol Buffers compiler, v25+ recommended — needed by `mnemo-proto`)
 - Docker and Docker Compose
-- An LLM API key (optional — Mnemo works without one using rule-based extraction)
+- An LLM API key (optional — without one, immediate recall still works but extracted graph and summary enrichment stay disabled)
 - Python 3.11+ (only if contributing to the Python SDK)
 - Node.js 20+ (only if contributing to the TypeScript SDK)
 
@@ -24,8 +24,15 @@ cd mnemo
 # Start dependencies
 docker compose up -d redis qdrant
 
-# Run the server
+# Run the server with local embeddings and no LLM dependency
+MNEMO_LLM_PROVIDER=none \
+MNEMO_EMBEDDING_PROVIDER=local \
+MNEMO_EMBEDDING_MODEL=AllMiniLML6V2 \
+MNEMO_EMBEDDING_DIMENSIONS=384 \
 cargo run --bin mnemo-server
+
+# Or rebuild/run the server in Docker from your local checkout
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 
 # Run tests
 cargo test --workspace
@@ -33,6 +40,11 @@ cargo test --workspace
 # Run a specific crate's tests
 cargo test -p mnemo-core
 ```
+
+`POST /api/v1/memory` persists quickly, but the ingest pipeline runs in the
+background. Immediate context queries include fallback recall of freshly written
+text. Extracted entities, graph edges, and summaries require an LLM provider;
+when enabled, they may lag by a few seconds while the background worker catches up.
 
 ### Project Structure
 

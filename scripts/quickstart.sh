@@ -5,7 +5,7 @@
 #   MNEMO_LLM_API_KEY=sk-... bash scripts/quickstart.sh
 #
 # Or via curl (auto-clones into a temp directory):
-#   curl -fsSL https://raw.githubusercontent.com/anomalyco/mnemo/main/scripts/quickstart.sh | MNEMO_LLM_API_KEY=sk-... bash
+#   curl -fsSL https://raw.githubusercontent.com/anjaustin/mnemo/main/scripts/quickstart.sh | MNEMO_LLM_API_KEY=sk-... bash
 set -euo pipefail
 
 MNEMO_PORT="${MNEMO_PORT:-8080}"
@@ -49,7 +49,7 @@ fi
 if [[ -z "$COMPOSE_FILE" || ! -f "$COMPOSE_FILE" ]]; then
   echo "==> Cloning Mnemo repo (docker-compose.yml needed)..."
   TEMP_DIR="$(mktemp -d)"
-  git clone --depth 1 --quiet https://github.com/anomalyco/mnemo.git "$TEMP_DIR/mnemo"
+  git clone --depth 1 --quiet https://github.com/anjaustin/mnemo.git "$TEMP_DIR/mnemo"
   COMPOSE_FILE="$TEMP_DIR/mnemo/docker-compose.yml"
   if [[ ! -f "$COMPOSE_FILE" ]]; then
     echo "ERROR: docker-compose.yml not found after clone."
