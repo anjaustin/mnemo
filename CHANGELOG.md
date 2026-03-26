@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Docker packaging is now truly multi-arch for `linux/amd64` and `linux/arm64`, including native ONNX Runtime and shared library resolution in `Dockerfile` plus multi-platform GHCR publishing.
+- Added CI smoke coverage for `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build` so local-source Docker iteration is exercised automatically.
+- Hardened onboarding and deployment docs to reflect current env var names, distroless runtime behavior, no-LLM immediate-recall mode, and Python SDK test prerequisites.
+
 ## [0.9.0] — 2026-03-15
 
 ### Added

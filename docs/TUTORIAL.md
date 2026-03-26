@@ -206,7 +206,7 @@ print(response.content)
 
 Navigate to **http://localhost:8080/_/** to see:
 
-- **Home**: Health status, queue depth, recent activity
+- **Home**: Health status, recent activity, and system overview
 - **Explorer**: Visual knowledge graph browser
 - **LLM Spans**: Token usage and latency for all LLM calls
 - **Webhooks**: Delivery status, dead-letter queue, replay controls

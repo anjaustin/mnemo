@@ -263,18 +263,19 @@ enabled = true
 
 ```bash
 # Production-like configuration via env vars
-export MNEMO_PORT=8080
+export MNEMO_SERVER_PORT=8080
 export MNEMO_AUTH_ENABLED=true
-export REDIS_URL="redis://redis.internal:6379"
-export QDRANT_URL="http://qdrant.internal:6333"
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-export LLM_PROVIDER=anthropic
-export EMBEDDING_PROVIDER=openai
-export MNEMO_WEBHOOK_ENABLED=true
-export MNEMO_WEBHOOK_URL="https://hooks.example.com/mnemo"
-export MNEMO_WEBHOOK_SECRET="whsec_..."
-export RUST_LOG="mnemo_server=info,mnemo_ingest=debug"
+export MNEMO_REDIS_URL="redis://redis.internal:6379"
+export MNEMO_QDRANT_URL="http://qdrant.internal:6334"
+export MNEMO_LLM_PROVIDER=anthropic
+export MNEMO_LLM_API_KEY="sk-ant-..."
+export MNEMO_EMBEDDING_PROVIDER=openai
+export MNEMO_EMBEDDING_API_KEY="sk-..."
+export MNEMO_WEBHOOKS_ENABLED=true
+export RUST_LOG="mnemo=info"
+
+# Webhook targets are created via the Memory Webhooks API rather than a single
+# process-wide URL env var.
 ```
 
 ---

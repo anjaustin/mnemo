@@ -40,11 +40,11 @@ Common variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MNEMO_PORT` | `8080` | HTTP/gRPC port |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection |
-| `QDRANT_URL` | `http://localhost:6333` | Qdrant connection |
-| `LLM_PROVIDER` | `anthropic` | LLM provider |
-| `EMBEDDING_PROVIDER` | `fastembed` | Embedding provider |
+| `MNEMO_SERVER_PORT` | `8080` | HTTP port |
+| `MNEMO_REDIS_URL` | `redis://localhost:6379` | Redis connection |
+| `MNEMO_QDRANT_URL` | `http://localhost:6334` | Qdrant connection |
+| `MNEMO_LLM_PROVIDER` | `anthropic` | LLM provider |
+| `MNEMO_EMBEDDING_PROVIDER` | `openai` | Embedding provider |
 | `MNEMO_AUTH_ENABLED` | `false` | Enable API key auth |
 
 See **[Configuration](configuration.md)** for the complete list.

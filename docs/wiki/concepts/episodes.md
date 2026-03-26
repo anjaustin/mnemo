@@ -256,8 +256,8 @@ Each episode gets a vector embedding for semantic search:
 
 Configure via:
 ```bash
-EMBEDDING_PROVIDER=openai
-OPENAI_API_KEY=sk-...
+MNEMO_EMBEDDING_PROVIDER=openai
+MNEMO_EMBEDDING_API_KEY=sk-...
 ```
 
 ---
