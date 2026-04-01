@@ -435,7 +435,7 @@ Mnemo separates the **extraction LLM** (entity/relationship extraction from epis
 
 **Online (API-backed):** Use Anthropic with the project API key. Preferred extraction model: `claude-haiku-4-5` (fast, cheap) or `claude-sonnet-4-6` (higher quality).
 
-**Local / offline:** Use **Liquid AI LFM2-24B-A2B** exclusively via Ollama (`MNEMO_LLM_PROVIDER=ollama`, `MNEMO_LLM_MODEL=hf.co/LiquidAI/LFM2-24B-A2B-GGUF`). Do not use other local models for extraction — LFM2-24B is the only validated local model for this workload.
+**Local / offline:** Prefer `lfm25` via Ollama for background extraction on developer machines (`MNEMO_LLM_PROVIDER=ollama`, `MNEMO_LLM_MODEL=lfm25`). On this machine it produces spans/entities within seconds, while the local `lfm2` 24B model is too slow for transparent background memory.
 
 **Embeddings (local, recommended):** Use `MNEMO_EMBEDDING_PROVIDER=local` with `MNEMO_EMBEDDING_MODEL=AllMiniLML6V2` and `MNEMO_EMBEDDING_DIMENSIONS=384`. This uses the built-in fastembed library — no external API needed, no API key, works offline. This is the production default.
 
@@ -449,10 +449,12 @@ Mnemo separates the **extraction LLM** (entity/relationship extraction from epis
 MNEMO_AUTH_ENABLED=false \
 MNEMO_LLM_PROVIDER=ollama \
 MNEMO_LLM_BASE_URL=http://localhost:11434/v1 \
-MNEMO_LLM_MODEL=hf.co/LiquidAI/LFM2-24B-A2B-GGUF \
-MNEMO_EMBEDDING_BASE_URL=http://localhost:11434/v1 \
-MNEMO_EMBEDDING_MODEL=nomic-embed-text \
-MNEMO_EMBEDDING_DIMENSIONS=768 \
+MNEMO_LLM_MODEL=lfm25 \
+MNEMO_LLM_MAX_TOKENS=256 \
+MNEMO_LLM_REQUEST_TIMEOUT_MS=15000 \
+MNEMO_EMBEDDING_PROVIDER=local \
+MNEMO_EMBEDDING_MODEL=AllMiniLML6V2 \
+MNEMO_EMBEDDING_DIMENSIONS=384 \
 cargo run -p mnemo-server
 ```
 

@@ -74,7 +74,14 @@ pub mod inner {
             candidates.extend(std::env::split_paths(&paths));
         }
 
+        if let Some(paths) = std::env::var_os("DYLD_LIBRARY_PATH") {
+            candidates.extend(std::env::split_paths(&paths));
+        }
+
         candidates.extend([
+            PathBuf::from("/opt/ort"),
+            PathBuf::from("/opt/homebrew/lib"),
+            PathBuf::from("/usr/local/opt/onnxruntime/lib"),
             PathBuf::from("/usr/local/lib"),
             PathBuf::from("/usr/lib"),
             PathBuf::from("/usr/lib64"),
@@ -97,15 +104,32 @@ pub mod inner {
             return Vec::new();
         };
 
-        entries
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| {
-                path.file_name()
+        let mut matches = Vec::new();
+
+        for path in entries.filter_map(|entry| entry.ok().map(|entry| entry.path())) {
+            if path.is_file()
+                && path
+                    .file_name()
                     .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("libonnxruntime.so"))
-                    && path.is_file()
-            })
-            .collect()
+                    .is_some_and(|name| {
+                        name.starts_with("libonnxruntime.so")
+                            || name.starts_with("libonnxruntime.dylib")
+                            || name.starts_with("libonnxruntime.")
+                    })
+            {
+                matches.push(path);
+                continue;
+            }
+
+            if path.is_dir() {
+                let nested_lib = path.join("lib");
+                if nested_lib.is_dir() {
+                    matches.extend(ort_candidates_in_dir(&nested_lib));
+                }
+            }
+        }
+
+        matches
     }
 
     fn ort_candidate_rank(path: &Path) -> (bool, Vec<u32>, usize) {
@@ -113,9 +137,12 @@ pub mod inner {
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
-        let version = name
+        let suffix = name
             .strip_prefix("libonnxruntime.so")
-            .unwrap_or_default()
+            .or_else(|| name.strip_prefix("libonnxruntime.dylib"))
+            .or_else(|| name.strip_prefix("libonnxruntime."))
+            .unwrap_or_default();
+        let version = suffix
             .strip_prefix('.')
             .map(|suffix| {
                 suffix

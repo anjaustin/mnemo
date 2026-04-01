@@ -74,9 +74,14 @@ services:
       - MNEMO_LLM_PROVIDER=${MNEMO_LLM_PROVIDER:-anthropic}
       - MNEMO_LLM_MODEL=${MNEMO_LLM_MODEL:-claude-haiku-4-20250514}
       - MNEMO_LLM_API_KEY=${MNEMO_LLM_API_KEY:-}
+      - MNEMO_LLM_BASE_URL=${MNEMO_LLM_BASE_URL:-}
+      - MNEMO_LLM_TEMPERATURE=${MNEMO_LLM_TEMPERATURE:-}
+      - MNEMO_LLM_MAX_TOKENS=${MNEMO_LLM_MAX_TOKENS:-}
+      - MNEMO_LLM_REQUEST_TIMEOUT_MS=${MNEMO_LLM_REQUEST_TIMEOUT_MS:-}
       # Embeddings — local fastembed (no key needed) or openai-compat
       - MNEMO_EMBEDDING_PROVIDER=${MNEMO_EMBEDDING_PROVIDER:-local}
       - MNEMO_EMBEDDING_MODEL=${MNEMO_EMBEDDING_MODEL:-AllMiniLML6V2}
+      - MNEMO_EMBEDDING_BASE_URL=${MNEMO_EMBEDDING_BASE_URL:-}
       - MNEMO_EMBEDDING_DIMENSIONS=${MNEMO_EMBEDDING_DIMENSIONS:-384}
       # Auth (optional)
       - MNEMO_AUTH_ENABLED=${MNEMO_AUTH_ENABLED:-false}
@@ -87,6 +92,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # NOTE: The GHCR image uses distroless (no shell/curl). Health checking
     # is done externally by the quickstart script or your orchestrator.
     # If building from source with a Debian-based image, uncomment:

@@ -174,6 +174,8 @@ pub struct LlmSection {
     pub temperature: f32,
     #[serde(default = "default_llm_max_tokens")]
     pub max_tokens: u32,
+    #[serde(default = "default_llm_request_timeout_ms")]
+    pub request_timeout_ms: u64,
 }
 
 impl Default for LlmSection {
@@ -185,6 +187,7 @@ impl Default for LlmSection {
             base_url: String::new(),
             temperature: 0.0,
             max_tokens: default_llm_max_tokens(),
+            request_timeout_ms: default_llm_request_timeout_ms(),
         }
     }
 }
@@ -792,6 +795,10 @@ fn default_llm_model() -> String {
 fn default_llm_max_tokens() -> u32 {
     2048
 }
+
+fn default_llm_request_timeout_ms() -> u64 {
+    120_000
+}
 fn default_embed_provider() -> String {
     "openai".into()
 }
@@ -907,6 +914,21 @@ impl MnemoConfig {
         }
         if let Ok(v) = std::env::var("MNEMO_LLM_BASE_URL") {
             config.llm.base_url = v;
+        }
+        if let Ok(v) = std::env::var("MNEMO_LLM_TEMPERATURE") {
+            if let Ok(t) = v.parse() {
+                config.llm.temperature = t;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_LLM_MAX_TOKENS") {
+            if let Ok(n) = v.parse() {
+                config.llm.max_tokens = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MNEMO_LLM_REQUEST_TIMEOUT_MS") {
+            if let Ok(n) = v.parse() {
+                config.llm.request_timeout_ms = n;
+            }
         }
         if let Ok(v) = std::env::var("MNEMO_EMBEDDING_PROVIDER") {
             config.embedding.provider = v;
@@ -1139,6 +1161,7 @@ impl MnemoConfig {
             },
             temperature: self.llm.temperature,
             max_tokens: self.llm.max_tokens,
+            request_timeout_ms: self.llm.request_timeout_ms,
         }
     }
 
@@ -1417,12 +1440,18 @@ mod tests {
         std::env::set_var("MNEMO_LLM_API_KEY", "sk-test-key");
         std::env::set_var("MNEMO_LLM_MODEL", "claude-sonnet-4-20250514");
         std::env::set_var("MNEMO_LLM_BASE_URL", "https://custom.api.com/v1");
+        std::env::set_var("MNEMO_LLM_TEMPERATURE", "0.25");
+        std::env::set_var("MNEMO_LLM_MAX_TOKENS", "512");
+        std::env::set_var("MNEMO_LLM_REQUEST_TIMEOUT_MS", "45000");
 
         let config = MnemoConfig::load(None).unwrap();
         assert_eq!(config.llm.provider, "anthropic");
         assert_eq!(config.llm.api_key, "sk-test-key");
         assert_eq!(config.llm.model, "claude-sonnet-4-20250514");
         assert_eq!(config.llm.base_url, "https://custom.api.com/v1");
+        assert_eq!(config.llm.temperature, 0.25);
+        assert_eq!(config.llm.max_tokens, 512);
+        assert_eq!(config.llm.request_timeout_ms, 45000);
 
         // Also verify the llm_config() converter
         let llm_cfg = config.llm_config();
@@ -1431,6 +1460,9 @@ mod tests {
             llm_cfg.base_url,
             Some("https://custom.api.com/v1".to_string())
         );
+        assert_eq!(llm_cfg.temperature, 0.25);
+        assert_eq!(llm_cfg.max_tokens, 512);
+        assert_eq!(llm_cfg.request_timeout_ms, 45000);
 
         clear_mnemo_env();
     }

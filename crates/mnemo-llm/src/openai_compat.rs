@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
 
 use mnemo_core::error::MnemoError;
 use mnemo_core::models::classification::Classification;
@@ -38,6 +41,14 @@ struct ChatRequest {
     messages: Vec<ChatMessage>,
     temperature: f32,
     max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
+}
+
+#[derive(Serialize)]
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -186,7 +197,10 @@ impl OpenAiCompatibleProvider {
                 _ => "https://api.openai.com/v1".to_string(),
             });
 
-        let client = Client::new();
+        let client = Client::builder()
+            .timeout(Duration::from_millis(config.request_timeout_ms.max(1)))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             client,
             config,
@@ -194,11 +208,36 @@ impl OpenAiCompatibleProvider {
         }
     }
 
+    fn effective_max_tokens(&self, operation: &str, requested: Option<u32>) -> u32 {
+        let base = requested.unwrap_or(self.config.max_tokens);
+        if self.config.provider == "ollama" && operation == "extract" && base >= 2048 {
+            256
+        } else {
+            base
+        }
+    }
+
+    fn extraction_system_prompt(&self) -> &'static str {
+        if self.config.provider == "ollama" {
+            r#"Return only compact JSON with two arrays: "entities" and "relationships".
+Each entity must be {"name","type","summary","classification"}.
+Each relationship must be {"source","target","label","fact","confidence","classification"}.
+Use lowercase snake_case labels. Reuse existing names exactly when supplied.
+Do not add markdown, commentary, or unsupported facts."#
+        } else {
+            EXTRACTION_SYSTEM_PROMPT
+        }
+    }
+
     async fn chat_completion(
         &self,
+        operation: &str,
         system: &str,
         user_msg: &str,
+        max_tokens: Option<u32>,
+        force_json: bool,
     ) -> LlmResult<(String, TokenUsage)> {
+        let effective_max_tokens = self.effective_max_tokens(operation, max_tokens);
         let request = ChatRequest {
             model: self.config.model.clone(),
             messages: vec![
@@ -212,8 +251,20 @@ impl OpenAiCompatibleProvider {
                 },
             ],
             temperature: self.config.temperature,
-            max_tokens: self.config.max_tokens,
+            max_tokens: effective_max_tokens,
+            response_format: force_json.then_some(ResponseFormat { kind: "json_object" }),
         };
+
+        debug!(
+            provider = %self.config.provider,
+            model = %self.config.model,
+            operation,
+            timeout_ms = self.config.request_timeout_ms,
+            max_tokens = effective_max_tokens,
+            force_json,
+            base_url = %self.base_url,
+            "Starting OpenAI-compatible request"
+        );
 
         let mut req_builder = self
             .client
@@ -228,9 +279,26 @@ impl OpenAiCompatibleProvider {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| MnemoError::LlmProvider {
-                provider: self.config.provider.clone(),
-                message: format!("Request failed: {}", e),
+            .map_err(|e| {
+                let message = if e.is_timeout() {
+                    format!(
+                        "Request timed out after {}ms to {}",
+                        self.config.request_timeout_ms, self.base_url
+                    )
+                } else {
+                    format!("Request failed: {}", e)
+                };
+                warn!(
+                    provider = %self.config.provider,
+                    model = %self.config.model,
+                    operation,
+                    error = %message,
+                    "OpenAI-compatible request failed"
+                );
+                MnemoError::LlmProvider {
+                    provider: self.config.provider.clone(),
+                    message,
+                }
             })?;
 
         if response.status() == 429 {
@@ -248,6 +316,14 @@ impl OpenAiCompatibleProvider {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            warn!(
+                provider = %self.config.provider,
+                model = %self.config.model,
+                operation,
+                status = %status,
+                body = %body,
+                "OpenAI-compatible request returned error"
+            );
             return Err(MnemoError::LlmProvider {
                 provider: self.config.provider.clone(),
                 message: format!("HTTP {}: {}", status, body),
@@ -277,6 +353,16 @@ impl OpenAiCompatibleProvider {
                 provider: self.config.provider.clone(),
                 message: "No choices in response".into(),
             })?;
+
+        info!(
+            provider = %self.config.provider,
+            model = %self.config.model,
+            operation,
+            prompt_tokens = usage.prompt_tokens,
+            completion_tokens = usage.completion_tokens,
+            total_tokens = usage.total_tokens,
+            "OpenAI-compatible request completed"
+        );
 
         Ok((content, usage))
     }
@@ -315,7 +401,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
         );
 
         if !existing_entities.is_empty() {
-            let names: Vec<&str> = existing_entities.iter().map(|e| e.name.as_str()).collect();
+            let names: Vec<&str> = existing_entities
+                .iter()
+                .take(if self.config.provider == "ollama" { 12 } else { existing_entities.len() })
+                .map(|e| e.name.as_str())
+                .collect();
             user_msg.push_str(&format!(
                 "\n\nExisting entities in this user's graph (reuse these names if they appear): {}",
                 names.join(", ")
@@ -323,7 +413,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
         }
 
         let (raw, _usage) = self
-            .chat_completion(EXTRACTION_SYSTEM_PROMPT, &user_msg)
+            .chat_completion(
+                "extract",
+                self.extraction_system_prompt(),
+                &user_msg,
+                None,
+                true,
+            )
             .await?;
         let parsed = Self::parse_extraction(&raw)?;
 
@@ -373,7 +469,9 @@ impl LlmProvider for OpenAiCompatibleProvider {
              Focus on key facts, entities, and relationships.",
             max_tokens
         );
-        let (text, _usage) = self.chat_completion(&system, content).await?;
+        let (text, _usage) = self
+            .chat_completion("summarize", &system, content, Some(max_tokens), false)
+            .await?;
         Ok(text)
     }
 
@@ -401,7 +499,9 @@ impl LlmProvider for OpenAiCompatibleProvider {
             new_fact, existing
         );
 
-        let (raw, _usage) = self.chat_completion(system, &user_msg).await?;
+        let (raw, _usage) = self
+            .chat_completion("contradiction", system, &user_msg, Some(256), true)
+            .await?;
         let cleaned = raw.trim();
         let cleaned = if cleaned.starts_with("```") {
             let start = cleaned.find('\n').map(|i| i + 1).unwrap_or(0);
@@ -424,14 +524,24 @@ impl LlmProvider for OpenAiCompatibleProvider {
             content
         );
         if !existing_entities.is_empty() {
-            let names: Vec<&str> = existing_entities.iter().map(|e| e.name.as_str()).collect();
+            let names: Vec<&str> = existing_entities
+                .iter()
+                .take(if self.config.provider == "ollama" { 12 } else { existing_entities.len() })
+                .map(|e| e.name.as_str())
+                .collect();
             user_msg.push_str(&format!(
                 "\n\nExisting entities in this user's graph (reuse these names if they appear): {}",
                 names.join(", ")
             ));
         }
         let (raw, usage) = self
-            .chat_completion(EXTRACTION_SYSTEM_PROMPT, &user_msg)
+            .chat_completion(
+                "extract",
+                self.extraction_system_prompt(),
+                &user_msg,
+                None,
+                true,
+            )
             .await?;
         let parsed = Self::parse_extraction(&raw)?;
         let entities = parsed
@@ -485,7 +595,8 @@ impl LlmProvider for OpenAiCompatibleProvider {
              Focus on key facts, entities, and relationships.",
             max_tokens
         );
-        self.chat_completion(&system, content).await
+        self.chat_completion("summarize", &system, content, Some(max_tokens), false)
+            .await
     }
 
     fn provider_name(&self) -> &str {
@@ -665,6 +776,7 @@ mod tests {
             base_url: Some(base_url.to_string()),
             temperature: 0.0,
             max_tokens: 2048,
+            request_timeout_ms: 120_000,
         }
     }
 
@@ -728,6 +840,39 @@ mod tests {
         assert_eq!(result.relationships.len(), 1);
         assert_eq!(result.relationships[0].label, "prefers");
         assert!((result.relationships[0].confidence - 0.95).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_ollama_extraction_uses_compact_json_budget() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("\"type\":\"json_object\""))
+            .and(body_string_contains("\"max_tokens\":256"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(chat_response(valid_extraction_json())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(LlmConfig {
+            provider: "ollama".to_string(),
+            api_key: None,
+            model: "lfm2".to_string(),
+            base_url: Some(server.uri()),
+            temperature: 0.0,
+            max_tokens: 2048,
+            request_timeout_ms: 120_000,
+        });
+
+        let result = provider
+            .extract_entities_and_relationships("Atlas hates thunderstorms", &[])
+            .await
+            .expect("ollama extraction should succeed");
+
+        assert_eq!(result.relationships.len(), 1);
     }
 
     // ── LLM-01b: Extraction includes existing entity names in prompt ──
@@ -1099,6 +1244,7 @@ mod tests {
             base_url: None,
             temperature: 0.0,
             max_tokens: 2048,
+            request_timeout_ms: 120_000,
         });
         assert_eq!(ollama.base_url, "http://localhost:11434/v1");
 
@@ -1109,6 +1255,7 @@ mod tests {
             base_url: None,
             temperature: 0.0,
             max_tokens: 2048,
+            request_timeout_ms: 120_000,
         });
         assert_eq!(liquid.base_url, "http://localhost:8000/v1");
 
@@ -1119,6 +1266,7 @@ mod tests {
             base_url: None,
             temperature: 0.0,
             max_tokens: 2048,
+            request_timeout_ms: 120_000,
         });
         assert_eq!(openai.base_url, "https://api.openai.com/v1");
     }

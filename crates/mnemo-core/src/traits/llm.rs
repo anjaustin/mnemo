@@ -26,6 +26,9 @@ pub struct LlmConfig {
     /// Max tokens for extraction responses.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// Hard timeout for a single LLM request.
+    #[serde(default = "default_request_timeout_ms")]
+    pub request_timeout_ms: u64,
 }
 
 fn default_temperature() -> f32 {
@@ -34,6 +37,10 @@ fn default_temperature() -> f32 {
 
 fn default_max_tokens() -> u32 {
     2048
+}
+
+fn default_request_timeout_ms() -> u64 {
+    120_000
 }
 
 /// Configuration for an embedding provider.

@@ -412,6 +412,7 @@ mod tests {
             base_url: Some(base_url.to_string()),
             temperature: 0.0,
             max_tokens: 2048,
+            request_timeout_ms: 120_000,
         }
     }
 
@@ -476,6 +477,7 @@ mod tests {
             base_url: Some("http://unused:1234".to_string()),
             temperature: 0.0,
             max_tokens: 2048,
+            request_timeout_ms: 120_000,
         };
 
         let provider = AnthropicProvider::new(config);
@@ -586,6 +588,7 @@ mod tests {
             base_url: None,
             temperature: 0.0,
             max_tokens: 2048,
+            request_timeout_ms: 120_000,
         };
         let provider = AnthropicProvider::new(config);
         assert_eq!(provider.base_url, "https://api.anthropic.com");

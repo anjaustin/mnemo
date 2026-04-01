@@ -117,6 +117,24 @@ python tests/eval_recall_quality.py --server http://localhost:8080 --ingest-wait
 
 Exit code is 0 when all gates pass, 1 otherwise. Suitable for CI pipelines.
 
+## 3.6) Local Ollama / LFM smoke harness
+
+Use this when validating the "background memory should just work" path with a local Ollama stack.
+
+Recommended local model on this machine: `lfm25` with local fastembed embeddings. The larger `lfm2` 24B model is too slow for background extraction here.
+
+Assumes:
+
+- Redis and Qdrant are running
+- Mnemo is running with `MNEMO_LLM_PROVIDER=ollama`
+- local embeddings are enabled (recommended)
+
+```bash
+python tests/ollama_lfm2_smoke.py --server http://localhost:8080 --timeout-seconds 180
+```
+
+The harness fails fast if immediate recall is broken, then polls spans/entities until background extraction either succeeds or times out.
+
 ## 4) Memory API falsification suite
 
 This is the high-value regression suite for the new memory surface.

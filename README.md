@@ -32,6 +32,23 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 
 That keeps Redis and Qdrant in Docker but rebuilds `mnemo-server` from your local checkout.
 
+For local Ollama-backed memory on this machine, the recommended profile is `lfm25` plus local fastembed embeddings:
+
+```bash
+ORT_DYLIB_PATH=/tmp/onnxruntime-osx-arm64-1.23.0/lib/libonnxruntime.1.23.0.dylib \
+MNEMO_LLM_PROVIDER=ollama \
+MNEMO_LLM_BASE_URL=http://localhost:11434/v1 \
+MNEMO_LLM_MODEL=lfm25 \
+MNEMO_LLM_MAX_TOKENS=256 \
+MNEMO_LLM_REQUEST_TIMEOUT_MS=15000 \
+MNEMO_EMBEDDING_PROVIDER=local \
+MNEMO_EMBEDDING_MODEL=AllMiniLML6V2 \
+MNEMO_EMBEDDING_DIMENSIONS=384 \
+cargo run --bin mnemo-server
+```
+
+This keeps immediate recall fast and allowed local background extraction to pass the bundled quality gates.
+
 ## 30-Second Demo
 
 ```bash

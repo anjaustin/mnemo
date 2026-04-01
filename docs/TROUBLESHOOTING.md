@@ -59,6 +59,14 @@ Common issues and solutions when running Mnemo.
 |---------|-------|-----|
 | First request is slow (30-60s) | Model downloading on first use | The `AllMiniLML6V2` model (~23 MB) downloads on first embedding call. Subsequent calls are fast. The model is cached in `.fastembed_cache/`. |
 | `MNEMO_EMBEDDING_PROVIDER=local` not working | Fastembed feature not compiled in | The default Docker image includes fastembed. Building from source requires the `fastembed` Cargo feature. |
+| `libonnxruntime.dylib` failed to load on macOS | ONNX Runtime dylib is not discoverable | Download ONNX Runtime once and export `ORT_DYLIB_PATH`, for example `export ORT_DYLIB_PATH=/tmp/onnxruntime-osx-arm64-1.23.0/lib/libonnxruntime.1.23.0.dylib`. Mnemo now also checks common macOS/Homebrew locations and `/opt/ort`. |
+
+## Local Ollama extraction
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Docker Mnemo cannot reach Ollama on the host | The container is still using the provider default `http://localhost:11434/v1` | Set `MNEMO_LLM_BASE_URL=http://host.docker.internal:11434/v1`. If Ollama also serves embeddings, set `MNEMO_EMBEDDING_BASE_URL=http://host.docker.internal:11434/v1`. The root `docker-compose.yml` now passes both through. |
+| Local `lfm2` extraction is very slow | The local 24B model is processing structured extraction prompts on CPU | Prefer `MNEMO_LLM_MODEL=lfm25` for local Mnemo use on this machine. Keep `MNEMO_EMBEDDING_PROVIDER=local`, warm the Ollama model before testing, and cap extraction output with `MNEMO_LLM_MAX_TOKENS=256` plus `MNEMO_LLM_REQUEST_TIMEOUT_MS=15000`. |
 
 ## Getting more help
 

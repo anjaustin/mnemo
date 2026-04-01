@@ -31,6 +31,19 @@ MNEMO_EMBEDDING_MODEL=AllMiniLML6V2 \
 MNEMO_EMBEDDING_DIMENSIONS=384 \
 cargo run --bin mnemo-server
 
+# Run the server with local Ollama extraction plus local embeddings
+# macOS note: set ORT_DYLIB_PATH if ONNX Runtime is not already installed.
+ORT_DYLIB_PATH=/tmp/onnxruntime-osx-arm64-1.23.0/lib/libonnxruntime.1.23.0.dylib \
+MNEMO_LLM_PROVIDER=ollama \
+MNEMO_LLM_BASE_URL=http://localhost:11434/v1 \
+MNEMO_LLM_MODEL=lfm25 \
+MNEMO_LLM_MAX_TOKENS=256 \
+MNEMO_LLM_REQUEST_TIMEOUT_MS=15000 \
+MNEMO_EMBEDDING_PROVIDER=local \
+MNEMO_EMBEDDING_MODEL=AllMiniLML6V2 \
+MNEMO_EMBEDDING_DIMENSIONS=384 \
+cargo run --bin mnemo-server
+
 # Or rebuild/run the server in Docker from your local checkout
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 

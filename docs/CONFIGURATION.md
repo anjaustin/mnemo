@@ -19,6 +19,8 @@ Mnemo reads `config/default.toml` and overrides with environment variables.
 | `MNEMO_LLM_API_KEY` | API key for entity extraction | (none) |
 | `MNEMO_LLM_MODEL` | Model for extraction | `claude-sonnet-4-20250514` |
 | `MNEMO_LLM_BASE_URL` | Base URL for LLM provider | Provider default |
+| `MNEMO_LLM_TEMPERATURE` | Sampling temperature for extraction/summarization | `0.0` |
+| `MNEMO_LLM_MAX_TOKENS` | Max completion tokens for extraction/summarization | `2048` |
 
 ## Embeddings
 
