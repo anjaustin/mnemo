@@ -14,6 +14,8 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+futures = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 mnemo-storage = { workspace = true }

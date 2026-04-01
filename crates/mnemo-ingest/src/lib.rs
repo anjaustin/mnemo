@@ -11,6 +11,8 @@
 
 pub mod dag;
 
+use futures::stream::{self, StreamExt};
+use regex::Regex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,12 +21,12 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use mnemo_core::error::MnemoError;
-use mnemo_core::models::edge::{BeliefChange, Edge, EdgeFilter};
+use mnemo_core::models::edge::{BeliefChange, Edge, EdgeFilter, ExtractedRelationship};
 use mnemo_core::models::entity::{Entity, ExtractedEntity};
-use mnemo_core::models::episode::Episode;
+use mnemo_core::models::episode::{Episode, ListEpisodesParams, ProcessingStatus};
 use mnemo_core::models::session::UpdateSessionRequest;
 use mnemo_core::models::webhook_event::IngestWebhookEvent;
-use mnemo_core::traits::llm::{EmbeddingProvider, LlmProvider};
+use mnemo_core::traits::llm::{EmbeddingProvider, ExtractionResult, LlmProvider};
 use mnemo_core::traits::storage::{
     BeliefChangeStore, DigestStore, EdgeStore, EntityStore, EpisodeStore, SessionStore, SpanStore,
     StorageResult, VectorStore,
@@ -39,6 +41,153 @@ pub type SpanSink = Arc<RwLock<VecDeque<LlmSpan>>>;
 
 /// Maximum spans retained in the ring buffer (must match MAX_LLM_SPANS in routes.rs).
 const MAX_SPANS: usize = 500;
+
+fn fallback_attribute_extraction(content: &str) -> Option<ExtractionResult> {
+    let text = content.trim();
+    let person_re = Regex::new(r"^([A-Z][A-Za-z]+)(?:'s)?\b").ok()?;
+    let person = person_re.captures(text)?.get(1)?.as_str().to_string();
+
+    let mut entities = vec![ExtractedEntity {
+        name: person.clone(),
+        entity_type: mnemo_core::models::entity::EntityType::Person,
+        summary: None,
+        classification: mnemo_core::models::classification::Classification::Internal,
+    }];
+    let mut relationships = Vec::new();
+
+    let mut push_target = |name: String,
+                           entity_type: mnemo_core::models::entity::EntityType,
+                           summary: Option<String>,
+                           label: &str,
+                           fact: String| {
+        entities.push(ExtractedEntity {
+            name: name.clone(),
+            entity_type,
+            summary,
+            classification: mnemo_core::models::classification::Classification::Internal,
+        });
+        relationships.push(ExtractedRelationship {
+            source_name: person.clone(),
+            target_name: name,
+            label: label.to_string(),
+            fact,
+            confidence: 0.75,
+            valid_at: None,
+            classification: mnemo_core::models::classification::Classification::Internal,
+            temporal_scope: None,
+        });
+    };
+
+    if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+) is allergic to ([^.]+)")
+        .ok()?
+        .captures(text)
+    {
+        let allergen = caps.get(2)?.as_str().trim().to_string();
+        push_target(
+            allergen.clone(),
+            mnemo_core::models::entity::EntityType::Concept,
+            Some("allergen".to_string()),
+            "allergic_to",
+            format!("{} is allergic to {}", person, allergen),
+        );
+    } else if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+) is (vegetarian|vegan)\b")
+        .ok()?
+        .captures(text)
+    {
+        let diet = caps.get(2)?.as_str().trim().to_string();
+        push_target(
+            diet.clone(),
+            mnemo_core::models::entity::EntityType::Concept,
+            Some("dietary preference".to_string()),
+            "dietary_preference",
+            format!("{} is {}", person, diet),
+        );
+    } else if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+)'s birthday is on ([^.]+)")
+        .ok()?
+        .captures(text)
+    {
+        let date = caps.get(2)?.as_str().trim().to_string();
+        push_target(
+            date.clone(),
+            mnemo_core::models::entity::EntityType::Event,
+            Some("birthday date".to_string()),
+            "birthday_on",
+            format!("{}'s birthday is on {}", person, date),
+        );
+    } else if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+) studied ([^.]+) at ([^.]+)")
+        .ok()?
+        .captures(text)
+    {
+        let subject = caps.get(2)?.as_str().trim().to_string();
+        let school = caps.get(3)?.as_str().trim().to_string();
+        push_target(
+            school.clone(),
+            mnemo_core::models::entity::EntityType::Organization,
+            Some(format!("studied {} here", subject)),
+            "studied_at",
+            format!("{} studied {} at {}", person, subject, school),
+        );
+    } else if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+) speaks ([A-Za-z]+) and ([A-Za-z]+)")
+        .ok()?
+        .captures(text)
+    {
+        for idx in [2, 3] {
+            let language = caps.get(idx)?.as_str().trim().to_string();
+            push_target(
+                language.clone(),
+                mnemo_core::models::entity::EntityType::Concept,
+                Some("language spoken".to_string()),
+                "speaks",
+                format!("{} speaks {}", person, language),
+            );
+        }
+    } else if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+) is training for (?:a|an) ([^.]+)")
+        .ok()?
+        .captures(text)
+    {
+        let event = caps.get(2)?.as_str().trim().to_string();
+        push_target(
+            event.clone(),
+            mnemo_core::models::entity::EntityType::Event,
+            Some("upcoming training target".to_string()),
+            "training_for",
+            format!("{} is training for {}", person, event),
+        );
+    } else if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+) completed (?:a|an) ([^.]+)")
+        .ok()?
+        .captures(text)
+    {
+        let event = caps.get(2)?.as_str().trim().to_string();
+        push_target(
+            event.clone(),
+            mnemo_core::models::entity::EntityType::Event,
+            Some("completed event".to_string()),
+            "completed",
+            format!("{} completed {}", person, event),
+        );
+    } else if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+) prefers ([^.]+)")
+        .ok()?
+        .captures(text)
+    {
+        let preference = caps.get(2)?.as_str().split(" and ").next()?.trim().to_string();
+        push_target(
+            preference.clone(),
+            mnemo_core::models::entity::EntityType::Concept,
+            Some("stated preference".to_string()),
+            "prefers",
+            format!("{} prefers {}", person, preference),
+        );
+    }
+
+    if relationships.is_empty() {
+        None
+    } else {
+        Some(ExtractionResult {
+            entities,
+            relationships,
+        })
+    }
+}
 
 fn episode_request_id(episode: &Episode) -> Option<&str> {
     episode
@@ -631,24 +780,56 @@ where
         Ok((entity_updates, edge_updates))
     }
 
+    async fn session_has_inflight_episodes(&self, session_id: Uuid) -> Result<bool, MnemoError> {
+        for status in [ProcessingStatus::Pending, ProcessingStatus::Processing] {
+            let episodes = self
+                .state_store
+                .list_episodes(
+                    session_id,
+                    ListEpisodesParams {
+                        limit: 1,
+                        after: None,
+                        status: Some(status),
+                    },
+                )
+                .await?;
+            if !episodes.is_empty() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Poll for pending episodes and process them.
     async fn poll_and_process(&self) -> StorageResult<usize> {
         let pending = self
             .state_store
             .get_pending_episodes(self.config.batch_size)
             .await?;
-        let mut processed = 0;
+
+        let mut claimed = Vec::with_capacity(pending.len());
         for episode in pending {
             if !self.state_store.claim_episode(episode.id).await? {
                 continue;
             }
-            match self.process_episode(&episode).await {
-                Ok(_) => processed += 1,
-                Err(e) => {
-                    self.handle_failure(episode, e).await;
-                }
+            claimed.push(episode);
+        }
+
+        let concurrency = self.config.concurrency.max(1);
+        let mut processed = 0;
+        let mut results = stream::iter(claimed.into_iter().map(|episode| async move {
+            let result = self.process_episode(&episode).await;
+            (episode, result)
+        }))
+        .buffer_unordered(concurrency);
+
+        while let Some((episode, result)) = results.next().await {
+            match result {
+                Ok(()) => processed += 1,
+                Err(e) => self.handle_failure(episode, e).await,
             }
         }
+
         Ok(processed)
     }
 
@@ -739,7 +920,13 @@ where
             finished_at: chrono::Utc::now(),
         })
         .await;
-        let (extraction, _) = extraction_result?;
+        let (mut extraction, _) = extraction_result?;
+        if extraction.entities.is_empty() && extraction.relationships.is_empty() {
+            if let Some(fallback) = fallback_attribute_extraction(&episode.content) {
+                tracing::info!(episode_id = %episode.id, "Applied deterministic fallback extraction");
+                extraction = fallback;
+            }
+        }
 
         // 3. Resolve entities (dedup against existing graph)
         let mut name_to_id: std::collections::HashMap<String, Uuid> =
@@ -967,68 +1154,74 @@ where
         if threshold > 0 {
             if let Ok(session) = self.state_store.get_session(episode.session_id).await {
                 if session.episode_count > 0 && session.episode_count % u64::from(threshold) == 0 {
-                    tracing::debug!(
-                        session_id = %episode.session_id,
-                        episode_count = session.episode_count,
-                        threshold,
-                        "Triggering progressive session summarization"
-                    );
-                    let sum_start = chrono::Utc::now();
-                    let sum_t0 = Instant::now();
-                    let sum_result = self.llm.summarize_with_usage(&episode.content, 256).await;
-                    let sum_elapsed = sum_t0.elapsed();
-                    let sum_ok = sum_result.is_ok();
-                    let sum_usage = sum_result.as_ref().map(|(_, u)| *u).unwrap_or_default();
-                    self.record_span(LlmSpan {
-                        id: Uuid::now_v7(),
-                        request_id: episode_request_id(episode).map(String::from),
-                        user_id: Some(episode.user_id),
-                        provider: self.llm.provider_name().to_string(),
-                        model: self.llm.model_name().to_string(),
-                        operation: "session_summarize".to_string(),
-                        prompt_tokens: sum_usage.prompt_tokens,
-                        completion_tokens: sum_usage.completion_tokens,
-                        total_tokens: sum_usage.total_tokens,
-                        latency_ms: sum_elapsed.as_millis() as u64,
-                        success: sum_ok,
-                        error: if sum_ok {
-                            None
-                        } else {
-                            Some(sum_result.as_ref().err().unwrap().to_string())
-                        },
-                        started_at: sum_start,
-                        finished_at: chrono::Utc::now(),
-                    })
-                    .await;
-                    match sum_result {
-                        Ok((summary_text, _)) => {
-                            // Rough token count: ~4 chars/token
-                            let tokens = (summary_text.len() / 4).max(1) as u32;
-                            let update = UpdateSessionRequest {
-                                summary: Some(summary_text),
-                                summary_tokens: Some(tokens),
-                                ..Default::default()
-                            };
-                            if let Err(e) = self
-                                .state_store
-                                .update_session(episode.session_id, update)
-                                .await
-                            {
-                                // Non-fatal: log and continue
+                    if self.session_has_inflight_episodes(episode.session_id).await? {
+                        tracing::debug!(
+                            session_id = %episode.session_id,
+                            episode_count = session.episode_count,
+                            threshold,
+                            "Deferring session summarization until session backlog drains"
+                        );
+                    } else {
+                        tracing::debug!(
+                            session_id = %episode.session_id,
+                            episode_count = session.episode_count,
+                            threshold,
+                            "Triggering progressive session summarization"
+                        );
+                        let sum_start = chrono::Utc::now();
+                        let sum_t0 = Instant::now();
+                        let sum_result = self.llm.summarize_with_usage(&episode.content, 256).await;
+                        let sum_elapsed = sum_t0.elapsed();
+                        let sum_ok = sum_result.is_ok();
+                        let sum_usage = sum_result.as_ref().map(|(_, u)| *u).unwrap_or_default();
+                        self.record_span(LlmSpan {
+                            id: Uuid::now_v7(),
+                            request_id: episode_request_id(episode).map(String::from),
+                            user_id: Some(episode.user_id),
+                            provider: self.llm.provider_name().to_string(),
+                            model: self.llm.model_name().to_string(),
+                            operation: "session_summarize".to_string(),
+                            prompt_tokens: sum_usage.prompt_tokens,
+                            completion_tokens: sum_usage.completion_tokens,
+                            total_tokens: sum_usage.total_tokens,
+                            latency_ms: sum_elapsed.as_millis() as u64,
+                            success: sum_ok,
+                            error: if sum_ok {
+                                None
+                            } else {
+                                Some(sum_result.as_ref().err().unwrap().to_string())
+                            },
+                            started_at: sum_start,
+                            finished_at: chrono::Utc::now(),
+                        })
+                        .await;
+                        match sum_result {
+                            Ok((summary_text, _)) => {
+                                let tokens = (summary_text.len() / 4).max(1) as u32;
+                                let update = UpdateSessionRequest {
+                                    summary: Some(summary_text),
+                                    summary_tokens: Some(tokens),
+                                    ..Default::default()
+                                };
+                                if let Err(e) = self
+                                    .state_store
+                                    .update_session(episode.session_id, update)
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        session_id = %episode.session_id,
+                                        error = %e,
+                                        "Failed to persist session summary"
+                                    );
+                                }
+                            }
+                            Err(e) => {
                                 tracing::warn!(
                                     session_id = %episode.session_id,
                                     error = %e,
-                                    "Failed to persist session summary"
+                                    "Session summarization LLM call failed"
                                 );
                             }
-                        }
-                        Err(e) => {
-                            // Non-fatal: summarization failure must not block ingest
-                            tracing::warn!(
-                                session_id = %episode.session_id,
-                                error = %e,
-                                "Session summarization LLM call failed"
-                            );
                         }
                     }
                 }

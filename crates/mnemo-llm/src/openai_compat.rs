@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use mnemo_core::error::MnemoError;
@@ -180,6 +181,28 @@ struct RawRelationship {
     classification: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct RawEntityLoose {
+    name: Option<String>,
+    #[serde(rename = "type")]
+    entity_type: Option<String>,
+    summary: Option<String>,
+    #[serde(default)]
+    classification: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawRelationshipLoose {
+    source: Option<String>,
+    target: Option<String>,
+    label: Option<String>,
+    fact: Option<String>,
+    #[serde(default = "default_confidence")]
+    confidence: f32,
+    #[serde(default)]
+    classification: Option<String>,
+}
+
 fn default_confidence() -> f32 {
     0.8
 }
@@ -227,6 +250,212 @@ Do not add markdown, commentary, or unsupported facts."#
         } else {
             EXTRACTION_SYSTEM_PROMPT
         }
+    }
+
+    fn strip_code_fences(raw: &str) -> &str {
+        let cleaned = raw.trim();
+        if cleaned.starts_with("```") {
+            let start = cleaned.find('\n').map(|i| i + 1).unwrap_or(0);
+            let end = cleaned.rfind("```").unwrap_or(cleaned.len());
+            &cleaned[start..end]
+        } else {
+            cleaned
+        }
+    }
+
+    fn appears_in_content(content: &str, candidate: &str) -> bool {
+        let content = content.to_lowercase();
+        let candidate = candidate.to_lowercase();
+        if candidate.is_empty() {
+            return false;
+        }
+        if content.contains(&candidate) {
+            return true;
+        }
+        candidate
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|token| token.len() >= 4)
+            .any(|token| content.contains(token))
+    }
+
+    fn complete_json_prefix(raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len() + 8);
+        let mut in_string = false;
+        let mut escape = false;
+        let mut stack = Vec::new();
+
+        for ch in raw.chars() {
+            out.push(ch);
+            if escape {
+                escape = false;
+                continue;
+            }
+            match ch {
+                '\\' if in_string => escape = true,
+                '"' => in_string = !in_string,
+                '{' | '[' if !in_string => stack.push(ch),
+                '}' if !in_string => {
+                    if matches!(stack.last(), Some('{')) {
+                        stack.pop();
+                    }
+                }
+                ']' if !in_string => {
+                    if matches!(stack.last(), Some('[')) {
+                        stack.pop();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if in_string {
+            out.push('"');
+        }
+        while let Some(open) = stack.pop() {
+            out.push(match open {
+                '{' => '}',
+                '[' => ']',
+                _ => unreachable!(),
+            });
+        }
+        out
+    }
+
+    fn collect_array_objects(raw: &str, key: &str) -> Vec<String> {
+        let Some(key_pos) = raw.find(&format!("\"{}\"", key)) else {
+            return Vec::new();
+        };
+        let Some(array_pos) = raw[key_pos..].find('[').map(|i| key_pos + i + 1) else {
+            return Vec::new();
+        };
+
+        let mut objects = Vec::new();
+        let mut in_string = false;
+        let mut escape = false;
+        let mut depth = 0usize;
+        let mut start = None;
+
+        for (idx, ch) in raw[array_pos..].char_indices() {
+            let absolute = array_pos + idx;
+            if escape {
+                escape = false;
+                continue;
+            }
+            match ch {
+                '\\' if in_string => {
+                    escape = true;
+                }
+                '"' => in_string = !in_string,
+                '{' if !in_string => {
+                    if depth == 0 {
+                        start = Some(absolute);
+                    }
+                    depth += 1;
+                }
+                '}' if !in_string => {
+                    if depth > 0 {
+                        depth -= 1;
+                        if depth == 0 {
+                            if let Some(begin) = start.take() {
+                                objects.push(raw[begin..=absolute].to_string());
+                            }
+                        }
+                    }
+                }
+                ']' if !in_string && depth == 0 => break,
+                _ => {}
+            }
+        }
+
+        objects
+    }
+
+    fn salvage_extraction(content: &str, cleaned: &str) -> ExtractionResponse {
+        let repaired = Self::complete_json_prefix(cleaned);
+        if let Ok(value) = serde_json::from_str::<Value>(&repaired) {
+            let entities: Vec<RawEntity> = value
+                .get("entities")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| serde_json::from_value::<RawEntityLoose>(item.clone()).ok())
+                        .filter_map(|entity| Self::salvage_entity(content, entity))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let relationships: Vec<RawRelationship> = value
+                .get("relationships")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| serde_json::from_value::<RawRelationshipLoose>(item.clone()).ok())
+                        .filter_map(|rel| Self::salvage_relationship(content, rel))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !entities.is_empty() || !relationships.is_empty() {
+                return ExtractionResponse {
+                    entities,
+                    relationships,
+                };
+            }
+        }
+
+        let entities = Self::collect_array_objects(cleaned, "entities")
+            .into_iter()
+            .filter_map(|item| serde_json::from_str::<RawEntityLoose>(&item).ok())
+            .filter_map(|entity| Self::salvage_entity(content, entity))
+            .collect();
+        let relationships = Self::collect_array_objects(cleaned, "relationships")
+            .into_iter()
+            .filter_map(|item| serde_json::from_str::<RawRelationshipLoose>(&item).ok())
+            .filter_map(|rel| Self::salvage_relationship(content, rel))
+            .collect();
+
+        ExtractionResponse {
+            entities,
+            relationships,
+        }
+    }
+
+    fn salvage_entity(content: &str, entity: RawEntityLoose) -> Option<RawEntity> {
+        let name = entity.name?.trim().to_string();
+        let entity_type = entity.entity_type?.trim().to_string();
+        if name.is_empty() || entity_type.is_empty() || !Self::appears_in_content(content, &name) {
+            return None;
+        }
+        Some(RawEntity {
+            name,
+            entity_type,
+            summary: entity.summary,
+            classification: entity.classification,
+        })
+    }
+
+    fn salvage_relationship(content: &str, rel: RawRelationshipLoose) -> Option<RawRelationship> {
+        let source = rel.source?.trim().to_string();
+        let target = rel.target?.trim().to_string();
+        let label = rel.label?.trim().to_string();
+        let fact = rel.fact?.trim().to_string();
+        if source.is_empty()
+            || target.is_empty()
+            || label.is_empty()
+            || fact.is_empty()
+            || !Self::appears_in_content(content, &source)
+            || !Self::appears_in_content(content, &target)
+        {
+            return None;
+        }
+        Some(RawRelationship {
+            source,
+            target,
+            label,
+            fact,
+            confidence: rel.confidence,
+            classification: rel.classification,
+        })
     }
 
     async fn chat_completion(
@@ -368,24 +597,30 @@ Do not add markdown, commentary, or unsupported facts."#
     }
 
     /// Parse the JSON extraction response, handling markdown code fences.
-    fn parse_extraction(raw: &str) -> LlmResult<ExtractionResponse> {
-        // Strip markdown code fences if present
-        let cleaned = raw.trim();
-        let cleaned = if cleaned.starts_with("```") {
-            let start = cleaned.find('\n').map(|i| i + 1).unwrap_or(0);
-            let end = cleaned.rfind("```").unwrap_or(cleaned.len());
-            &cleaned[start..end]
-        } else {
-            cleaned
-        };
+    fn parse_extraction(content: &str, raw: &str) -> LlmResult<ExtractionResponse> {
+        let cleaned = Self::strip_code_fences(raw);
 
-        serde_json::from_str(cleaned).map_err(|e| {
-            MnemoError::ExtractionFailed(format!(
-                "Failed to parse extraction JSON: {}. Raw: {}",
-                e,
-                &raw[..raw.len().min(200)]
-            ))
-        })
+        match serde_json::from_str(cleaned) {
+            Ok(parsed) => Ok(parsed),
+            Err(e) => {
+                let salvaged = Self::salvage_extraction(content, cleaned);
+                if !salvaged.entities.is_empty() || !salvaged.relationships.is_empty() {
+                    warn!(
+                        entities = salvaged.entities.len(),
+                        relationships = salvaged.relationships.len(),
+                        error = %e,
+                        "Salvaged partial extraction JSON"
+                    );
+                    Ok(salvaged)
+                } else {
+                    Err(MnemoError::ExtractionFailed(format!(
+                        "Failed to parse extraction JSON: {}. Raw: {}",
+                        e,
+                        &raw[..raw.len().min(200)]
+                    )))
+                }
+            }
+        }
     }
 }
 
@@ -421,7 +656,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 true,
             )
             .await?;
-        let parsed = Self::parse_extraction(&raw)?;
+        let parsed = Self::parse_extraction(content, &raw)?;
 
         let entities = parsed
             .entities
@@ -543,7 +778,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 true,
             )
             .await?;
-        let parsed = Self::parse_extraction(&raw)?;
+        let parsed = Self::parse_extraction(content, &raw)?;
         let entities = parsed
             .entities
             .into_iter()
@@ -873,6 +1108,54 @@ mod tests {
             .expect("ollama extraction should succeed");
 
         assert_eq!(result.relationships.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_extraction_salvages_truncated_json() {
+        let raw = r#"{
+          "entities": [
+            {"name": "Bob", "type": "person", "summary": "owner"},
+            {"name": "Biscuit", "type": "dog", "summary": "golden retriever"}
+          ],
+          "relationships": [
+            {"source": "Bob", "target": "Biscuit", "label": "owns", "fact": "Bob has a dog named Biscuit", "confidence": 0.9}
+        "#;
+
+        let parsed = OpenAiCompatibleProvider::parse_extraction(
+            "Bob has a Golden Retriever named Biscuit.",
+            raw,
+        )
+        .expect("truncated json should be salvaged");
+
+        assert_eq!(parsed.entities.len(), 2);
+        assert_eq!(parsed.relationships.len(), 1);
+        assert_eq!(parsed.entities[1].name, "Biscuit");
+    }
+
+    #[test]
+    fn test_parse_extraction_drops_ungrounded_or_invalid_salvaged_items() {
+        let raw = r#"{
+          "entities": [
+            {"name": "Bob", "type": "person"},
+            {"name": "Biscuit", "type": "dog"},
+            {"name": "piano"}
+          ],
+          "relationships": [
+            {"source": "Bob", "target": "Biscuit", "label": "owns", "fact": "Bob has a dog named Biscuit", "confidence": 0.9},
+            {"source": "Bob", "target": "piano", "label": "plays", "fact": "Bob plays piano", "confidence": 0.8}
+          ]
+        }"#;
+
+        let parsed = OpenAiCompatibleProvider::parse_extraction(
+            "Bob has a Golden Retriever named Biscuit.",
+            raw,
+        )
+        .expect("salvage should succeed");
+
+        assert_eq!(parsed.entities.len(), 2);
+        assert!(parsed.entities.iter().all(|e| e.name != "piano"));
+        assert_eq!(parsed.relationships.len(), 1);
+        assert_eq!(parsed.relationships[0].target, "Biscuit");
     }
 
     // ── LLM-01b: Extraction includes existing entity names in prompt ──

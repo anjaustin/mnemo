@@ -437,6 +437,8 @@ Mnemo separates the **extraction LLM** (entity/relationship extraction from epis
 
 **Local / offline:** Prefer `lfm25` via Ollama for background extraction on developer machines (`MNEMO_LLM_PROVIDER=ollama`, `MNEMO_LLM_MODEL=lfm25`). On this machine it produces spans/entities within seconds, while the local `lfm2` 24B model is too slow for transparent background memory.
 
+During hot ingest batches, Mnemo now defers progressive session summarization until the session backlog drains. That keeps extraction on the latency-sensitive path and prevents local Ollama summarization from starving later episodes.
+
 **Embeddings (local, recommended):** Use `MNEMO_EMBEDDING_PROVIDER=local` with `MNEMO_EMBEDDING_MODEL=AllMiniLML6V2` and `MNEMO_EMBEDDING_DIMENSIONS=384`. This uses the built-in fastembed library — no external API needed, no API key, works offline. This is the production default.
 
 **Embeddings (Ollama):** Use `nomic-embed-text` via Ollama. Set `MNEMO_EMBEDDING_DIMENSIONS=768`.

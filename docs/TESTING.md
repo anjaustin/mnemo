@@ -135,6 +135,43 @@ python tests/ollama_lfm2_smoke.py --server http://localhost:8080 --timeout-secon
 
 The harness fails fast if immediate recall is broken, then polls spans/entities until background extraction either succeeds or times out.
 
+## 3.7) Factual recall atomics
+
+Use this to inspect the exact miss classes that usually keep local factual recall below the high-90s: profession, occupation, breed, popularity, and allergy phrasing.
+
+```bash
+python tests/eval_recall_atomics.py --server http://localhost:8080 --ingest-wait 15
+```
+
+It prints per-user extraction coverage (`span_count`, `entity_count`) and then shows the returned context for the targeted miss probes so you can separate ingest coverage failures from retrieval/ranking failures.
+
+## 3.8) Batch ingest progress census
+
+Use this to see whether a batch is actually finishing extraction, retrying, or completing without atoms.
+
+```bash
+python tests/eval_ingest_progress.py --server http://localhost:8080 --duration 60 --poll-interval 5
+```
+
+If local Ollama is enabled, progressive session summarization is deferred while a session still has pending or processing episodes. This keeps the probe focused on extraction throughput instead of mixed extract-plus-summarize contention.
+
+It ingests the 40-fact gold set, polls each episode by ID, and reports batch-level counts for `pending`, `processing`, `completed`, `failed`, plus any `processing_error` values and episodes that completed with zero entities and zero edges.
+
+## 3.9) One-shot local Ollama validation
+
+To avoid startup races, use the bundled wrapper that:
+
+- starts Redis and Qdrant
+- waits for Qdrant readiness
+- launches `mnemo-server`
+- waits for `/healthz`
+- runs both recall quality and atomic probes
+- cleans up the local processes afterward
+
+```bash
+python tests/run_local_ollama_validation.py --port 18083 --ingest-wait 15
+```
+
 ## 4) Memory API falsification suite
 
 This is the high-value regression suite for the new memory surface.
