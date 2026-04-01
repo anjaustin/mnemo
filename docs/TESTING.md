@@ -123,6 +123,11 @@ Use this when validating the "background memory should just work" path with a lo
 
 Recommended local model on this machine: `lfm25` with local fastembed embeddings. The larger `lfm2` 24B model is too slow for background extraction here.
 
+The current stable local profile also relies on two runtime behaviors:
+
+- session summarization is deferred until a session backlog drains
+- ingest selection is round-robin across users with light priority for high-value episodes
+
 Assumes:
 
 - Redis and Qdrant are running

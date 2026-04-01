@@ -44,6 +44,9 @@ MNEMO_EMBEDDING_MODEL=AllMiniLML6V2 \
 MNEMO_EMBEDDING_DIMENSIONS=384 \
 cargo run --bin mnemo-server
 
+# Or run the full local Ollama validation wrapper
+python tests/run_local_ollama_validation.py --port 18083 --ingest-wait 15
+
 # Or rebuild/run the server in Docker from your local checkout
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 
@@ -58,6 +61,9 @@ cargo test -p mnemo-core
 background. Immediate context queries include fallback recall of freshly written
 text. Extracted entities, graph edges, and summaries require an LLM provider;
 when enabled, they may lag by a few seconds while the background worker catches up.
+For local Ollama, the ingest worker now round-robins across users and defers
+session summarization until backlog drains, which keeps batch extraction fairer
+and more stable during the quality probes.
 
 ### Project Structure
 

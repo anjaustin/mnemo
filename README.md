@@ -49,6 +49,14 @@ cargo run --bin mnemo-server
 
 This keeps immediate recall fast and allowed local background extraction to pass the bundled quality gates.
 
+For a clean end-to-end local validation pass without startup races, use:
+
+```bash
+python tests/run_local_ollama_validation.py --port 18083 --ingest-wait 15
+```
+
+That wrapper starts Redis and Qdrant, waits for readiness, launches `mnemo-server`, then runs the recall quality and atomic probes against the local Ollama profile.
+
 ## 30-Second Demo
 
 ```bash
