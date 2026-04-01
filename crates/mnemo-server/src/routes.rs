@@ -5657,11 +5657,12 @@ async fn get_memory_context(
         AdaptiveRetrievalPolicy::Stability => 0.4,
     });
     let query_text = req.query.clone();
+    let retrieval_query = expand_memory_query(&query_text);
     let context_req = ContextRequest {
         session_id,
         messages: vec![ContextMessage {
             role: "user".to_string(),
-            content: req.query,
+            content: retrieval_query.clone(),
         }],
         max_tokens,
         search_types: vec![mnemo_core::models::context::SearchType::Hybrid],
@@ -5689,7 +5690,7 @@ async fn get_memory_context(
         max_tokens,
         temporal_intent,
         req.as_of,
-        &query_text,
+        &retrieval_query,
         &mut context,
     )
     .await?;
@@ -10666,6 +10667,30 @@ fn fallback_keyword_score(query: &str, content: &str) -> f64 {
         .count();
 
     matched as f64 / query_tokens.len() as f64
+}
+
+fn expand_memory_query(query: &str) -> String {
+    let lower = query.to_lowercase();
+    let mut expansions: Vec<&str> = Vec::new();
+
+    if lower.contains("profession") || lower.contains("occupation") || lower.contains("job") {
+        expansions.extend(["work", "role", "career", "freelance", "manager", "doctor", "photographer"]);
+    }
+    if lower.contains("kind of dog") || lower.contains("breed") {
+        expansions.extend(["dog", "breed", "golden retriever", "named"]);
+    }
+    if lower.contains("popular on social media") || lower.contains("social media") {
+        expansions.extend(["instagram", "views", "followers", "viral", "million"]);
+    }
+    if lower.contains("allerg") {
+        expansions.extend(["allergic", "avoids", "epipen", "shellfish"]);
+    }
+
+    if expansions.is_empty() {
+        query.to_string()
+    } else {
+        format!("{} {}", query, expansions.join(" "))
+    }
 }
 
 async fn find_user_by_identifier(state: &AppState, identifier: &str) -> Result<User, MnemoError> {

@@ -172,6 +172,16 @@ To avoid startup races, use the bundled wrapper that:
 python tests/run_local_ollama_validation.py --port 18083 --ingest-wait 15
 ```
 
+## 3.10) Ingest fairness probe
+
+Use this to see whether some users are consistently starved later in the 40-fact batch.
+
+```bash
+python tests/eval_ingest_fairness.py --server http://localhost:8080 --duration 60 --poll-interval 5
+```
+
+It reports per-user `pending` / `processing` / `completed` counts over time so you can distinguish true extraction weakness from unfair scheduling.
+
 ## 4) Memory API falsification suite
 
 This is the high-value regression suite for the new memory surface.

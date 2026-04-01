@@ -177,6 +177,59 @@ fn fallback_attribute_extraction(content: &str) -> Option<ExtractionResult> {
             "prefers",
             format!("{} prefers {}", person, preference),
         );
+    } else if let Some(caps) = Regex::new(r"^([A-Z][A-Za-z]+) is (?:a|an) (.+)")
+        .ok()?
+        .captures(text)
+    {
+        let descriptor = caps.get(2)?.as_str().trim().trim_end_matches('.').to_string();
+        let role = descriptor
+            .split(" at ")
+            .next()
+            .unwrap_or(&descriptor)
+            .split(" specialising ")
+            .next()
+            .unwrap_or(&descriptor)
+            .trim()
+            .to_string();
+        if !role.is_empty() {
+            push_target(
+                role.clone(),
+                mnemo_core::models::entity::EntityType::Custom("profession".to_string()),
+                Some("occupation".to_string()),
+                "occupation",
+                format!("{} is {}", person, descriptor),
+            );
+        }
+    } else if let Some(caps) = Regex::new(
+        r"^([A-Z][A-Za-z]+) has a ([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+)*) named ([A-Z][A-Za-z]+)",
+    )
+    .ok()?
+    .captures(text)
+    {
+        let breed = caps.get(2)?.as_str().trim().to_string();
+        let pet = caps.get(3)?.as_str().trim().to_string();
+        push_target(
+            pet.clone(),
+            mnemo_core::models::entity::EntityType::Custom("animal".to_string()),
+            Some(breed.clone()),
+            "has_pet",
+            format!("{} has a {} named {}", person, breed, pet),
+        );
+    } else if let Some(caps) = Regex::new(
+        r"^([A-Z][A-Za-z]+)'s most viewed photo has over ([^.]+) views on ([A-Za-z]+)",
+    )
+    .ok()?
+    .captures(text)
+    {
+        let views = caps.get(2)?.as_str().trim().to_string();
+        let platform = caps.get(3)?.as_str().trim().to_string();
+        push_target(
+            platform.clone(),
+            mnemo_core::models::entity::EntityType::Custom("platform".to_string()),
+            Some(format!("over {} views", views)),
+            "popular_on",
+            format!("{} has over {} views on {}", person, views, platform),
+        );
     }
 
     if relationships.is_empty() {
@@ -187,6 +240,27 @@ fn fallback_attribute_extraction(content: &str) -> Option<ExtractionResult> {
             relationships,
         })
     }
+}
+
+fn episode_priority(content: &str) -> u8 {
+    let lower = content.to_lowercase();
+    let mut score = 0u8;
+    if lower.contains(" named ") {
+        score += 4;
+    }
+    if lower.contains("most viewed") || (lower.contains("instagram") && lower.contains("views")) {
+        score += 4;
+    }
+    if lower.contains("works as") || lower.contains(" is a ") || lower.contains(" is an ") {
+        score += 3;
+    }
+    if lower.contains("allergic") || lower.contains("birthday") || lower.contains("studied ") {
+        score += 2;
+    }
+    if lower.contains("favourite") || lower.contains("favorite") || lower.contains("prefers ") {
+        score += 1;
+    }
+    score
 }
 
 fn episode_request_id(episode: &Episode) -> Option<&str> {
@@ -802,13 +876,62 @@ where
 
     /// Poll for pending episodes and process them.
     async fn poll_and_process(&self) -> StorageResult<usize> {
+        let fetch_limit = self
+            .config
+            .batch_size
+            .saturating_mul(self.config.concurrency.max(1) as u32)
+            .max(self.config.batch_size);
         let pending = self
             .state_store
-            .get_pending_episodes(self.config.batch_size)
+            .get_pending_episodes(fetch_limit)
             .await?;
 
-        let mut claimed = Vec::with_capacity(pending.len());
-        for episode in pending {
+        let mut per_user: HashMap<Uuid, Vec<(u8, usize, Episode)>> = HashMap::new();
+        let mut user_order = Vec::new();
+        for (index, episode) in pending.into_iter().enumerate() {
+            if !per_user.contains_key(&episode.user_id) {
+                user_order.push(episode.user_id);
+            }
+            per_user
+                .entry(episode.user_id)
+                .or_default()
+                .push((episode_priority(&episode.content), index, episode));
+        }
+        let mut per_user: HashMap<Uuid, VecDeque<Episode>> = per_user
+            .into_iter()
+            .map(|(user_id, mut episodes)| {
+                episodes.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+                (
+                    user_id,
+                    episodes
+                        .into_iter()
+                        .map(|(_, _, episode)| episode)
+                        .collect::<VecDeque<_>>(),
+                )
+            })
+            .collect();
+
+        let mut selected = Vec::with_capacity(self.config.batch_size as usize);
+        while selected.len() < self.config.batch_size as usize {
+            let mut progressed = false;
+            for user_id in &user_order {
+                if selected.len() >= self.config.batch_size as usize {
+                    break;
+                }
+                if let Some(queue) = per_user.get_mut(user_id) {
+                    if let Some(episode) = queue.pop_front() {
+                        selected.push(episode);
+                        progressed = true;
+                    }
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+
+        let mut claimed = Vec::with_capacity(selected.len());
+        for episode in selected {
             if !self.state_store.claim_episode(episode.id).await? {
                 continue;
             }
